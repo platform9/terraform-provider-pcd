@@ -202,6 +202,17 @@ func (c *Config) ImageV2Client() (*gophercloud.ServiceClient, error) {
 	return client, nil
 }
 
+// NetworkV2Client returns a Neutron v2 service client, honoring an
+// endpoint_overrides entry for the "network" service type if present.
+func (c *Config) NetworkV2Client() (*gophercloud.ServiceClient, error) {
+	client, err := openstack.NewNetworkV2(c.Provider, c.endpointOpts())
+	if err != nil {
+		return nil, fmt.Errorf("pcd: creating network v2 client: %w", err)
+	}
+	c.applyOverride(client, "network")
+	return client, nil
+}
+
 // applyOverride points a service client at an operator-supplied endpoint when
 // endpoint_overrides names its service type.
 func (c *Config) applyOverride(client *gophercloud.ServiceClient, serviceType string) {
