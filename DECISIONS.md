@@ -55,6 +55,18 @@ tests arrive. Low risk; no locked decision affected.
   API is compatible.
 - **terraform-plugin-framework**: **v1.19.0** as planned.
 
+## 2026-07-10 — Gate B passed; CI scope for now
+
+`TestAccIdentityAuthScopeDataSource_basic` passes against the live lab (terraform
+v1.15.8 + terraform-plugin-testing v1.16.0). `test.yml` CI currently runs
+build/vet/gofmt/unit + `terraform fmt` on examples — all verified green locally.
+**golangci-lint and the `make generate` docs-drift gate are deferred** to the docs phase
+(they need `tools/` + a golangci-lint v2 config); tracked so CI stays green until then.
+
+Terraform was installed from the official `releases.hashicorp.com` prebuilt binary
+(v1.15.8, darwin_arm64) because `brew install hashicorp/tap/terraform` failed on outdated
+Xcode Command Line Tools on the build host.
+
 ## 2026-07-10 — `cloud` (clouds.yaml) deferred
 
 Declared in the provider schema for config-parity with `terraform-provider-openstack`,
