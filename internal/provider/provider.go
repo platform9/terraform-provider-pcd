@@ -40,6 +40,8 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		identity.NewProjectResource,
 		identity.NewRoleResource,
 		identity.NewUserResource,
+		identity.NewRoleAssignmentResource,
+		identity.NewApplicationCredentialResource,
 	}
 }
 
