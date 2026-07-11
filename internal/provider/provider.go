@@ -54,6 +54,8 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		networking.NewRouterInterfaceResource,
 		compute.NewKeypairResource,
 		compute.NewInstanceResource,
+		compute.NewFlavorResource,
+		compute.NewServergroupResource,
 	}
 }
 
@@ -68,5 +70,8 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		networking.NewNetworkDataSource,
 		networking.NewSubnetDataSource,
 		networking.NewSecgroupDataSource,
+		compute.NewFlavorDataSource,
+		compute.NewKeypairDataSource,
+		compute.NewAvailabilityZonesDataSource,
 	}
 }

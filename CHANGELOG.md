@@ -31,6 +31,10 @@ All notable changes to this project are documented here. The format is based on
 - Networking (Neutron v2): resources `pcd_networking_network`, `_subnet`, `_secgroup`,
   `_secgroup_rule`, `_router`, `_router_interface`; data sources `pcd_networking_network`,
   `_subnet`, `_secgroup`. (Floating IPs, ports, and remaining data sources to follow.)
+- Compute (Nova v2): resources `pcd_compute_keypair`, `pcd_compute_flavor`,
+  `pcd_compute_servergroup` (acceptance-tested); `pcd_compute_instance` (code-complete —
+  boot verification is blocked on a lab image-library issue, see DECISIONS.md); data
+  sources `pcd_compute_flavor`, `pcd_compute_keypair`, `pcd_compute_availability_zones`.
 
 ### Known gaps
 - `cloud` (clouds.yaml) is declared but not yet implemented; it errors if set.
