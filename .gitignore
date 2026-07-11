@@ -1,0 +1,37 @@
+# Provider binary / release artifacts
+terraform-provider-pcd
+dist/
+
+# Go
+*.test
+*.out
+coverage.txt
+
+# Terraform working files
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Credentials & secrets — NEVER commit
+*.env
+.env
+clouds.yaml
+*.pem
+*.key
+secrets.*
+
+# Local dev overrides
+.terraformrc
+terraform.rc
+*.tfrc
+
+# The CE deployment handoff must never enter the repo
+PCD-CE-Deployment-Handoff.md
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
