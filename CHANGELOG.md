@@ -19,6 +19,9 @@ All notable changes to this project are documented here. The format is based on
   domain, and roles.
 - Committed CE 2026.4 compatibility evidence from Step 0 preflight
   (`docs/compatibility/ce-2026.4.md`).
+- Acceptance test harness (`internal/acctest`: protocol-6 provider factory + `PreCheck`)
+  and the first acceptance test for `pcd_identity_auth_scope` (passes against the CE lab).
+- `test.yml` CI: build, vet, gofmt, unit tests, and `terraform fmt` on examples.
 
 ### Known gaps
 - `cloud` (clouds.yaml) is declared but not yet implemented; it errors if set.
