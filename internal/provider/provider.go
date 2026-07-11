@@ -49,6 +49,8 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		networking.NewSubnetResource,
 		networking.NewSecgroupResource,
 		networking.NewSecgroupRuleResource,
+		networking.NewRouterResource,
+		networking.NewRouterInterfaceResource,
 	}
 }
 
