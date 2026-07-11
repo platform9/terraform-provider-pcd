@@ -3,6 +3,22 @@
 Records deviations from the PCD-1070 implementation plan and material findings that
 change scope. The plan's Section 3 decisions remain locked unless noted here.
 
+## 2026-07-11 — BLOCKER: hypervisor pcd-iso-test cannot spawn instances
+
+Nova boots fail: an instance goes BUILD → ERROR with *"Exceeded maximum number of
+retries. Exhausted all hosts available for retrying build failures"*
+(`nova.exception.MaxRetriesExceeded`). Ruled out via the API and libvirt on
+cannon-ubuntu: nested virtualization (CPU mode is `host-passthrough`), capacity
+(4 vCPU / 7 GB / 131 GB free), image (reaches `active` via web-download), and
+network (created fine). The real `nova-compute` spawn error lives on the host, but
+SSH to `pcd-iso-test` (172.16.122.232) is rejected — the `pcd_automation` key is not
+authorized there (it is the repurposed "iso-test" VM). Most likely an OVN
+port-binding failure or a `pf9-hostagent`/nova-compute issue on the freshly-onboarded
+host. **Needs the owner** to check `nova-compute.log` on the host (or grant SSH
+access). `pcd_compute_instance` code is complete and correct up to the boot; its boot
+acceptance test will pass once the host can spawn a VM. keypair/flavor/servergroup and
+the compute data sources are testable without a boot and continue.
+
 ## 2026-07-11 — networking: floating IPs and extras deferred
 
 The CE lab has no external Neutron network, so `pcd_networking_floatingip` (which
