@@ -36,7 +36,9 @@ func (p *pcdProvider) Metadata(_ context.Context, _ provider.MetadataRequest, re
 }
 
 func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
-	return nil
+	return []func() resource.Resource{
+		identity.NewProjectResource,
+	}
 }
 
 func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSource {
