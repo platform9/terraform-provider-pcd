@@ -28,6 +28,9 @@ All notable changes to this project are documented here. The format is based on
 - Images (Glance v2): `pcd_images_image` resource (local-file upload + web-download import,
   status waiter, checksum verify, unprotect-before-delete) and `pcd_images_image` /
   `pcd_images_image_ids` data sources.
+- Networking (Neutron v2): resources `pcd_networking_network`, `_subnet`, `_secgroup`,
+  `_secgroup_rule`, `_router`, `_router_interface`; data sources `pcd_networking_network`,
+  `_subnet`, `_secgroup`. (Floating IPs, ports, and remaining data sources to follow.)
 
 ### Known gaps
 - `cloud` (clouds.yaml) is declared but not yet implemented; it errors if set.
