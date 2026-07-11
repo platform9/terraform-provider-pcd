@@ -62,5 +62,8 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		identity.NewRoleDataSource,
 		images.NewImageDataSource,
 		images.NewImageIDsDataSource,
+		networking.NewNetworkDataSource,
+		networking.NewSubnetDataSource,
+		networking.NewSecgroupDataSource,
 	}
 }
