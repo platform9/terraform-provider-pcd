@@ -191,6 +191,17 @@ func (c *Config) IdentityV3Client() (*gophercloud.ServiceClient, error) {
 	return client, nil
 }
 
+// ImageV2Client returns a Glance v2 service client, honoring an endpoint_overrides
+// entry for the "image" service type if present.
+func (c *Config) ImageV2Client() (*gophercloud.ServiceClient, error) {
+	client, err := openstack.NewImageV2(c.Provider, c.endpointOpts())
+	if err != nil {
+		return nil, fmt.Errorf("pcd: creating image v2 client: %w", err)
+	}
+	c.applyOverride(client, "image")
+	return client, nil
+}
+
 // applyOverride points a service client at an operator-supplied endpoint when
 // endpoint_overrides names its service type.
 func (c *Config) applyOverride(client *gophercloud.ServiceClient, serviceType string) {
