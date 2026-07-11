@@ -12,6 +12,7 @@ import (
 
 	"github.com/platform9/terraform-provider-pcd/internal/services/identity"
 	"github.com/platform9/terraform-provider-pcd/internal/services/images"
+	"github.com/platform9/terraform-provider-pcd/internal/services/networking"
 )
 
 // Ensure pcdProvider satisfies the provider.Provider interface.
@@ -44,6 +45,8 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		identity.NewRoleAssignmentResource,
 		identity.NewApplicationCredentialResource,
 		images.NewImageResource,
+		networking.NewNetworkResource,
+		networking.NewSubnetResource,
 	}
 }
 
