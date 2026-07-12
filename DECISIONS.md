@@ -23,6 +23,9 @@ yet passable on this lab (reason noted). Generated registry docs are not committ
 | Networking | `pcd_networking_floatingip` | **PENDING** — code-complete. Needs an **external network** in the lab (allocation pool); acc test skips unless `PCD_ACC_EXTERNAL_NETWORK` names one. |
 | Networking (DS) | `pcd_networking_port`, `_port_ids`, `_router`, `_subnet_ids` | **PENDING** — code-complete; acc test written. Not yet run live (credentials unavailable this session). |
 | Networking (DS) | `pcd_networking_floatingip` | **PENDING** — depends on a floating IP existing (see external-network note above). |
+| Networking | `pcd_networking_router_route`, `_subnet_route` | **PENDING** — code-complete; single-route read-modify-write under a per-parent mutex so concurrent routes on one router/subnet don't clobber. Acc tests written (router route needs a router interface for a valid next-hop). Not yet run live. |
+| Networking | `pcd_networking_port_secgroup_associate` | **PENDING** — code-complete; shared (`enforce=false`) and exclusive (`enforce=true`) modes. Acc test written. Not yet run live. |
+| Networking | `pcd_networking_floatingip_associate` | **PENDING** — code-complete. Needs an external network (see note above); acc test skips unless `PCD_ACC_EXTERNAL_NETWORK` set. |
 | Compute | `pcd_compute_keypair`, `_flavor`, `_servergroup` | **VALIDATED** |
 | Compute (DS) | `pcd_compute_flavor`, `_keypair`, `_availability_zones` | **VALIDATED** |
 | Compute | `pcd_compute_instance` (boot) | **PENDING** — lab image-library gap: images don't reach the onboarded host's local library → nova returns HTTP 204 for image data. Create/schedule/wait/error-report verified; passes with a library-backed image. |
