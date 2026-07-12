@@ -269,7 +269,7 @@ func (r *networkResource) readInto(ctx context.Context, client *gophercloud.Serv
 	m.Description = types.StringValue(n.Description)
 	m.AdminStateUp = types.BoolValue(n.AdminStateUp)
 	m.Shared = types.BoolValue(n.Shared)
-	m.External = types.BoolValue(n.NetworkExternalExt.External)
+	m.External = types.BoolValue(n.External)
 	m.TenantID = types.StringValue(n.TenantID)
 
 	tagVals := n.Tags

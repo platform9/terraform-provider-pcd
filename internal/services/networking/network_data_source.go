@@ -123,7 +123,7 @@ func (d *networkDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	data.Description = types.StringValue(n.Description)
 	data.AdminStateUp = types.BoolValue(n.AdminStateUp)
 	data.Shared = types.BoolValue(n.Shared)
-	data.External = types.BoolValue(n.NetworkExternalExt.External)
+	data.External = types.BoolValue(n.External)
 	data.TenantID = types.StringValue(n.TenantID)
 	if data.Region.IsNull() || data.Region.IsUnknown() {
 		data.Region = types.StringValue(d.config.Region)

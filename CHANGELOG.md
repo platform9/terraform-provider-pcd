@@ -39,6 +39,11 @@ All notable changes to this project are documented here. The format is based on
   code-complete — acceptance is blocked on the CE lab having no storage backend, see
   DECISIONS.md) and `pcd_blockstorage_volume` / `pcd_blockstorage_snapshot` data sources.
 
+- Registry documentation generation wired via `tfplugindocs` (`make generate`) — renders
+  `docs/` for every resource and data source plus the provider index from schema
+  descriptions. Generated docs are produced on demand / at release and are not committed.
+- CI: `golangci-lint` (v2) and a docs-generation smoke test added to `test.yml`.
+
 ### Known gaps
 - `cloud` (clouds.yaml) is declared but not yet implemented; it errors if set.
 - `max_retries` / retry transport and per-resource `region` override are stubs pending
