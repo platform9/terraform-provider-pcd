@@ -17,6 +17,7 @@ yet passable on this lab (reason noted). Generated registry docs are not committ
 | Identity (DS) | `pcd_identity_project`, `_user`, `_role` | **VALIDATED** |
 | Images | `pcd_images_image` (local-file upload); web-download import path also exercised | **VALIDATED** |
 | Images (DS) | `pcd_images_image`, `_image_ids` | **VALIDATED** |
+| Images | `pcd_images_image` settable `properties` (custom metadata) | **PENDING** — code-complete; add/replace/remove via JSON-patch, echo-only Read filters Glance system properties to avoid perpetual diff. Acc test extended (create/update/import). Not yet run live (credentials unavailable this session). |
 | Networking | `pcd_networking_network`, `_subnet`, `_secgroup`, `_secgroup_rule`, `_router`, `_router_interface` | **VALIDATED** |
 | Networking (DS) | `pcd_networking_network`, `_subnet`, `_secgroup` | **VALIDATED** |
 | Networking | `pcd_networking_port` | **PENDING** — code-complete, build/vet/lint/docs clean; acceptance test written (create/update/import). Not yet run live: lab credentials were unavailable in this session. No lab-side blocker expected. |

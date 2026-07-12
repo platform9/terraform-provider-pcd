@@ -26,8 +26,8 @@ All notable changes to this project are documented here. The format is based on
   `pcd_identity_user`, `pcd_identity_role_assignment`, `pcd_identity_application_credential`.
 - Identity data sources: `pcd_identity_project`, `pcd_identity_user`, `pcd_identity_role`.
 - Images (Glance v2): `pcd_images_image` resource (local-file upload + web-download import,
-  status waiter, checksum verify, unprotect-before-delete) and `pcd_images_image` /
-  `pcd_images_image_ids` data sources.
+  status waiter, checksum verify, unprotect-before-delete, settable custom `properties`
+  metadata) and `pcd_images_image` / `pcd_images_image_ids` data sources.
 - Networking (Neutron v2): resources `pcd_networking_network`, `_subnet`, `_secgroup`,
   `_secgroup_rule`, `_router`, `_router_interface`; data sources `pcd_networking_network`,
   `_subnet`, `_secgroup`.
