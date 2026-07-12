@@ -54,7 +54,11 @@ All notable changes to this project are documented here. The format is based on
   descriptions. Generated docs are produced on demand / at release and are not committed.
 - CI: `golangci-lint` (v2) and a docs-generation smoke test added to `test.yml`.
 
+- Provider `cloud` (clouds.yaml) support: when `cloud` (or `OS_CLOUD`) is set, auth
+  defaults are sourced from a `clouds.yaml` entry (searched at `$OS_CLIENT_CONFIG_FILE`,
+  `./clouds.yaml`, `~/.config/openstack/clouds.yaml`, `/etc/openstack/clouds.yaml`).
+  Precedence is explicit config > `OS_*` env > `clouds.yaml`.
+
 ### Known gaps
-- `cloud` (clouds.yaml) is declared but not yet implemented; it errors if set.
 - `max_retries` / retry transport and per-resource `region` override are stubs pending
   Phase 1.
