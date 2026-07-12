@@ -83,10 +83,10 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a compute instance (server) in PCD's Nova service.",
 		Attributes: map[string]schema.Attribute{
-			"id":          schema.StringAttribute{Computed: true, MarkdownDescription: "The instance ID.", PlanModifiers: stable},
-			"name":        schema.StringAttribute{Required: true, MarkdownDescription: "The name of the instance."},
-			"image_id":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The image ID to boot from (alternative to image_name). Changing this forces a new resource.", PlanModifiers: fnC},
-			"image_name":  schema.StringAttribute{Optional: true, MarkdownDescription: "The image name to boot from, resolved via Glance (alternative to image_id). Exactly one of image_id/image_name is required. Changing this forces a new resource.", PlanModifiers: fn},
+			"id":         schema.StringAttribute{Computed: true, MarkdownDescription: "The instance ID.", PlanModifiers: stable},
+			"name":       schema.StringAttribute{Required: true, MarkdownDescription: "The name of the instance."},
+			"image_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The image ID to boot from (alternative to image_name). Changing this forces a new resource.", PlanModifiers: fnC},
+			"image_name": schema.StringAttribute{Optional: true, MarkdownDescription: "The image name to boot from, resolved via Glance (alternative to image_id). Exactly one of image_id/image_name is required. Changing this forces a new resource.", PlanModifiers: fn},
 			// No UseStateForUnknown: it would pin the stale flavor_id into the plan
 			// when a resize is driven by flavor_name, causing an "inconsistent result"
 			// error. Update always sets the resolved flavor_id explicitly.
