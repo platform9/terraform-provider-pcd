@@ -29,6 +29,10 @@ yet passable on this lab (reason noted). Generated registry docs are not committ
 | Compute | `pcd_compute_keypair`, `_flavor`, `_servergroup` | **VALIDATED** |
 | Compute (DS) | `pcd_compute_flavor`, `_keypair`, `_availability_zones` | **VALIDATED** |
 | Compute | `pcd_compute_instance` (boot) | **PENDING** — lab image-library gap: images don't reach the onboarded host's local library → nova returns HTTP 204 for image data. Create/schedule/wait/error-report verified; passes with a library-backed image. |
+| Compute | `pcd_compute_flavor` `extra_specs` | **PENDING** — code-complete; in-place add/change/remove; other flavor attrs now correctly force replacement. Acc test written (create + in-place update + import). Not yet run live (credentials unavailable this session). No lab blocker expected — flavors work on the lab. |
+| Compute | `pcd_compute_instance` resize + `image_name` | **PENDING** — code-complete; flavor change → Nova resize/confirm (revert on failure); `image_name` resolved via Glance. Boot-blocked (same as instance boot above). |
+| Compute | `pcd_compute_interface_attach` | **PENDING** — code-complete; needs a booted instance (boot-blocked). Acc test written. |
+| Compute | `pcd_compute_volume_attach` | **PENDING** — code-complete; needs a booted instance **and** a Cinder backend (both lab-blocked). Best-effort volume waiter degrades gracefully without Cinder. |
 | Block storage | `pcd_blockstorage_volume` | **PENDING** — no Cinder storage backend on the lab (`storageBackends={}`); volumes go `creating → error`. Create + waiter + error-detection verified. |
 | Block storage (DS) | `pcd_blockstorage_volume`, `_snapshot` | **PENDING** — untestable without volumes on this lab. |
 

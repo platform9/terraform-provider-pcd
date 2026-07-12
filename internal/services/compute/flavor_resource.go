@@ -14,12 +14,15 @@ import (
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/flavors"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/float64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -53,6 +56,7 @@ type flavorModel struct {
 	RxTxFactor types.Float64 `tfsdk:"rx_tx_factor"`
 	IsPublic   types.Bool    `tfsdk:"is_public"`
 	Ephemeral  types.Int64   `tfsdk:"ephemeral"`
+	ExtraSpecs types.Map     `tfsdk:"extra_specs"`
 	Region     types.String  `tfsdk:"region"`
 }
 
@@ -63,20 +67,23 @@ func (r *flavorResource) Metadata(_ context.Context, req resource.MetadataReques
 func (r *flavorResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	fn := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	fnC := []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}
+	fnInt := []planmodifier.Int64{int64planmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a compute flavor in PCD's Nova service (admin). Flavors are immutable; " +
-			"any change forces a new resource.",
+		MarkdownDescription: "Manages a compute flavor in PCD's Nova service (admin). Every attribute except " +
+			"`extra_specs` is immutable; changing one forces a new resource. `extra_specs` can be added, " +
+			"changed, or removed in place.",
 		Attributes: map[string]schema.Attribute{
 			"id":           schema.StringAttribute{Computed: true, MarkdownDescription: "The flavor ID.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
-			"name":         schema.StringAttribute{Required: true, MarkdownDescription: "The name of the flavor.", PlanModifiers: fn},
-			"ram":          schema.Int64Attribute{Required: true, MarkdownDescription: "Memory in MB.", PlanModifiers: []planmodifier.Int64{}},
-			"vcpus":        schema.Int64Attribute{Required: true, MarkdownDescription: "Number of vCPUs.", PlanModifiers: []planmodifier.Int64{}},
-			"disk":         schema.Int64Attribute{Required: true, MarkdownDescription: "Root disk in GB.", PlanModifiers: []planmodifier.Int64{}},
-			"flavor_id":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The desired flavor ID (auto-generated if omitted).", PlanModifiers: fnC},
-			"swap":         schema.Int64Attribute{Optional: true, Computed: true, Default: int64default.StaticInt64(0), MarkdownDescription: "Swap space in MB."},
-			"rx_tx_factor": schema.Float64Attribute{Optional: true, Computed: true, MarkdownDescription: "RX/TX factor.", PlanModifiers: []planmodifier.Float64{float64planmodifier.UseStateForUnknown()}},
-			"is_public":    schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Whether the flavor is public."},
-			"ephemeral":    schema.Int64Attribute{Optional: true, Computed: true, Default: int64default.StaticInt64(0), MarkdownDescription: "Ephemeral disk in GB."},
+			"name":         schema.StringAttribute{Required: true, MarkdownDescription: "The name of the flavor. Changing this forces a new resource.", PlanModifiers: fn},
+			"ram":          schema.Int64Attribute{Required: true, MarkdownDescription: "Memory in MB. Changing this forces a new resource.", PlanModifiers: fnInt},
+			"vcpus":        schema.Int64Attribute{Required: true, MarkdownDescription: "Number of vCPUs. Changing this forces a new resource.", PlanModifiers: fnInt},
+			"disk":         schema.Int64Attribute{Required: true, MarkdownDescription: "Root disk in GB. Changing this forces a new resource.", PlanModifiers: fnInt},
+			"flavor_id":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The desired flavor ID (auto-generated if omitted). Changing this forces a new resource.", PlanModifiers: fnC},
+			"swap":         schema.Int64Attribute{Optional: true, Computed: true, Default: int64default.StaticInt64(0), MarkdownDescription: "Swap space in MB. Changing this forces a new resource.", PlanModifiers: fnInt},
+			"rx_tx_factor": schema.Float64Attribute{Optional: true, Computed: true, MarkdownDescription: "RX/TX factor. Changing this forces a new resource.", PlanModifiers: []planmodifier.Float64{float64planmodifier.RequiresReplace(), float64planmodifier.UseStateForUnknown()}},
+			"is_public":    schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Whether the flavor is public. Changing this forces a new resource.", PlanModifiers: []planmodifier.Bool{boolplanmodifier.RequiresReplace()}},
+			"ephemeral":    schema.Int64Attribute{Optional: true, Computed: true, Default: int64default.StaticInt64(0), MarkdownDescription: "Ephemeral disk in GB. Changing this forces a new resource.", PlanModifiers: fnInt},
+			"extra_specs":  schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key/value extra specs (e.g. `hw:cpu_policy`). Can be added, changed, or removed on an existing flavor without replacing it."},
 			"region":       schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
@@ -121,7 +128,18 @@ func (r *flavorResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
+	if specs := extractStringMap(ctx, plan.ExtraSpecs, &resp.Diagnostics); len(specs) > 0 {
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if _, err := flavors.CreateExtraSpecs(ctx, client, flavor.ID, flavors.ExtraSpecsOpts(specs)).Extract(); err != nil {
+			resp.Diagnostics.AddError("compute: setting flavor extra specs", err.Error())
+			return
+		}
+	}
+
 	r.flatten(flavor, &plan)
+	resp.Diagnostics.Append(r.refreshExtraSpecs(ctx, client, flavor.ID, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -151,16 +169,55 @@ func (r *flavorResource) Read(ctx context.Context, req resource.ReadRequest, res
 	}
 
 	r.flatten(flavor, &state)
+	resp.Diagnostics.Append(r.refreshExtraSpecs(ctx, client, state.ID.ValueString(), &state)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-// Update is required by the interface but never invoked (flavors are immutable).
+// Update reconciles extra_specs — the only in-place-mutable attribute (every
+// other flavor field forces replacement).
 func (r *flavorResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan flavorModel
+	var plan, state flavorModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	client, err := r.config.ComputeV2Client()
+	if err != nil {
+		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
+		return
+	}
+
+	oldSpecs := extractStringMap(ctx, state.ExtraSpecs, &resp.Diagnostics)
+	newSpecs := extractStringMap(ctx, plan.ExtraSpecs, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	id := plan.ID.ValueString()
+	for k := range oldSpecs {
+		if _, ok := newSpecs[k]; !ok {
+			if err := flavors.DeleteExtraSpec(ctx, client, id, k).ExtractErr(); err != nil {
+				resp.Diagnostics.AddError("compute: deleting flavor extra spec", err.Error())
+				return
+			}
+		}
+	}
+	changed := map[string]string{}
+	for k, v := range newSpecs {
+		if oldSpecs[k] != v {
+			changed[k] = v
+		}
+	}
+	if len(changed) > 0 {
+		if _, err := flavors.CreateExtraSpecs(ctx, client, id, flavors.ExtraSpecsOpts(changed)).Extract(); err != nil {
+			resp.Diagnostics.AddError("compute: updating flavor extra specs", err.Error())
+			return
+		}
+	}
+
+	resp.Diagnostics.Append(r.refreshExtraSpecs(ctx, client, id, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -187,6 +244,24 @@ func (r *flavorResource) Delete(ctx context.Context, req resource.DeleteRequest,
 
 func (r *flavorResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+// refreshExtraSpecs lists the flavor's extra specs and writes them onto the
+// model as an (always non-null) map, so state reflects the server.
+func (r *flavorResource) refreshExtraSpecs(ctx context.Context, client *gophercloud.ServiceClient, id string, m *flavorModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	specs, err := flavors.ListExtraSpecs(ctx, client, id).Extract()
+	if err != nil {
+		diags.AddError("compute: listing flavor extra specs", err.Error())
+		return diags
+	}
+	if specs == nil {
+		specs = map[string]string{}
+	}
+	sm, d := types.MapValueFrom(ctx, types.StringType, specs)
+	diags.Append(d...)
+	m.ExtraSpecs = sm
+	return diags
 }
 
 func (r *flavorResource) flatten(flavor *flavors.Flavor, m *flavorModel) {
