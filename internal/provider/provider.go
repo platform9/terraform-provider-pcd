@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 
+	"github.com/platform9/terraform-provider-pcd/internal/services/blockstorage"
 	"github.com/platform9/terraform-provider-pcd/internal/services/compute"
 	"github.com/platform9/terraform-provider-pcd/internal/services/identity"
 	"github.com/platform9/terraform-provider-pcd/internal/services/images"
@@ -56,6 +57,7 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		compute.NewInstanceResource,
 		compute.NewFlavorResource,
 		compute.NewServergroupResource,
+		blockstorage.NewVolumeResource,
 	}
 }
 
@@ -73,5 +75,7 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		compute.NewFlavorDataSource,
 		compute.NewKeypairDataSource,
 		compute.NewAvailabilityZonesDataSource,
+		blockstorage.NewVolumeDataSource,
+		blockstorage.NewSnapshotDataSource,
 	}
 }
