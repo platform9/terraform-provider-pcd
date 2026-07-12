@@ -246,6 +246,17 @@ func (c *Config) LoadBalancerV2Client() (*gophercloud.ServiceClient, error) {
 	return client, nil
 }
 
+// DNSV2Client returns a Designate v2 service client, honoring an
+// endpoint_overrides entry for the "dns" service type if present.
+func (c *Config) DNSV2Client() (*gophercloud.ServiceClient, error) {
+	client, err := openstack.NewDNSV2(c.Provider, c.endpointOpts())
+	if err != nil {
+		return nil, fmt.Errorf("pcd: creating dns v2 client: %w", err)
+	}
+	c.applyOverride(client, "dns")
+	return client, nil
+}
+
 // applyOverride points a service client at an operator-supplied endpoint when
 // endpoint_overrides names its service type.
 func (c *Config) applyOverride(client *gophercloud.ServiceClient, serviceType string) {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/platform9/terraform-provider-pcd/internal/services/blockstorage"
 	"github.com/platform9/terraform-provider-pcd/internal/services/compute"
+	"github.com/platform9/terraform-provider-pcd/internal/services/dns"
 	"github.com/platform9/terraform-provider-pcd/internal/services/identity"
 	"github.com/platform9/terraform-provider-pcd/internal/services/images"
 	"github.com/platform9/terraform-provider-pcd/internal/services/loadbalancer"
@@ -74,6 +75,8 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		loadbalancer.NewMonitorResource,
 		loadbalancer.NewL7PolicyResource,
 		loadbalancer.NewL7RuleResource,
+		dns.NewZoneResource,
+		dns.NewRecordSetResource,
 	}
 }
 
@@ -99,5 +102,6 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		blockstorage.NewVolumeDataSource,
 		blockstorage.NewSnapshotDataSource,
 		loadbalancer.NewLoadBalancerDataSource,
+		dns.NewZoneDataSource,
 	}
 }
