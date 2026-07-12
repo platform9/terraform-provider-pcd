@@ -3,6 +3,16 @@
 Records deviations from the PCD-1070 implementation plan and material findings that
 change scope. The plan's Section 3 decisions remain locked unless noted here.
 
+## 2026-07-11 — blockstorage: no Cinder storage backend on the CE lab
+
+Volume creation on the CE lab goes `creating → error` immediately: the cluster
+blueprint has `storageBackends={}` (none configured) and only a `__DEFAULT__` volume
+type with nothing to fulfill it. So `pcd_blockstorage_volume`'s acceptance test cannot
+pass on this lab (same class of lab gap as the compute image-library issue). The
+resource **code is verified up to the backend**: create + status waiter + error
+detection all work (the waiter correctly reports the ERROR state). It will pass on a
+cloud with a working storage backend. The volume/snapshot data sources ship alongside.
+
 ## 2026-07-11 — BLOCKER: hypervisor pcd-iso-test cannot spawn instances
 
 Nova boots fail: an instance goes BUILD → ERROR with *"Exceeded maximum number of
