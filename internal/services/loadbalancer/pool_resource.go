@@ -345,14 +345,24 @@ func (r *poolResource) readInto(ctx context.Context, client *gophercloud.Service
 	m.ProvisioningStatus = types.StringValue(p.ProvisioningStatus)
 	m.OperatingStatus = types.StringValue(p.OperatingStatus)
 
-	// loadbalancer_id / listener_id are ForceNew; keep prior values, and derive
-	// from the result only on import (no prior state).
-	if !isSet(m.LoadbalancerID) && !isSet(m.ListenerID) {
+	// loadbalancer_id / listener_id are ForceNew and mutually exclusive: the user
+	// sets one and the other is Computed. Fill each independently from the result
+	// only when it is unknown (Create) or null (import), defaulting to an empty
+	// string so no unknown value reaches state. A known value (including the empty
+	// string set on a prior read) is preserved, so a pool later referenced by a
+	// listener does not spuriously acquire a listener_id and force replacement.
+	if m.LoadbalancerID.IsNull() || m.LoadbalancerID.IsUnknown() {
 		if len(p.Loadbalancers) > 0 {
 			m.LoadbalancerID = types.StringValue(p.Loadbalancers[0].ID)
+		} else {
+			m.LoadbalancerID = types.StringValue("")
 		}
+	}
+	if m.ListenerID.IsNull() || m.ListenerID.IsUnknown() {
 		if len(p.Listeners) > 0 {
 			m.ListenerID = types.StringValue(p.Listeners[0].ID)
+		} else {
+			m.ListenerID = types.StringValue("")
 		}
 	}
 
