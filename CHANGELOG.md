@@ -63,6 +63,10 @@ All notable changes to this project are documented here. The format is based on
 - DNS (Designate v2) — Phase 3: `pcd_dns_zone` and `pcd_dns_recordset` resources plus a
   `pcd_dns_zone` data source. Zone and recordset create/update/delete are asynchronous,
   so applies wait for the object to reach `ACTIVE` (and to disappear after delete).
+- Key management (Barbican v1) — Phase 3: `pcd_keymanager_secret` (write-only, sensitive
+  `payload`) and `pcd_keymanager_container` (grouped secrets) resources plus a
+  `pcd_keymanager_secret` data source (optionally fetches the payload). Barbican identifies
+  objects by URL refs; the resources expose the full ref and use the bare UUID as the ID.
 
 - Registry documentation generation wired via `tfplugindocs` (`make generate`) — renders
   `docs/` for every resource and data source plus the provider index from schema
