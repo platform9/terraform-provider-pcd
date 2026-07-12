@@ -35,6 +35,9 @@ All notable changes to this project are documented here. The format is based on
   `pcd_compute_servergroup` (acceptance-tested); `pcd_compute_instance` (code-complete —
   boot verification is blocked on a lab image-library issue, see DECISIONS.md); data
   sources `pcd_compute_flavor`, `pcd_compute_keypair`, `pcd_compute_availability_zones`.
+- Block storage (Cinder v3): `pcd_blockstorage_volume` resource (create/extend/import;
+  code-complete — acceptance is blocked on the CE lab having no storage backend, see
+  DECISIONS.md) and `pcd_blockstorage_volume` / `pcd_blockstorage_snapshot` data sources.
 
 ### Known gaps
 - `cloud` (clouds.yaml) is declared but not yet implemented; it errors if set.
