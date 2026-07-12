@@ -58,6 +58,21 @@ jobs:
       - name: generate docs
         run: go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name pcd
 
+  release-config:
+    name: goreleaser check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Validate .goreleaser.yml so release-config drift is caught in PRs, not at
+      # release time. Must stay in sync with the pinned version in release.yml.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2.5"
+          args: check
+
   terraform-fmt:
     name: terraform fmt (examples)
     runs-on: ubuntu-latest

@@ -21,6 +21,8 @@ crash.*.log
 clouds.yaml
 *.pem
 *.key
+*.asc
+*.gpg
 secrets.*
 
 # Local dev overrides

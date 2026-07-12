@@ -1,0 +1,37 @@
+name: release
+
+# Publishes a signed release to GitHub (and, via the registry webhook, to the
+# Terraform Registry) whenever a semver tag is pushed. See RELEASING.md.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        id: import_gpg
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          # Pin the GoReleaser line to match the config syntax in .goreleaser.yml.
+          version: "~> v2.5"
+          args: release --clean
+        env:
+          # The fingerprint of the imported key; GoReleaser passes it to gpg.
+          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

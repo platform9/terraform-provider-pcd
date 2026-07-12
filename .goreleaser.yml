@@ -1,0 +1,70 @@
+# Copyright (c) Platform9 Systems, Inc.
+# SPDX-License-Identifier: MPL-2.0
+#
+# GoReleaser configuration for publishing terraform-provider-pcd to the Terraform
+# Registry. Triggered by the release workflow on a `v*` tag. See RELEASING.md.
+version: 2
+
+before:
+  hooks:
+    # Verify the module is tidy before building the release.
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      # main.version is consumed by the provider (see main.go) and surfaced to
+      # Terraform; keep this in sync with the variable name there.
+      - "-s -w -X main.version={{ .Version }}"
+    goos:
+      - freebsd
+      - windows
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - "386"
+      - arm
+      - arm64
+    ignore:
+      - goos: darwin
+        goarch: "386"
+    binary: "{{ .ProjectName }}_v{{ .Version }}"
+
+archives:
+  - format: zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  extra_files:
+    - glob: terraform-registry-manifest.json
+      name_template: "{{ .ProjectName }}_{{ .Version }}_manifest.json"
+  name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
+  algorithm: sha256
+
+signs:
+  - artifacts: checksum
+    args:
+      # GPG_FINGERPRINT is exported by the release workflow after importing the
+      # signing key. The registry verifies this signature against the public key
+      # uploaded to the platform9 namespace.
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+
+release:
+  extra_files:
+    - glob: terraform-registry-manifest.json
+      name_template: "{{ .ProjectName }}_{{ .Version }}_manifest.json"
+
+changelog:
+  # The human-maintained CHANGELOG.md is the source of truth for release notes.
+  disable: true
