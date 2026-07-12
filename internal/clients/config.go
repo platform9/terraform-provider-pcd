@@ -257,6 +257,17 @@ func (c *Config) DNSV2Client() (*gophercloud.ServiceClient, error) {
 	return client, nil
 }
 
+// KeyManagerV1Client returns a Barbican (key manager) v1 service client, honoring
+// an endpoint_overrides entry for the "key-manager" service type if present.
+func (c *Config) KeyManagerV1Client() (*gophercloud.ServiceClient, error) {
+	client, err := openstack.NewKeyManagerV1(c.Provider, c.endpointOpts())
+	if err != nil {
+		return nil, fmt.Errorf("pcd: creating key manager v1 client: %w", err)
+	}
+	c.applyOverride(client, "key-manager")
+	return client, nil
+}
+
 // applyOverride points a service client at an operator-supplied endpoint when
 // endpoint_overrides names its service type.
 func (c *Config) applyOverride(client *gophercloud.ServiceClient, serviceType string) {

@@ -15,6 +15,7 @@ import (
 	"github.com/platform9/terraform-provider-pcd/internal/services/dns"
 	"github.com/platform9/terraform-provider-pcd/internal/services/identity"
 	"github.com/platform9/terraform-provider-pcd/internal/services/images"
+	"github.com/platform9/terraform-provider-pcd/internal/services/keymanager"
 	"github.com/platform9/terraform-provider-pcd/internal/services/loadbalancer"
 	"github.com/platform9/terraform-provider-pcd/internal/services/networking"
 )
@@ -77,6 +78,8 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		loadbalancer.NewL7RuleResource,
 		dns.NewZoneResource,
 		dns.NewRecordSetResource,
+		keymanager.NewSecretResource,
+		keymanager.NewContainerResource,
 	}
 }
 
@@ -103,5 +106,6 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		blockstorage.NewSnapshotDataSource,
 		loadbalancer.NewLoadBalancerDataSource,
 		dns.NewZoneDataSource,
+		keymanager.NewSecretDataSource,
 	}
 }
