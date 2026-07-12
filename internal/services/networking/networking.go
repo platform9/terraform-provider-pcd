@@ -71,6 +71,16 @@ func sortedIDsHash(ids []string) (sorted []string, id string) {
 	return sorted, fmt.Sprintf("%d", h.Sum32())
 }
 
+// splitQoSRuleID parses a composite "<qos_policy_id>/<rule_id>" import ID used by
+// the QoS rule resources (which are nested under a policy).
+func splitQoSRuleID(id string) (policyID, ruleID string, err error) {
+	parts := strings.SplitN(id, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("expected import ID in the form <qos_policy_id>/<rule_id>, got %q", id)
+	}
+	return parts[0], parts[1], nil
+}
+
 // replaceTags sets the full tag list on a Neutron resource (networks, subnets,
 // ports, ...) via the standard attributes-tags extension.
 func replaceTags(ctx context.Context, client *gophercloud.ServiceClient, resourceType, id string, tags []string) error {
