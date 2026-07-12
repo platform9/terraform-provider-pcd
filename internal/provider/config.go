@@ -239,9 +239,12 @@ func pick(v types.String, fallback string, envVars ...string) string {
 	return fallback
 }
 
-// strval returns the configured value if set, otherwise the first non-empty env var.
+// strval returns the configured value if set to a non-empty string, otherwise
+// the first non-empty env var. An explicitly-empty config value (e.g. a variable
+// defaulting to "") is treated as unset so the env fallback still applies —
+// matching terraform-provider-openstack's env-default behavior.
 func strval(v types.String, envVars ...string) string {
-	if !v.IsNull() && !v.IsUnknown() {
+	if !v.IsNull() && !v.IsUnknown() && v.ValueString() != "" {
 		return v.ValueString()
 	}
 	for _, e := range envVars {
