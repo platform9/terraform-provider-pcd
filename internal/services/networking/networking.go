@@ -11,6 +11,7 @@ import (
 	"hash/fnv"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/attributestags"
@@ -18,6 +19,30 @@ import (
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
 )
+
+// keyedMutex serializes read-modify-write access per key. The sub-resources that
+// edit a shared parent's list attribute (router routes, subnet host routes, a
+// port's security groups) each read the current list, splice their entry, and
+// write it back; without serialization two such resources applying concurrently
+// against the same parent would clobber each other. Callers Lock the parent ID
+// for the duration of their read-modify-write.
+type keyedMutex struct {
+	m sync.Map
+}
+
+func (k *keyedMutex) Lock(key string) {
+	mu, _ := k.m.LoadOrStore(key, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+}
+
+func (k *keyedMutex) Unlock(key string) {
+	if mu, ok := k.m.Load(key); ok {
+		mu.(*sync.Mutex).Unlock()
+	}
+}
+
+// neutronParentMu guards per-parent (router/subnet/port) list edits.
+var neutronParentMu = &keyedMutex{}
 
 // configureClient extracts the shared *clients.Config from ProviderData.
 func configureClient(providerData any, diags *diag.Diagnostics) *clients.Config {
