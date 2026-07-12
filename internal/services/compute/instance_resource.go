@@ -87,7 +87,10 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"name":        schema.StringAttribute{Required: true, MarkdownDescription: "The name of the instance."},
 			"image_id":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The image ID to boot from (alternative to image_name). Changing this forces a new resource.", PlanModifiers: fnC},
 			"image_name":  schema.StringAttribute{Optional: true, MarkdownDescription: "The image name to boot from, resolved via Glance (alternative to image_id). Exactly one of image_id/image_name is required. Changing this forces a new resource.", PlanModifiers: fn},
-			"flavor_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The flavor ID (alternative to flavor_name). Changing this triggers an in-place resize.", PlanModifiers: stable},
+			// No UseStateForUnknown: it would pin the stale flavor_id into the plan
+			// when a resize is driven by flavor_name, causing an "inconsistent result"
+			// error. Update always sets the resolved flavor_id explicitly.
+			"flavor_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The flavor ID (alternative to flavor_name). Changing this triggers an in-place resize.", PlanModifiers: []planmodifier.String{}},
 			"flavor_name": schema.StringAttribute{Optional: true, MarkdownDescription: "The flavor name (alternative to flavor_id). Changing this triggers an in-place resize.", PlanModifiers: []planmodifier.String{}},
 			"key_pair":    schema.StringAttribute{Optional: true, MarkdownDescription: "The name of a keypair to inject. Changing this forces a new resource.", PlanModifiers: fn},
 			"security_groups": schema.SetAttribute{
@@ -288,6 +291,8 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 	// user configures a name (flavor_id is Computed and would carry the stale id via
 	// UseStateForUnknown), otherwise from flavor_id.
 	id := plan.ID.ValueString()
+	// Resolve the intended flavor. Prefer flavor_name when configured: flavor_id is
+	// Computed and may be unknown in the plan, so it can't be trusted here.
 	targetFlavorID := plan.FlavorID.ValueString()
 	if name := plan.FlavorName.ValueString(); name != "" {
 		targetFlavorID, err = flavorIDFromName(ctx, client, name)
@@ -295,6 +300,9 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 			resp.Diagnostics.AddError("compute: resolving flavor", err.Error())
 			return
 		}
+	}
+	if targetFlavorID == "" {
+		targetFlavorID = state.FlavorID.ValueString()
 	}
 	if targetFlavorID != state.FlavorID.ValueString() {
 		if err := servers.Resize(ctx, client, id, servers.ResizeOpts{FlavorRef: targetFlavorID}).ExtractErr(); err != nil {
@@ -318,8 +326,10 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 			resp.Diagnostics.AddError("compute: waiting for instance active after resize", err.Error())
 			return
 		}
-		plan.FlavorID = types.StringValue(targetFlavorID)
 	}
+	// Always pin the resolved flavor_id (it may be unknown in the plan when driven
+	// by flavor_name), so the applied state matches what Terraform expects.
+	plan.FlavorID = types.StringValue(targetFlavorID)
 
 	server, err := servers.Get(ctx, client, plan.ID.ValueString()).Extract()
 	if err != nil {
