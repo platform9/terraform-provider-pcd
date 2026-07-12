@@ -77,6 +77,13 @@ All notable changes to this project are documented here. The format is based on
   resource stops managing the quotas without resetting them to defaults (matching the upstream
   provider). Imported by a composite `<project_id>/<region>` ID (legacy bare `<project_id>` is
   also accepted). Cinder per-volume-type quotas (`volume_type_quota`) are not yet implemented.
+- VPNaaS (Neutron VPN extension) — Phase 3: `pcd_vpnaas_service`, `pcd_vpnaas_ike_policy`,
+  `pcd_vpnaas_ipsec_policy`, `pcd_vpnaas_endpoint_group`, and `pcd_vpnaas_site_connection`. Build a
+  site-to-site IPsec VPN: attach a service to a router, pair IKE/IPsec policies (with a nested
+  `lifetime` block) and local/peer endpoint groups, and connect with a site connection (nested
+  `dpd` block, sensitive `psk`). The service and site connection wait for the object to disappear
+  after delete (asynchronous teardown) so dependent routers/subnets can be destroyed in the same
+  apply. The provider-specific `value_specs` escape hatch is not implemented.
 
 - Registry documentation generation wired via `tfplugindocs` (`make generate`) — renders
   `docs/` for every resource and data source plus the provider index from schema
