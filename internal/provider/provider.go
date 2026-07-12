@@ -63,6 +63,8 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		compute.NewInstanceResource,
 		compute.NewFlavorResource,
 		compute.NewServergroupResource,
+		compute.NewInterfaceAttachResource,
+		compute.NewVolumeAttachResource,
 		blockstorage.NewVolumeResource,
 	}
 }

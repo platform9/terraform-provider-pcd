@@ -31,6 +31,7 @@ func TestAccComputeInstance_basic(t *testing.T) {
 		imageURL = defaultTestImageURL
 	}
 	const rn = "pcd_compute_instance.test"
+	var instanceID, flavorID string
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { acctest.PreCheck(t) },
@@ -38,9 +39,11 @@ func TestAccComputeInstance_basic(t *testing.T) {
 		CheckDestroy:             testAccCheckInstanceDestroy(t),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccInstanceConfig(imageURL, "tf-acc-instance"),
+				Config: testAccInstanceConfig(imageURL, "tf-acc-instance", "m1.tiny"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckInstanceExists(t, rn),
+					testAccCaptureID(rn, &instanceID),
+					testAccCaptureAttr(rn, "flavor_id", &flavorID),
 					resource.TestCheckResourceAttr(rn, "name", "tf-acc-instance"),
 					resource.TestCheckResourceAttr(rn, "status", "ACTIVE"),
 					resource.TestCheckResourceAttrSet(rn, "access_ip_v4"),
@@ -48,14 +51,59 @@ func TestAccComputeInstance_basic(t *testing.T) {
 				),
 			},
 			{
-				Config: testAccInstanceConfig(imageURL, "tf-acc-instance-renamed"),
+				Config: testAccInstanceConfig(imageURL, "tf-acc-instance-renamed", "m1.tiny"),
 				Check:  resource.TestCheckResourceAttr(rn, "name", "tf-acc-instance-renamed"),
+			},
+			{
+				// Resize: change flavor in place (same instance ID, new flavor_id).
+				Config: testAccInstanceConfig(imageURL, "tf-acc-instance-renamed", "m1.small"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrWith(rn, "id", func(v string) error {
+						if v != instanceID {
+							return fmt.Errorf("instance was replaced (%s -> %s); flavor change should resize in place", instanceID, v)
+						}
+						return nil
+					}),
+					resource.TestCheckResourceAttrWith(rn, "flavor_id", func(v string) error {
+						if v == flavorID {
+							return fmt.Errorf("flavor_id did not change after resize (still %s)", v)
+						}
+						return nil
+					}),
+				),
 			},
 		},
 	})
 }
 
-func testAccInstanceConfig(imageURL, name string) string {
+// TestAccComputeInstance_imageName boots an instance referencing its image by
+// name (resolved via Glance) instead of image_id.
+func TestAccComputeInstance_imageName(t *testing.T) {
+	imageURL := os.Getenv("PCD_ACC_IMAGE_URL")
+	if imageURL == "" {
+		imageURL = defaultTestImageURL
+	}
+	const rn = "pcd_compute_instance.test"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInstanceDestroy(t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInstanceImageNameConfig(imageURL),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckInstanceExists(t, rn),
+					resource.TestCheckResourceAttr(rn, "status", "ACTIVE"),
+					// image_id is Computed and gets populated from the resolved image_name.
+					resource.TestCheckResourceAttrPair(rn, "image_id", "pcd_images_image.test", "id"),
+				),
+			},
+		},
+	})
+}
+
+func testAccInstanceConfig(imageURL, name, flavorName string) string {
 	return fmt.Sprintf(`
 resource "pcd_networking_network" "test" {
   name = "tf-acc-inst-net"
@@ -80,7 +128,7 @@ resource "pcd_compute_keypair" "test" {
 resource "pcd_compute_instance" "test" {
   name        = %q
   image_id    = pcd_images_image.test.id
-  flavor_name = "m1.tiny"
+  flavor_name = %q
   key_pair    = pcd_compute_keypair.test.name
 
   network {
@@ -89,7 +137,51 @@ resource "pcd_compute_instance" "test" {
 
   depends_on = [pcd_networking_subnet.test]
 }
-`, imageURL, name)
+`, imageURL, name, flavorName)
+}
+
+func testAccInstanceImageNameConfig(imageURL string) string {
+	return fmt.Sprintf(`
+resource "pcd_networking_network" "test" {
+  name = "tf-acc-instn-net"
+}
+
+resource "pcd_networking_subnet" "test" {
+  network_id = pcd_networking_network.test.id
+  cidr       = "10.113.0.0/24"
+}
+
+resource "pcd_images_image" "test" {
+  name             = "tf-acc-instn-img"
+  container_format = "bare"
+  disk_format      = "qcow2"
+  image_source_url = %q
+}
+
+resource "pcd_compute_instance" "test" {
+  name        = "tf-acc-instn"
+  image_name  = pcd_images_image.test.name
+  flavor_name = "m1.tiny"
+
+  network {
+    uuid = pcd_networking_network.test.id
+  }
+
+  depends_on = [pcd_networking_subnet.test]
+}
+`, imageURL)
+}
+
+// testAccCaptureAttr records a resource attribute value for later comparison.
+func testAccCaptureAttr(n, attr string, dst *string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs := s.RootModule().Resources[n]
+		if rs == nil {
+			return fmt.Errorf("not found in state: %s", n)
+		}
+		*dst = rs.Primary.Attributes[attr]
+		return nil
+	}
 }
 
 func testAccCheckInstanceExists(t *testing.T, n string) resource.TestCheckFunc {
