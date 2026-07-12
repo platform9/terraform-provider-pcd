@@ -54,6 +54,12 @@ All notable changes to this project are documented here. The format is based on
 - Block storage (Cinder v3): `pcd_blockstorage_volume` resource (create/extend/import;
   code-complete — acceptance is blocked on the CE lab having no storage backend, see
   DECISIONS.md) and `pcd_blockstorage_volume` / `pcd_blockstorage_snapshot` data sources.
+- Load balancing (Octavia v2) — Phase 3: `pcd_lb_loadbalancer`, `pcd_lb_listener`,
+  `pcd_lb_pool`, `pcd_lb_member`, `pcd_lb_monitor`, `pcd_lb_l7policy`, `pcd_lb_l7rule`
+  resources and a `pcd_lb_loadbalancer` data source. Every child operation resolves the
+  root load balancer and waits for its `provisioning_status` to return to `ACTIVE` before
+  and after mutating (Octavia serializes changes per load balancer). Code-complete; see
+  DECISIONS.md for live-validation status.
 
 - Registry documentation generation wired via `tfplugindocs` (`make generate`) — renders
   `docs/` for every resource and data source plus the provider index from schema

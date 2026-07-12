@@ -235,6 +235,17 @@ func (c *Config) BlockStorageV3Client() (*gophercloud.ServiceClient, error) {
 	return client, nil
 }
 
+// LoadBalancerV2Client returns an Octavia v2 service client, honoring an
+// endpoint_overrides entry for the "load-balancer" service type if present.
+func (c *Config) LoadBalancerV2Client() (*gophercloud.ServiceClient, error) {
+	client, err := openstack.NewLoadBalancerV2(c.Provider, c.endpointOpts())
+	if err != nil {
+		return nil, fmt.Errorf("pcd: creating load balancer v2 client: %w", err)
+	}
+	c.applyOverride(client, "load-balancer")
+	return client, nil
+}
+
 // applyOverride points a service client at an operator-supplied endpoint when
 // endpoint_overrides names its service type.
 func (c *Config) applyOverride(client *gophercloud.ServiceClient, serviceType string) {
