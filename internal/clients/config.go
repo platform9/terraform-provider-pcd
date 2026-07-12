@@ -224,6 +224,17 @@ func (c *Config) ComputeV2Client() (*gophercloud.ServiceClient, error) {
 	return client, nil
 }
 
+// BlockStorageV3Client returns a Cinder v3 service client, honoring an
+// endpoint_overrides entry for the "volumev3" service type if present.
+func (c *Config) BlockStorageV3Client() (*gophercloud.ServiceClient, error) {
+	client, err := openstack.NewBlockStorageV3(c.Provider, c.endpointOpts())
+	if err != nil {
+		return nil, fmt.Errorf("pcd: creating block storage v3 client: %w", err)
+	}
+	c.applyOverride(client, "volumev3")
+	return client, nil
+}
+
 // applyOverride points a service client at an operator-supplied endpoint when
 // endpoint_overrides names its service type.
 func (c *Config) applyOverride(client *gophercloud.ServiceClient, serviceType string) {
