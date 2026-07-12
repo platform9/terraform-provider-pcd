@@ -79,9 +79,9 @@ resource "pcd_networking_port" "test" {
   name       = "tf-acc-fip-port"
   network_id = pcd_networking_network.test.id
 
-  fixed_ip {
+  fixed_ip = [{
     subnet_id = pcd_networking_subnet.test.id
-  }
+  }]
 }
 
 resource "pcd_networking_floatingip" "test" {

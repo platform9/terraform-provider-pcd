@@ -79,9 +79,9 @@ resource "pcd_networking_port" "test" {
   admin_state_up = %t
   tags           = ["tf-acc"]
 
-  fixed_ip {
+  fixed_ip = [{
     subnet_id = pcd_networking_subnet.test.id
-  }
+  }]
 }
 `, name, adminUp)
 }
