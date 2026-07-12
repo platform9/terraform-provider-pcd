@@ -14,6 +14,7 @@ import (
 	"github.com/platform9/terraform-provider-pcd/internal/services/compute"
 	"github.com/platform9/terraform-provider-pcd/internal/services/identity"
 	"github.com/platform9/terraform-provider-pcd/internal/services/images"
+	"github.com/platform9/terraform-provider-pcd/internal/services/loadbalancer"
 	"github.com/platform9/terraform-provider-pcd/internal/services/networking"
 )
 
@@ -66,6 +67,13 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		compute.NewInterfaceAttachResource,
 		compute.NewVolumeAttachResource,
 		blockstorage.NewVolumeResource,
+		loadbalancer.NewLoadBalancerResource,
+		loadbalancer.NewListenerResource,
+		loadbalancer.NewPoolResource,
+		loadbalancer.NewMemberResource,
+		loadbalancer.NewMonitorResource,
+		loadbalancer.NewL7PolicyResource,
+		loadbalancer.NewL7RuleResource,
 	}
 }
 
@@ -90,5 +98,6 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		compute.NewAvailabilityZonesDataSource,
 		blockstorage.NewVolumeDataSource,
 		blockstorage.NewSnapshotDataSource,
+		loadbalancer.NewLoadBalancerDataSource,
 	}
 }
