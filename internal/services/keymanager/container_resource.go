@@ -70,6 +70,11 @@ type containerSecretRefModel struct {
 	Name      types.String `tfsdk:"name"`
 }
 
+type containerConsumerModel struct {
+	Name types.String `tfsdk:"name"`
+	URL  types.String `tfsdk:"url"`
+}
+
 func (r *containerResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_keymanager_container"
 }
@@ -87,12 +92,13 @@ func (r *containerResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"type": schema.StringAttribute{Required: true, MarkdownDescription: "The container type: generic, rsa, or certificate. Changing this forces a new resource.", PlanModifiers: forceNew},
 			"secret_refs": schema.SetNestedAttribute{
 				Optional:            true,
+				Computed:            true,
 				MarkdownDescription: "The secrets in the container. Changing these forces a new resource.",
 				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
 					"secret_ref": schema.StringAttribute{Required: true, MarkdownDescription: "The full secret reference URL."},
 					"name":       schema.StringAttribute{Optional: true, MarkdownDescription: "A label for the secret within the container (e.g. private_key)."},
 				}},
-				PlanModifiers: []planmodifier.Set{setplanmodifier.RequiresReplace()},
+				PlanModifiers: []planmodifier.Set{setplanmodifier.RequiresReplace(), setplanmodifier.UseStateForUnknown()},
 			},
 			"container_ref": schema.StringAttribute{Computed: true, MarkdownDescription: "The full Barbican container reference URL.", PlanModifiers: useState},
 			"status":        schema.StringAttribute{Computed: true, MarkdownDescription: "The container status (e.g. ACTIVE).", PlanModifiers: useState},
@@ -252,9 +258,12 @@ func (r *containerResource) readInto(ctx context.Context, client *gophercloud.Se
 		m.SecretRefs = refSet
 	}
 
-	consumers := make([]map[string]string, 0, len(container.Consumers))
+	consumers := make([]containerConsumerModel, 0, len(container.Consumers))
 	for _, c := range container.Consumers {
-		consumers = append(consumers, map[string]string{"name": c.Name, "url": c.URL})
+		consumers = append(consumers, containerConsumerModel{
+			Name: types.StringValue(c.Name),
+			URL:  types.StringValue(c.URL),
+		})
 	}
 	consList, d := types.ListValueFrom(ctx, containerConsumerObjType, consumers)
 	diags = append(diags, d...)
