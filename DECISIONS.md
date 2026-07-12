@@ -19,6 +19,10 @@ yet passable on this lab (reason noted). Generated registry docs are not committ
 | Images (DS) | `pcd_images_image`, `_image_ids` | **VALIDATED** |
 | Networking | `pcd_networking_network`, `_subnet`, `_secgroup`, `_secgroup_rule`, `_router`, `_router_interface` | **VALIDATED** |
 | Networking (DS) | `pcd_networking_network`, `_subnet`, `_secgroup` | **VALIDATED** |
+| Networking | `pcd_networking_port` | **PENDING** — code-complete, build/vet/lint/docs clean; acceptance test written (create/update/import). Not yet run live: lab credentials were unavailable in this session. No lab-side blocker expected. |
+| Networking | `pcd_networking_floatingip` | **PENDING** — code-complete. Needs an **external network** in the lab (allocation pool); acc test skips unless `PCD_ACC_EXTERNAL_NETWORK` names one. |
+| Networking (DS) | `pcd_networking_port`, `_port_ids`, `_router`, `_subnet_ids` | **PENDING** — code-complete; acc test written. Not yet run live (credentials unavailable this session). |
+| Networking (DS) | `pcd_networking_floatingip` | **PENDING** — depends on a floating IP existing (see external-network note above). |
 | Compute | `pcd_compute_keypair`, `_flavor`, `_servergroup` | **VALIDATED** |
 | Compute (DS) | `pcd_compute_flavor`, `_keypair`, `_availability_zones` | **VALIDATED** |
 | Compute | `pcd_compute_instance` (boot) | **PENDING** — lab image-library gap: images don't reach the onboarded host's local library → nova returns HTTP 204 for image data. Create/schedule/wait/error-report verified; passes with a library-backed image. |

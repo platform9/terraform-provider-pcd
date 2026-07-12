@@ -30,7 +30,12 @@ All notable changes to this project are documented here. The format is based on
   `pcd_images_image_ids` data sources.
 - Networking (Neutron v2): resources `pcd_networking_network`, `_subnet`, `_secgroup`,
   `_secgroup_rule`, `_router`, `_router_interface`; data sources `pcd_networking_network`,
-  `_subnet`, `_secgroup`. (Floating IPs, ports, and remaining data sources to follow.)
+  `_subnet`, `_secgroup`.
+- Networking extras: `pcd_networking_port` (fixed IPs, security groups, allowed-address
+  pairs, tags) and `pcd_networking_floatingip` (allocate from an external network by
+  `pool` name, associate/disassociate to a port); data sources `pcd_networking_port`,
+  `_port_ids`, `_router`, `_subnet_ids`, and `_floatingip`. Ports and floating IPs are
+  code-complete with acceptance tests; see DECISIONS.md for live-validation status.
 - Compute (Nova v2): resources `pcd_compute_keypair`, `pcd_compute_flavor`,
   `pcd_compute_servergroup` (acceptance-tested); `pcd_compute_instance` (code-complete —
   boot verification is blocked on a lab image-library issue, see DECISIONS.md); data

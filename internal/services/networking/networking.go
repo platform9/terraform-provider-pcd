@@ -8,6 +8,9 @@ package networking
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
+	"sort"
+	"strings"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/attributestags"
@@ -30,6 +33,17 @@ func configureClient(providerData any, diags *diag.Diagnostics) *clients.Config 
 		return nil
 	}
 	return config
+}
+
+// sortedIDsHash sorts a list of resource IDs ascending and derives a stable
+// synthetic data-source ID from them, so the *_ids data sources produce a
+// deterministic ordering and only churn when the matched set changes.
+func sortedIDsHash(ids []string) (sorted []string, id string) {
+	sorted = append([]string(nil), ids...)
+	sort.Strings(sorted)
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(strings.Join(sorted, ",")))
+	return sorted, fmt.Sprintf("%d", h.Sum32())
 }
 
 // replaceTags sets the full tag list on a Neutron resource (networks, subnets,
