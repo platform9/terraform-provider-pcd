@@ -71,6 +71,12 @@ All notable changes to this project are documented here. The format is based on
   rule types — `pcd_networking_qos_bandwidth_limit_rule`, `pcd_networking_qos_dscp_marking_rule`,
   `pcd_networking_qos_minimum_bandwidth_rule` — plus a `pcd_networking_qos_policy` data source.
   Rules are nested under a policy and imported by a composite `<qos_policy_id>/<rule_id>` ID.
+- Project quotas — Phase 3: `pcd_compute_quotaset` (Nova), `pcd_networking_quota` (Neutron), and
+  `pcd_blockstorage_quotaset` (Cinder). Each manages the per-project quota limits for its service;
+  only the fields you set are managed (omitted fields keep their server value), and destroying the
+  resource stops managing the quotas without resetting them to defaults (matching the upstream
+  provider). Imported by a composite `<project_id>/<region>` ID (legacy bare `<project_id>` is
+  also accepted). Cinder per-volume-type quotas (`volume_type_quota`) are not yet implemented.
 
 - Registry documentation generation wired via `tfplugindocs` (`make generate`) — renders
   `docs/` for every resource and data source plus the provider index from schema

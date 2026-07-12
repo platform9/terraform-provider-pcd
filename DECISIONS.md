@@ -39,11 +39,33 @@ yet passable on this lab (reason noted). Generated registry docs are not committ
 | Load balancing (Octavia) | `pcd_lb_loadbalancer`, `_listener`, `_pool`, `_member`, `_monitor`, `_l7policy`, `_l7rule` + `_loadbalancer` DS | **PENDING** — Phase 3, code-complete; per-LB wait-for-`ACTIVE` lifecycle, root-LB resolution for every child, echo-only churny fields. Full-tree acc test + examples written. Octavia is live on the lab (Step 0), but LB provisioning needs a working amphora/provider driver; not yet run live (credentials unavailable this session). |
 | DNS (Designate) | `pcd_dns_zone`, `pcd_dns_recordset` + `pcd_dns_zone` DS | **PENDING** — Phase 3, code-complete; async create/update/delete → wait-for-`ACTIVE`/404. Acc test (zone + recordset + import) + examples written. Designate is live on the lab (Step 0) and DNS needs no compute/storage backend, so this should pass live — not yet run this session (credentials unavailable). |
 | Key management (Barbican) | `pcd_keymanager_secret`, `pcd_keymanager_container` + `pcd_keymanager_secret` DS | **PENDING** — Phase 3, code-complete; write-only echo-only `payload`, URL-ref→UUID id handling, wait-for-`ACTIVE` only on create-with-payload. Acc test (secret + container + data source + import) + examples written. Barbican is live on the lab (Step 0) and needs no compute/storage backend, so this should pass live — not yet run this session (credentials unavailable). |
-| Network QoS (Neutron) | `pcd_networking_qos_policy`, `_qos_bandwidth_limit_rule`, `_qos_dscp_marking_rule`, `_qos_minimum_bandwidth_rule` + `_qos_policy` DS | **PENDING** — Phase 3, code-complete; rules nested under a policy with composite `<policy_id>/<rule_id>` import, tags via the attributes-tags extension (`policies` type), `ForceNew` on `qos_policy_id`. Full-tree acc test (policy + all three rules + data source + import) + examples written. Depends only on the Neutron `qos` extension (no compute/storage backend), so this should pass live — not yet run this session (credentials unavailable). |
+| Network QoS (Neutron) | `pcd_networking_qos_policy`, `_qos_bandwidth_limit_rule`, `_qos_dscp_marking_rule`, `_qos_minimum_bandwidth_rule` + `_qos_policy` DS | **PENDING** — Phase 3, code-complete; rules nested under a policy with composite `<policy_id>/<rule_id>` import, tags via the attributes-tags extension (`qos/policies` type), `ForceNew` on `qos_policy_id`. Full-tree acc test (policy + all three rules + data source + import) + examples written. Depends only on the Neutron `qos` extension (no compute/storage backend), so this should pass live — not yet run this session (credentials unavailable). |
+| Project quotas | `pcd_compute_quotaset` (Nova), `pcd_networking_quota` (Neutron), `pcd_blockstorage_quotaset` (Cinder) | **PENDING** — Phase 3, code-complete; every quota field `Optional+Computed` with `UseStateForUnknown` (partial management — only user-set/changed fields are PUT via `*int` omitempty; server echoes the rest). No create API (Create = Update+read). **Delete is a deliberate no-op** (matches upstream `RemoveFromState`: destroying stops management without resetting quotas). Composite `<project_id>/<region>` id with legacy bare-`project_id` import tolerance; `project_id`/`region` are `ForceNew`. Per-service acc test (create project → set quotas → verify via API → update → import) + examples written. Needs live validation on the fresh CE lab (credentials unavailable this session). **Scope note:** matches upstream field-for-field except two deliberate deferrals — see the Deferred section. |
 
 Both PENDING items are lab-side configuration gaps (Platform9 / lab-ops), not provider
 defects; their acceptance tests flip green on a properly-configured PCD cloud.
 
+
+## 2026-07-12 — quotas: scope and deferrals
+
+The three quota resources match the upstream terraform-provider-openstack resources
+field-for-field, with three deliberate choices worth recording:
+
+- **Delete is a no-op.** Upstream's quota resources use `schema.RemoveFromState` and make
+  no API call on destroy; the project keeps whatever quota values it had. We match this
+  (the framework `Delete` returns without calling the API). Rationale: quotas are a
+  property of a pre-existing project, not an object the provider created, so "un-managing"
+  them should not silently reset a project's limits to defaults. gophercloud exposes a
+  `Delete` (reset-to-defaults) on all three packages; we intentionally do not call it.
+- **`volume_type_quota` deferred (Cinder).** The upstream `blockstorage_quotaset_v3`
+  exposes per-volume-type quotas as a string→string map routed through gophercloud's
+  `UpdateOpts.Extra`, with echo-on-write and read-back-only-for-configured-keys to avoid
+  perpetual diffs. This is the single most bug-prone part of the port; it is deferred to a
+  follow-up so the scalar quotaset ships clean. `pcd_blockstorage_quotaset` manages the
+  scalar Cinder quotas only for now.
+- **Upstream-omitted gophercloud fields left out.** Nova's `force` update flag and
+  Neutron's `trunk` quota exist in gophercloud but are not in the upstream schemas; we omit
+  them to match upstream exactly. Easy to add later if wanted.
 
 ## 2026-07-11 — blockstorage: no Cinder storage backend on the CE lab
 
