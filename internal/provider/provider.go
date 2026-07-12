@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 
 	"github.com/platform9/terraform-provider-pcd/internal/services/identity"
+	"github.com/platform9/terraform-provider-pcd/internal/services/images"
 )
 
 // Ensure pcdProvider satisfies the provider.Provider interface.
@@ -42,6 +43,7 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		identity.NewUserResource,
 		identity.NewRoleAssignmentResource,
 		identity.NewApplicationCredentialResource,
+		images.NewImageResource,
 	}
 }
 
@@ -51,5 +53,7 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		identity.NewProjectDataSource,
 		identity.NewUserDataSource,
 		identity.NewRoleDataSource,
+		images.NewImageDataSource,
+		images.NewImageIDsDataSource,
 	}
 }

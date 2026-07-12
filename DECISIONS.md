@@ -3,6 +3,17 @@
 Records deviations from the PCD-1070 implementation plan and material findings that
 change scope. The plan's Section 3 decisions remain locked unless noted here.
 
+## 2026-07-11 — Gate A met; images `properties` read-only
+
+The user onboarded hypervisor `pcd-iso-test` (the earlier `pcd-ce-jul-hyp` name was a
+mistake). Nova now shows it `state=up` (4 vCPU / 7.6 GB, `nova-compute` up), so **Gate A
+is met** and compute is unblocked.
+
+`pcd_images_image` exposes `properties` as a **computed (read-only)** map for now. Glance
+injects system properties (`os_hash_*`, `stores`, …) that fight a user-managed map and
+cause perpetual diffs; settable custom properties with a system-property ignore-list is a
+follow-up.
+
 ## 2026-07-10 — Step 0 preflight findings (live CE 2026.4)
 
 Full evidence: [`docs/compatibility/ce-2026.4.md`](docs/compatibility/ce-2026.4.md).
