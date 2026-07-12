@@ -30,6 +30,38 @@ jobs:
         # Acceptance (TF_ACC) and live (PCD_LIVE_TEST) tests self-skip here.
         run: go test ./internal/... -timeout 120s
 
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.12.2
+
+  docs:
+    name: docs drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: generate docs
+        run: go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name pcd
+      - name: check for drift
+        run: |
+          if ! git diff --exit-code -- docs/; then
+            echo "docs/ is out of date; run 'make generate' and commit."
+            exit 1
+          fi
+
   terraform-fmt:
     name: terraform fmt (examples)
     runs-on: ubuntu-latest

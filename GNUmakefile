@@ -29,9 +29,8 @@ fmt:
 	gofmt -s -w .
 
 # Regenerate registry docs from schema descriptions + examples (tfplugindocs).
-# Wired once tools/ is populated in the docs phase.
 generate:
-	cd tools && go generate ./...
+	go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name pcd
 
 # Remove lab resources left by failed acceptance runs (tf-acc- prefix). Added per family.
 sweep:
