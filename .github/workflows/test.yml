@@ -30,6 +30,34 @@ jobs:
         # Acceptance (TF_ACC) and live (PCD_LIVE_TEST) tests self-skip here.
         run: go test ./internal/... -timeout 120s
 
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+
+  docs:
+    name: docs generate (smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      # Generated docs are not committed; this verifies tfplugindocs still renders
+      # cleanly from the schema descriptions (catches broken/missing descriptions).
+      - name: generate docs
+        run: go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name pcd
+
   terraform-fmt:
     name: terraform fmt (examples)
     runs-on: ubuntu-latest
