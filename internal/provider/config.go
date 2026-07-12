@@ -133,7 +133,9 @@ func (p *pcdProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *
 			"cloud": schema.StringAttribute{
 				Optional: true,
 				MarkdownDescription: "Name of a `clouds.yaml` entry to source configuration from. Falls back to `OS_CLOUD`. " +
-					"**Not yet implemented in this pre-release** — use explicit `auth_url`/credentials for now.",
+					"The file is searched at `$OS_CLIENT_CONFIG_FILE`, `./clouds.yaml`, " +
+					"`~/.config/openstack/clouds.yaml`, then `/etc/openstack/clouds.yaml`. Explicit provider " +
+					"arguments and `OS_*` environment variables override values from the file.",
 			},
 			"endpoint_overrides": schema.MapAttribute{
 				Optional:            true,
@@ -159,36 +161,41 @@ func (p *pcdProvider) Configure(ctx context.Context, req provider.ConfigureReque
 		return
 	}
 
-	// clouds.yaml support is declared in the schema for config parity but not yet
-	// wired. Fail loudly rather than silently ignore a user who sets it.
-	if strval(m.Cloud, "OS_CLOUD") != "" {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("cloud"),
-			"clouds.yaml (cloud) not yet supported",
-			"This pre-release does not yet source configuration from clouds.yaml. "+
-				"Configure auth_url and credentials explicitly (or via OS_* env vars).",
-		)
-		return
+	// When `cloud` (or OS_CLOUD) is set, source auth defaults from that clouds.yaml
+	// entry. Precedence is explicit config > OS_* env > clouds.yaml, so the loaded
+	// values are the lowest tier of fallbacks.
+	cv := clients.CloudConfig{}
+	insecureDefault := false
+	if cloudName := strval(m.Cloud, "OS_CLOUD"); cloudName != "" {
+		cloud, err := clients.LoadCloud(cloudName)
+		if err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("cloud"), "Failed to load clouds.yaml", err.Error())
+			return
+		}
+		cv = *cloud
+		if cv.HasInsecure {
+			insecureDefault = cv.Insecure
+		}
 	}
 
 	cfg := &clients.Config{
-		AuthURL:           strval(m.AuthURL, "OS_AUTH_URL"),
-		Region:            strval(m.Region, "OS_REGION_NAME"),
-		Username:          strval(m.UserName, "OS_USERNAME"),
-		UserID:            strval(m.UserID, "OS_USER_ID"),
-		Password:          strval(m.Password, "OS_PASSWORD"),
-		TenantName:        strval(m.TenantName, "OS_PROJECT_NAME", "OS_TENANT_NAME"),
-		TenantID:          strval(m.TenantID, "OS_PROJECT_ID", "OS_TENANT_ID"),
-		UserDomainID:      strval(m.UserDomainID, "OS_USER_DOMAIN_ID"),
-		UserDomainName:    strval(m.UserDomainName, "OS_USER_DOMAIN_NAME"),
-		ProjectDomainID:   strval(m.ProjectDomainID, "OS_PROJECT_DOMAIN_ID"),
-		ProjectDomainName: strval(m.ProjectDomainName, "OS_PROJECT_DOMAIN_NAME"),
-		Token:             strval(m.Token, "OS_TOKEN", "OS_AUTH_TOKEN"),
-		AppCredID:         strval(m.AppCredID, "OS_APPLICATION_CREDENTIAL_ID"),
-		AppCredName:       strval(m.AppCredName, "OS_APPLICATION_CREDENTIAL_NAME"),
-		AppCredSecret:     strval(m.AppCredSecret, "OS_APPLICATION_CREDENTIAL_SECRET"),
-		Insecure:          boolval(m.Insecure, false, "OS_INSECURE"),
-		CACertFile:        strval(m.CACertFile, "OS_CACERT"),
+		AuthURL:           pick(m.AuthURL, cv.AuthURL, "OS_AUTH_URL"),
+		Region:            pick(m.Region, cv.Region, "OS_REGION_NAME"),
+		Username:          pick(m.UserName, cv.Username, "OS_USERNAME"),
+		UserID:            pick(m.UserID, cv.UserID, "OS_USER_ID"),
+		Password:          pick(m.Password, cv.Password, "OS_PASSWORD"),
+		TenantName:        pick(m.TenantName, cv.TenantName, "OS_PROJECT_NAME", "OS_TENANT_NAME"),
+		TenantID:          pick(m.TenantID, cv.TenantID, "OS_PROJECT_ID", "OS_TENANT_ID"),
+		UserDomainID:      pick(m.UserDomainID, cv.UserDomainID, "OS_USER_DOMAIN_ID"),
+		UserDomainName:    pick(m.UserDomainName, cv.UserDomainName, "OS_USER_DOMAIN_NAME"),
+		ProjectDomainID:   pick(m.ProjectDomainID, cv.ProjectDomainID, "OS_PROJECT_DOMAIN_ID"),
+		ProjectDomainName: pick(m.ProjectDomainName, cv.ProjectDomainName, "OS_PROJECT_DOMAIN_NAME"),
+		Token:             pick(m.Token, cv.Token, "OS_TOKEN", "OS_AUTH_TOKEN"),
+		AppCredID:         pick(m.AppCredID, cv.AppCredID, "OS_APPLICATION_CREDENTIAL_ID"),
+		AppCredName:       pick(m.AppCredName, cv.AppCredName, "OS_APPLICATION_CREDENTIAL_NAME"),
+		AppCredSecret:     pick(m.AppCredSecret, cv.AppCredSecret, "OS_APPLICATION_CREDENTIAL_SECRET"),
+		Insecure:          boolval(m.Insecure, insecureDefault, "OS_INSECURE"),
+		CACertFile:        pick(m.CACertFile, cv.CACertFile, "OS_CACERT"),
 		ClientCertFile:    strval(m.Cert, "OS_CERT"),
 		ClientKeyFile:     strval(m.Key, "OS_KEY"),
 		AllowReauth:       boolval(m.AllowReauth, true),
@@ -221,6 +228,15 @@ func (p *pcdProvider) Configure(ctx context.Context, req provider.ConfigureReque
 	// Share the authenticated config with every resource and data source.
 	resp.DataSourceData = cfg
 	resp.ResourceData = cfg
+}
+
+// pick resolves a value with precedence: explicit config value, then the first
+// non-empty environment variable, then the clouds.yaml fallback.
+func pick(v types.String, fallback string, envVars ...string) string {
+	if s := strval(v, envVars...); s != "" {
+		return s
+	}
+	return fallback
 }
 
 // strval returns the configured value if set, otherwise the first non-empty env var.
