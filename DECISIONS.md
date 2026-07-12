@@ -36,6 +36,7 @@ yet passable on this lab (reason noted). Generated registry docs are not committ
 | Compute | `pcd_compute_volume_attach` | **PENDING** — code-complete; needs a booted instance **and** a Cinder backend (both lab-blocked). Best-effort volume waiter degrades gracefully without Cinder. |
 | Block storage | `pcd_blockstorage_volume` | **PENDING** — no Cinder storage backend on the lab (`storageBackends={}`); volumes go `creating → error`. Create + waiter + error-detection verified. |
 | Block storage (DS) | `pcd_blockstorage_volume`, `_snapshot` | **PENDING** — untestable without volumes on this lab. |
+| Load balancing (Octavia) | `pcd_lb_loadbalancer`, `_listener`, `_pool`, `_member`, `_monitor`, `_l7policy`, `_l7rule` + `_loadbalancer` DS | **PENDING** — Phase 3, code-complete; per-LB wait-for-`ACTIVE` lifecycle, root-LB resolution for every child, echo-only churny fields. Full-tree acc test + examples written. Octavia is live on the lab (Step 0), but LB provisioning needs a working amphora/provider driver; not yet run live (credentials unavailable this session). |
 
 Both PENDING items are lab-side configuration gaps (Platform9 / lab-ops), not provider
 defects; their acceptance tests flip green on a properly-configured PCD cloud.
