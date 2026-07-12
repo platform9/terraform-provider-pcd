@@ -28,6 +28,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -100,7 +101,7 @@ func (r *imageResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 			"hidden":           schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false), MarkdownDescription: "Whether the image is hidden from the default list."},
 			"tags":             schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the image.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
 			"verify_checksum":  schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Verify the uploaded file's md5 against the Glance checksum (local_file_path only)."},
-			"properties":       schema.MapAttribute{Computed: true, ElementType: types.StringType, MarkdownDescription: "Image properties reported by Glance (read-only in this release).", PlanModifiers: []planmodifier.Map{}},
+			"properties":       schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "User-defined key/value image properties (custom Glance metadata). Only keys you set here are managed; Glance system/read-only properties are not tracked.", PlanModifiers: []planmodifier.Map{mapplanmodifier.UseStateForUnknown()}},
 			"checksum":         schema.StringAttribute{Computed: true, MarkdownDescription: "md5 checksum of the image data."},
 			"size_bytes":       schema.Int64Attribute{Computed: true, MarkdownDescription: "Size of the image data in bytes."},
 			"status":           schema.StringAttribute{Computed: true, MarkdownDescription: "Glance status (e.g. active)."},
@@ -169,6 +170,14 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 	if v := plan.Visibility.ValueString(); v != "" {
 		vis := images.ImageVisibility(v)
 		createOpts.Visibility = &vis
+	}
+	if !plan.Properties.IsNull() && !plan.Properties.IsUnknown() {
+		var userProps map[string]string
+		resp.Diagnostics.Append(plan.Properties.ElementsAs(ctx, &userProps, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		createOpts.Properties = userProps
 	}
 
 	img, err := images.Create(ctx, client, createOpts).Extract()
@@ -273,6 +282,30 @@ func (r *imageResource) Update(ctx context.Context, req resource.UpdateRequest, 
 			}
 		}
 		patch = append(patch, images.ReplaceImageTags{NewTags: tags})
+	}
+	if !plan.Properties.Equal(state.Properties) {
+		var planProps, stateProps map[string]string
+		if !plan.Properties.IsNull() && !plan.Properties.IsUnknown() {
+			resp.Diagnostics.Append(plan.Properties.ElementsAs(ctx, &planProps, false)...)
+		}
+		if !state.Properties.IsNull() && !state.Properties.IsUnknown() {
+			resp.Diagnostics.Append(state.Properties.ElementsAs(ctx, &stateProps, false)...)
+		}
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		for k, v := range planProps {
+			if sv, ok := stateProps[k]; !ok {
+				patch = append(patch, images.UpdateImageProperty{Op: images.AddOp, Name: k, Value: v})
+			} else if sv != v {
+				patch = append(patch, images.UpdateImageProperty{Op: images.ReplaceOp, Name: k, Value: v})
+			}
+		}
+		for k := range stateProps {
+			if _, ok := planProps[k]; !ok {
+				patch = append(patch, images.UpdateImageProperty{Op: images.RemoveOp, Name: k})
+			}
+		}
 	}
 
 	if len(patch) > 0 {
@@ -383,9 +416,23 @@ func (r *imageResource) flatten(ctx context.Context, img *images.Image, m *image
 	diags = append(diags, d...)
 	m.Tags = tags
 
-	props := make(map[string]string, len(img.Properties))
+	// Echo-only: Glance returns many system/read-only properties (os_hash_*, stores,
+	// direct_url, owner_specified.*, ...) via RemainingKeys. Track only the keys the
+	// user manages (already present in the model), or every apply would try to
+	// modify read-only props and the plan would never converge.
+	managed := map[string]struct{}{}
+	if !m.Properties.IsNull() && !m.Properties.IsUnknown() {
+		var cur map[string]string
+		diags = append(diags, m.Properties.ElementsAs(ctx, &cur, false)...)
+		for k := range cur {
+			managed[k] = struct{}{}
+		}
+	}
+	props := make(map[string]string, len(managed))
 	for k, v := range img.Properties {
-		props[k] = fmt.Sprintf("%v", v)
+		if _, ok := managed[k]; ok {
+			props[k] = fmt.Sprintf("%v", v)
+		}
 	}
 	propsMap, d := types.MapValueFrom(ctx, types.StringType, props)
 	diags = append(diags, d...)
