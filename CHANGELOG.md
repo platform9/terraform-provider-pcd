@@ -60,6 +60,9 @@ All notable changes to this project are documented here. The format is based on
   root load balancer and waits for its `provisioning_status` to return to `ACTIVE` before
   and after mutating (Octavia serializes changes per load balancer). Code-complete; see
   DECISIONS.md for live-validation status.
+- DNS (Designate v2) — Phase 3: `pcd_dns_zone` and `pcd_dns_recordset` resources plus a
+  `pcd_dns_zone` data source. Zone and recordset create/update/delete are asynchronous,
+  so applies wait for the object to reach `ACTIVE` (and to disappear after delete).
 
 - Registry documentation generation wired via `tfplugindocs` (`make generate`) — renders
   `docs/` for every resource and data source plus the provider index from schema
