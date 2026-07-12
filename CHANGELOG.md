@@ -22,6 +22,9 @@ All notable changes to this project are documented here. The format is based on
 - Acceptance test harness (`internal/acctest`: protocol-6 provider factory + `PreCheck`)
   and the first acceptance test for `pcd_identity_auth_scope` (passes against the CE lab).
 - `test.yml` CI: build, vet, gofmt, unit tests, and `terraform fmt` on examples.
+- Identity (Keystone v3) resources: `pcd_identity_project`, `pcd_identity_role`,
+  `pcd_identity_user`, `pcd_identity_role_assignment`, `pcd_identity_application_credential`.
+- Identity data sources: `pcd_identity_project`, `pcd_identity_user`, `pcd_identity_role`.
 
 ### Known gaps
 - `cloud` (clouds.yaml) is declared but not yet implemented; it errors if set.

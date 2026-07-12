@@ -7,12 +7,14 @@
 package acctest
 
 import (
+	"context"
 	"os"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 
+	"github.com/platform9/terraform-provider-pcd/internal/clients"
 	"github.com/platform9/terraform-provider-pcd/internal/provider"
 )
 
@@ -40,4 +42,35 @@ func PreCheck(t *testing.T) {
 	if len(missing) > 0 {
 		t.Skipf("PCD acceptance tests require a reachable lab; missing env: %v", missing)
 	}
+}
+
+// LabConfig returns an authenticated client built from the OS_* environment, for
+// use in CheckDestroy/CheckExists helpers that query the API out of band.
+func LabConfig(t *testing.T) *clients.Config {
+	t.Helper()
+	cfg := &clients.Config{
+		AuthURL:         os.Getenv("OS_AUTH_URL"),
+		Region:          os.Getenv("OS_REGION_NAME"),
+		Username:        os.Getenv("OS_USERNAME"),
+		Password:        os.Getenv("OS_PASSWORD"),
+		TenantName:      firstEnv("OS_PROJECT_NAME", "OS_TENANT_NAME"),
+		TenantID:        firstEnv("OS_PROJECT_ID", "OS_TENANT_ID"),
+		UserDomainID:    os.Getenv("OS_USER_DOMAIN_ID"),
+		ProjectDomainID: os.Getenv("OS_PROJECT_DOMAIN_ID"),
+		Insecure:        os.Getenv("OS_INSECURE") != "",
+		AllowReauth:     true,
+	}
+	if err := cfg.Authenticate(context.Background()); err != nil {
+		t.Fatalf("acctest: authenticate to lab: %v", err)
+	}
+	return cfg
+}
+
+func firstEnv(keys ...string) string {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+	}
+	return ""
 }

@@ -36,11 +36,20 @@ func (p *pcdProvider) Metadata(_ context.Context, _ provider.MetadataRequest, re
 }
 
 func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
-	return nil
+	return []func() resource.Resource{
+		identity.NewProjectResource,
+		identity.NewRoleResource,
+		identity.NewUserResource,
+		identity.NewRoleAssignmentResource,
+		identity.NewApplicationCredentialResource,
+	}
 }
 
 func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		identity.NewAuthScopeDataSource,
+		identity.NewProjectDataSource,
+		identity.NewUserDataSource,
+		identity.NewRoleDataSource,
 	}
 }
