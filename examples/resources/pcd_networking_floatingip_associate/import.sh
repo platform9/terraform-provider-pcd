@@ -1,0 +1,1 @@
+terraform import pcd_networking_floatingip_associate.example <floating_ip_id>
