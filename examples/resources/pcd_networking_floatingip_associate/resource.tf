@@ -12,9 +12,9 @@ resource "pcd_networking_port" "example" {
   network_id = pcd_networking_network.example.id
   name       = "tf-example-port"
 
-  fixed_ip {
+  fixed_ip = [{
     subnet_id = pcd_networking_subnet.example.id
-  }
+  }]
 }
 
 resource "pcd_networking_floatingip" "example" {
