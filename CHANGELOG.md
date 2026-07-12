@@ -45,6 +45,12 @@ All notable changes to this project are documented here. The format is based on
   `pcd_compute_servergroup` (acceptance-tested); `pcd_compute_instance` (code-complete —
   boot verification is blocked on a lab image-library issue, see DECISIONS.md); data
   sources `pcd_compute_flavor`, `pcd_compute_keypair`, `pcd_compute_availability_zones`.
+- Compute follow-ups: `pcd_compute_flavor` gains settable `extra_specs` (added/changed/
+  removed in place; the flavor's other attributes are now correctly immutable);
+  `pcd_compute_instance` supports in-place **resize** on a flavor change and booting by
+  `image_name` (resolved via Glance, alternative to `image_id`); new resources
+  `pcd_compute_interface_attach` (attach a port/network to a server) and
+  `pcd_compute_volume_attach` (attach a Cinder volume to a server).
 - Block storage (Cinder v3): `pcd_blockstorage_volume` resource (create/extend/import;
   code-complete — acceptance is blocked on the CE lab having no storage backend, see
   DECISIONS.md) and `pcd_blockstorage_volume` / `pcd_blockstorage_snapshot` data sources.

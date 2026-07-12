@@ -6,12 +6,25 @@
 package compute
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
 )
+
+// splitInstanceScopedID parses a composite resource/import ID of the form
+// "<instance_id>/<sub_id>" (used by the attach resources).
+func splitInstanceScopedID(id string) (instanceID, sub string, err error) {
+	parts := strings.SplitN(id, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("expected import ID in the form <instance_id>/<id>, got %q", id)
+	}
+	return parts[0], parts[1], nil
+}
 
 // configureClient extracts the shared *clients.Config from ProviderData.
 func configureClient(providerData any, diags *diag.Diagnostics) *clients.Config {
@@ -27,4 +40,15 @@ func configureClient(providerData any, diags *diag.Diagnostics) *clients.Config 
 		return nil
 	}
 	return config
+}
+
+// extractStringMap converts a Terraform map value to a Go map[string]string,
+// returning nil for a null/unknown map. Conversion diagnostics are appended.
+func extractStringMap(ctx context.Context, m types.Map, diags *diag.Diagnostics) map[string]string {
+	if m.IsNull() || m.IsUnknown() {
+		return nil
+	}
+	out := map[string]string{}
+	diags.Append(m.ElementsAs(ctx, &out, false)...)
+	return out
 }

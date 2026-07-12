@@ -18,6 +18,7 @@ import (
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/flavors"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/keypairs"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
+	"github.com/gophercloud/gophercloud/v2/openstack/image/v2/images"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -50,6 +51,7 @@ type instanceModel struct {
 	ID               types.String `tfsdk:"id"`
 	Name             types.String `tfsdk:"name"`
 	ImageID          types.String `tfsdk:"image_id"`
+	ImageName        types.String `tfsdk:"image_name"`
 	FlavorID         types.String `tfsdk:"flavor_id"`
 	FlavorName       types.String `tfsdk:"flavor_name"`
 	KeyPair          types.String `tfsdk:"key_pair"`
@@ -81,11 +83,15 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a compute instance (server) in PCD's Nova service.",
 		Attributes: map[string]schema.Attribute{
-			"id":          schema.StringAttribute{Computed: true, MarkdownDescription: "The instance ID.", PlanModifiers: stable},
-			"name":        schema.StringAttribute{Required: true, MarkdownDescription: "The name of the instance."},
-			"image_id":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The image to boot from. Changing this forces a new resource.", PlanModifiers: fnC},
-			"flavor_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The flavor ID. Resolved from flavor_name if unset. Changing this forces a new resource.", PlanModifiers: fnC},
-			"flavor_name": schema.StringAttribute{Optional: true, MarkdownDescription: "The flavor name (alternative to flavor_id). Changing this forces a new resource.", PlanModifiers: fn},
+			"id":         schema.StringAttribute{Computed: true, MarkdownDescription: "The instance ID.", PlanModifiers: stable},
+			"name":       schema.StringAttribute{Required: true, MarkdownDescription: "The name of the instance."},
+			"image_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The image ID to boot from (alternative to image_name). Changing this forces a new resource.", PlanModifiers: fnC},
+			"image_name": schema.StringAttribute{Optional: true, MarkdownDescription: "The image name to boot from, resolved via Glance (alternative to image_id). Exactly one of image_id/image_name is required. Changing this forces a new resource.", PlanModifiers: fn},
+			// No UseStateForUnknown: it would pin the stale flavor_id into the plan
+			// when a resize is driven by flavor_name, causing an "inconsistent result"
+			// error. Update always sets the resolved flavor_id explicitly.
+			"flavor_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The flavor ID (alternative to flavor_name). Changing this triggers an in-place resize.", PlanModifiers: []planmodifier.String{}},
+			"flavor_name": schema.StringAttribute{Optional: true, MarkdownDescription: "The flavor name (alternative to flavor_id). Changing this triggers an in-place resize.", PlanModifiers: []planmodifier.String{}},
 			"key_pair":    schema.StringAttribute{Optional: true, MarkdownDescription: "The name of a keypair to inject. Changing this forces a new resource.", PlanModifiers: fn},
 			"security_groups": schema.SetAttribute{
 				Optional: true, Computed: true, ElementType: types.StringType,
@@ -140,6 +146,30 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		}
 	}
 
+	imageNameSet := !plan.ImageName.IsNull() && plan.ImageName.ValueString() != ""
+	imageIDSet := !plan.ImageID.IsNull() && !plan.ImageID.IsUnknown() && plan.ImageID.ValueString() != ""
+	switch {
+	case imageNameSet && imageIDSet:
+		resp.Diagnostics.AddError("Invalid image", "Set only one of image_id or image_name.")
+		return
+	case !imageNameSet && !imageIDSet:
+		resp.Diagnostics.AddError("Invalid image", "Exactly one of image_id or image_name must be set.")
+		return
+	}
+	imageID := plan.ImageID.ValueString()
+	if imageNameSet {
+		imgClient, err := r.config.ImageV2Client()
+		if err != nil {
+			resp.Diagnostics.AddError("compute: building image v2 client", err.Error())
+			return
+		}
+		imageID, err = imageIDFromName(ctx, imgClient, plan.ImageName.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("compute: resolving image", err.Error())
+			return
+		}
+	}
+
 	var sgs []string
 	if !plan.SecurityGroups.IsNull() && !plan.SecurityGroups.IsUnknown() {
 		resp.Diagnostics.Append(plan.SecurityGroups.ElementsAs(ctx, &sgs, false)...)
@@ -155,7 +185,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 
 	baseOpts := servers.CreateOpts{
 		Name:             plan.Name.ValueString(),
-		ImageRef:         plan.ImageID.ValueString(),
+		ImageRef:         imageID,
 		FlavorRef:        flavorID,
 		SecurityGroups:   sgs,
 		Metadata:         meta,
@@ -188,6 +218,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	}
 
 	plan.FlavorID = types.StringValue(flavorID)
+	plan.ImageID = types.StringValue(imageID)
 	resp.Diagnostics.Append(r.flatten(ctx, server, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -255,6 +286,50 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 			return
 		}
 	}
+
+	// Resize on flavor change. Resolve the target flavor from flavor_name when the
+	// user configures a name (flavor_id is Computed and would carry the stale id via
+	// UseStateForUnknown), otherwise from flavor_id.
+	id := plan.ID.ValueString()
+	// Resolve the intended flavor. Prefer flavor_name when configured: flavor_id is
+	// Computed and may be unknown in the plan, so it can't be trusted here.
+	targetFlavorID := plan.FlavorID.ValueString()
+	if name := plan.FlavorName.ValueString(); name != "" {
+		targetFlavorID, err = flavorIDFromName(ctx, client, name)
+		if err != nil {
+			resp.Diagnostics.AddError("compute: resolving flavor", err.Error())
+			return
+		}
+	}
+	if targetFlavorID == "" {
+		targetFlavorID = state.FlavorID.ValueString()
+	}
+	if targetFlavorID != state.FlavorID.ValueString() {
+		if err := servers.Resize(ctx, client, id, servers.ResizeOpts{FlavorRef: targetFlavorID}).ExtractErr(); err != nil {
+			resp.Diagnostics.AddError("compute: resizing instance", err.Error())
+			return
+		}
+		if _, err := waitForServerStatus(ctx, client, id, "VERIFY_RESIZE", 30*time.Minute); err != nil {
+			// Best-effort revert so the instance returns to its original flavor.
+			_ = servers.RevertResize(ctx, client, id).ExtractErr()
+			_, _ = waitForServerActive(ctx, client, id, 30*time.Minute)
+			resp.Diagnostics.AddError("compute: waiting for resize to verify", err.Error())
+			return
+		}
+		if err := servers.ConfirmResize(ctx, client, id).ExtractErr(); err != nil {
+			_ = servers.RevertResize(ctx, client, id).ExtractErr()
+			_, _ = waitForServerActive(ctx, client, id, 30*time.Minute)
+			resp.Diagnostics.AddError("compute: confirming resize", err.Error())
+			return
+		}
+		if _, err := waitForServerActive(ctx, client, id, 30*time.Minute); err != nil {
+			resp.Diagnostics.AddError("compute: waiting for instance active after resize", err.Error())
+			return
+		}
+	}
+	// Always pin the resolved flavor_id (it may be unknown in the plan when driven
+	// by flavor_name), so the applied state matches what Terraform expects.
+	plan.FlavorID = types.StringValue(targetFlavorID)
 
 	server, err := servers.Get(ctx, client, plan.ID.ValueString()).Extract()
 	if err != nil {
@@ -354,6 +429,31 @@ func flavorIDFromName(ctx context.Context, client *gophercloud.ServiceClient, na
 	return "", fmt.Errorf("no flavor named %q", name)
 }
 
+func imageIDFromName(ctx context.Context, client *gophercloud.ServiceClient, name string) (string, error) {
+	pages, err := images.List(client, images.ListOpts{Name: name}).AllPages(ctx)
+	if err != nil {
+		return "", err
+	}
+	all, err := images.ExtractImages(pages)
+	if err != nil {
+		return "", err
+	}
+	var matches []images.Image
+	for _, im := range all {
+		if im.Name == name {
+			matches = append(matches, im)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no image named %q", name)
+	case 1:
+		return matches[0].ID, nil
+	default:
+		return "", fmt.Errorf("%d images named %q; use image_id to disambiguate", len(matches), name)
+	}
+}
+
 // firstIPv4 returns the first IPv4 address across all attached networks.
 func firstIPv4(addresses map[string]any) string {
 	for _, v := range addresses {
@@ -391,6 +491,32 @@ func waitForServerActive(ctx context.Context, client *gophercloud.ServiceClient,
 		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("timed out waiting for instance %s to become active (last status %q)", id, server.Status)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+// waitForServerStatus blocks until the server reaches target status, failing on
+// ERROR or timeout. Used for the VERIFY_RESIZE checkpoint during a resize.
+func waitForServerStatus(ctx context.Context, client *gophercloud.ServiceClient, id, target string, timeout time.Duration) (*servers.Server, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		server, err := servers.Get(ctx, client, id).Extract()
+		if err != nil {
+			return nil, err
+		}
+		switch server.Status {
+		case target:
+			return server, nil
+		case "ERROR":
+			return nil, fmt.Errorf("instance %s entered ERROR state: %v", id, server.Fault.Message)
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timed out waiting for instance %s to reach %s (last status %q)", id, target, server.Status)
 		}
 		select {
 		case <-ctx.Done():
