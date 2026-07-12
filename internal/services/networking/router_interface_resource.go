@@ -171,10 +171,7 @@ func (r *routerInterfaceResource) ImportState(ctx context.Context, req resource.
 func (r *routerInterfaceResource) readInto(ctx context.Context, client *gophercloud.ServiceClient, portID string, m *routerInterfaceModel) (notFound bool) {
 	port, err := ports.Get(ctx, client, portID).Extract()
 	if err != nil {
-		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
-			return true
-		}
-		return false
+		return gophercloud.ResponseCodeIs(err, http.StatusNotFound)
 	}
 
 	m.ID = types.StringValue(port.ID)

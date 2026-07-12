@@ -18,7 +18,6 @@ import (
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/flavors"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/keypairs"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
-	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -37,13 +36,6 @@ var (
 	_ resource.ResourceWithConfigure   = (*instanceResource)(nil)
 	_ resource.ResourceWithImportState = (*instanceResource)(nil)
 )
-
-// networkBlockType is the element type of the network list.
-var networkBlockType = types.ObjectType{AttrTypes: map[string]attr.Type{
-	"uuid": types.StringType,
-	"name": types.StringType,
-	"port": types.StringType,
-}}
 
 // NewInstanceResource is the factory registered with the provider.
 func NewInstanceResource() resource.Resource {

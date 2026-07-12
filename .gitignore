@@ -31,6 +31,12 @@ terraform.rc
 # The CE deployment handoff must never enter the repo
 PCD-CE-Deployment-Handoff.md
 
+# Generated registry docs — produced by `make generate` (tfplugindocs) on demand and
+# at release time; not committed. (docs/compatibility/ is hand-written and kept.)
+/docs/index.md
+/docs/resources/
+/docs/data-sources/
+
 # Editors / OS
 .idea/
 .vscode/

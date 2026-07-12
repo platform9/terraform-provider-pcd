@@ -3,6 +3,32 @@
 Records deviations from the PCD-1070 implementation plan and material findings that
 change scope. The plan's Section 3 decisions remain locked unless noted here.
 
+## Validation status — CE lab 2026.4 (as of 2026-07-12)
+
+**VALIDATED** = acceptance test passed against the live CE lab (create/update/import,
+CheckDestroy). **PENDING** = code-complete and verified up to a lab-side limitation, not
+yet passable on this lab (reason noted). Generated registry docs are not committed; run
+`make generate` (tfplugindocs) to produce them.
+
+| Family | Item | Status |
+|---|---|---|
+| Provider core | password auth + project scope, self-signed TLS (`insecure`), `pcd_identity_auth_scope` | **VALIDATED** |
+| Identity | `pcd_identity_project`, `_role`, `_user`, `_role_assignment`, `_application_credential` | **VALIDATED** |
+| Identity (DS) | `pcd_identity_project`, `_user`, `_role` | **VALIDATED** |
+| Images | `pcd_images_image` (local-file upload); web-download import path also exercised | **VALIDATED** |
+| Images (DS) | `pcd_images_image`, `_image_ids` | **VALIDATED** |
+| Networking | `pcd_networking_network`, `_subnet`, `_secgroup`, `_secgroup_rule`, `_router`, `_router_interface` | **VALIDATED** |
+| Networking (DS) | `pcd_networking_network`, `_subnet`, `_secgroup` | **VALIDATED** |
+| Compute | `pcd_compute_keypair`, `_flavor`, `_servergroup` | **VALIDATED** |
+| Compute (DS) | `pcd_compute_flavor`, `_keypair`, `_availability_zones` | **VALIDATED** |
+| Compute | `pcd_compute_instance` (boot) | **PENDING** — lab image-library gap: images don't reach the onboarded host's local library → nova returns HTTP 204 for image data. Create/schedule/wait/error-report verified; passes with a library-backed image. |
+| Block storage | `pcd_blockstorage_volume` | **PENDING** — no Cinder storage backend on the lab (`storageBackends={}`); volumes go `creating → error`. Create + waiter + error-detection verified. |
+| Block storage (DS) | `pcd_blockstorage_volume`, `_snapshot` | **PENDING** — untestable without volumes on this lab. |
+
+Both PENDING items are lab-side configuration gaps (Platform9 / lab-ops), not provider
+defects; their acceptance tests flip green on a properly-configured PCD cloud.
+
+
 ## 2026-07-11 — blockstorage: no Cinder storage backend on the CE lab
 
 Volume creation on the CE lab goes `creating → error` immediately: the cluster
