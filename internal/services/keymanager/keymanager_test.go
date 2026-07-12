@@ -65,10 +65,10 @@ resource "pcd_keymanager_container" "test" {
   name = "tf-acc-container"
   type = "generic"
 
-  secret_refs {
+  secret_refs = [{
     name       = "passphrase"
     secret_ref = pcd_keymanager_secret.test.secret_ref
-  }
+  }]
 }
 
 data "pcd_keymanager_secret" "by_name" {

@@ -8,8 +8,8 @@ resource "pcd_keymanager_container" "example" {
   name = "tf-example-container"
   type = "generic"
 
-  secret_refs {
+  secret_refs = [{
     name       = "private_key"
     secret_ref = pcd_keymanager_secret.example.secret_ref
-  }
+  }]
 }
