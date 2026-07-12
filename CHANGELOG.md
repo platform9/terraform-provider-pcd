@@ -67,6 +67,10 @@ All notable changes to this project are documented here. The format is based on
   `payload`) and `pcd_keymanager_container` (grouped secrets) resources plus a
   `pcd_keymanager_secret` data source (optionally fetches the payload). Barbican identifies
   objects by URL refs; the resources expose the full ref and use the bare UUID as the ID.
+- Network QoS (Neutron `qos` extension) — Phase 3: `pcd_networking_qos_policy` and its three
+  rule types — `pcd_networking_qos_bandwidth_limit_rule`, `pcd_networking_qos_dscp_marking_rule`,
+  `pcd_networking_qos_minimum_bandwidth_rule` — plus a `pcd_networking_qos_policy` data source.
+  Rules are nested under a policy and imported by a composite `<qos_policy_id>/<rule_id>` ID.
 
 - Registry documentation generation wired via `tfplugindocs` (`make generate`) — renders
   `docs/` for every resource and data source plus the provider index from schema
