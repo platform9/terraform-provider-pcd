@@ -16,7 +16,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -431,7 +430,7 @@ func (r *imageResource) flatten(ctx context.Context, img *images.Image, m *image
 	}
 	props := make(map[string]string, len(managed))
 	for k, v := range img.Properties {
-		if _, ok := managed[k]; ok && !isSystemImageProperty(k) {
+		if _, ok := managed[k]; ok {
 			props[k] = fmt.Sprintf("%v", v)
 		}
 	}
@@ -443,28 +442,6 @@ func (r *imageResource) flatten(ctx context.Context, img *images.Image, m *image
 		m.Region = types.StringValue(r.config.Region)
 	}
 	return diags
-}
-
-// systemImageProperties are Glance-managed keys that surface in Image.Properties
-// but must never be tracked or patched as user metadata. The echo-only filter in
-// flatten already restricts to user-managed keys; this is a second guard in case
-// a user names a key that collides with one of these.
-var systemImageProperties = map[string]struct{}{
-	"os_hash_algo": {}, "os_hash_value": {}, "os_hidden": {},
-	"stores": {}, "store": {}, "direct_url": {}, "locations": {}, "location": {},
-	"self": {}, "schema": {}, "file": {}, "size": {}, "virtual_size": {},
-	"checksum": {}, "container_format": {}, "disk_format": {}, "min_disk": {},
-	"min_ram": {}, "owner": {}, "protected": {}, "visibility": {}, "status": {},
-	"tags": {}, "id": {}, "name": {}, "created_at": {}, "updated_at": {},
-	"metadata": {}, "properties": {},
-}
-
-// isSystemImageProperty reports whether a Glance property key is system/read-only.
-func isSystemImageProperty(key string) bool {
-	if _, ok := systemImageProperties[key]; ok {
-		return true
-	}
-	return strings.HasPrefix(key, "owner_specified.") || strings.HasPrefix(key, "os_glance_")
 }
 
 func waitForImageActive(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*images.Image, error) {
