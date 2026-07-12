@@ -36,6 +36,11 @@ All notable changes to this project are documented here. The format is based on
   `pool` name, associate/disassociate to a port); data sources `pcd_networking_port`,
   `_port_ids`, `_router`, `_subnet_ids`, and `_floatingip`. Ports and floating IPs are
   code-complete with acceptance tests; see DECISIONS.md for live-validation status.
+- Networking route and association resources: `pcd_networking_router_route` and
+  `pcd_networking_subnet_route` (manage a single static/host route without disturbing
+  others, serialized per parent to avoid clobbering); `pcd_networking_port_secgroup_associate`
+  (attach security groups to an unmanaged port, shared or exclusive via `enforce`); and
+  `pcd_networking_floatingip_associate` (bind a pre-allocated floating IP to a port).
 - Compute (Nova v2): resources `pcd_compute_keypair`, `pcd_compute_flavor`,
   `pcd_compute_servergroup` (acceptance-tested); `pcd_compute_instance` (code-complete —
   boot verification is blocked on a lab image-library issue, see DECISIONS.md); data
