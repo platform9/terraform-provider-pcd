@@ -68,7 +68,7 @@ func (r *recordSetResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"zone_id":     schema.StringAttribute{Required: true, MarkdownDescription: "The zone the recordset belongs to. Changing this forces a new resource.", PlanModifiers: forceNew},
 			"name":        schema.StringAttribute{Required: true, MarkdownDescription: "The recordset name — a fully-qualified domain name ending in a dot. Changing this forces a new resource.", PlanModifiers: forceNew},
 			"type":        schema.StringAttribute{Required: true, MarkdownDescription: "The record type (A, AAAA, CNAME, MX, TXT, SRV, ...). Changing this forces a new resource.", PlanModifiers: forceNew},
-			"records":     schema.SetAttribute{Required: true, ElementType: types.StringType, MarkdownDescription: "The record values."},
+			"records":     schema.SetAttribute{Required: true, ElementType: types.StringType, MarkdownDescription: "The record values. Not refreshed from the server after apply; for record types Designate canonicalizes (e.g. TXT values are quoted), write the values as stored to keep imports and reads exact."},
 			"ttl":         schema.Int64Attribute{Optional: true, Computed: true, MarkdownDescription: "The recordset TTL in seconds. Omit to inherit the zone default.", PlanModifiers: []planmodifier.Int64{int64planmodifier.UseStateForUnknown()}},
 			"description": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "A description of the recordset.", PlanModifiers: useState},
 			"status":      schema.StringAttribute{Computed: true, MarkdownDescription: "The recordset status (e.g. ACTIVE).", PlanModifiers: useState},
@@ -248,13 +248,19 @@ func (r *recordSetResource) readInto(ctx context.Context, client *gophercloud.Se
 	m.Description = types.StringValue(rr.Description)
 	m.Status = types.StringValue(rr.Status)
 
-	recVals := rr.Records
-	if recVals == nil {
-		recVals = []string{}
+	// records is echo-only: Designate canonicalizes some record types (e.g. TXT is
+	// rewritten to the RFC-1035 quoted form), which would otherwise fail the apply
+	// consistency check for this Required attribute or churn the plan. Keep the
+	// configured value; populate from the server only on import (no prior value).
+	if m.Records.IsNull() || m.Records.IsUnknown() {
+		recVals := rr.Records
+		if recVals == nil {
+			recVals = []string{}
+		}
+		records, d := types.SetValueFrom(ctx, types.StringType, recVals)
+		diags = append(diags, d...)
+		m.Records = records
 	}
-	records, d := types.SetValueFrom(ctx, types.StringType, recVals)
-	diags = append(diags, d...)
-	m.Records = records
 
 	if m.Region.IsNull() || m.Region.IsUnknown() {
 		m.Region = types.StringValue(r.config.Region)
