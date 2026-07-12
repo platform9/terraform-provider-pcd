@@ -3,6 +3,15 @@
 Records deviations from the PCD-1070 implementation plan and material findings that
 change scope. The plan's Section 3 decisions remain locked unless noted here.
 
+## 2026-07-11 — networking: floating IPs and extras deferred
+
+The CE lab has no external Neutron network, so `pcd_networking_floatingip` (which
+allocates from an external network) cannot be acceptance-tested yet. Floating IPs,
+ports, the associate resources, subnet/router routes, and the remaining data sources
+are deferred to a **networking-extras** follow-up. Core networking (network, subnet,
+secgroup, secgroup_rule, router, router_interface + network/subnet/secgroup data
+sources) ships in PR #5, all acc-green.
+
 ## 2026-07-11 — Gate A met; images `properties` read-only
 
 The user onboarded hypervisor `pcd-iso-test` (the earlier `pcd-ce-jul-hyp` name was a
