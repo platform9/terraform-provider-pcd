@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 
+	"github.com/platform9/terraform-provider-pcd/internal/services/compute"
 	"github.com/platform9/terraform-provider-pcd/internal/services/identity"
 	"github.com/platform9/terraform-provider-pcd/internal/services/images"
 	"github.com/platform9/terraform-provider-pcd/internal/services/networking"
@@ -51,6 +52,10 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		networking.NewSecgroupRuleResource,
 		networking.NewRouterResource,
 		networking.NewRouterInterfaceResource,
+		compute.NewKeypairResource,
+		compute.NewInstanceResource,
+		compute.NewFlavorResource,
+		compute.NewServergroupResource,
 	}
 }
 
@@ -65,5 +70,8 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		networking.NewNetworkDataSource,
 		networking.NewSubnetDataSource,
 		networking.NewSecgroupDataSource,
+		compute.NewFlavorDataSource,
+		compute.NewKeypairDataSource,
+		compute.NewAvailabilityZonesDataSource,
 	}
 }
