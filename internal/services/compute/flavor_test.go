@@ -55,6 +55,73 @@ data "pcd_compute_flavor" "by_name" {
 }
 `
 
+// TestAccComputeFlavor_extraSpecs verifies extra_specs can be added, changed, and
+// removed in place (without replacing the flavor).
+func TestAccComputeFlavor_extraSpecs(t *testing.T) {
+	const rn = "pcd_compute_flavor.test"
+	var flavorID string
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckFlavorDestroy(t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccFlavorExtraSpecsConfig(`extra_specs = { "hw:cpu_policy" = "shared", "hw:numa_nodes" = "1" }`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckFlavorExists(t, rn),
+					testAccCaptureID(rn, &flavorID),
+					resource.TestCheckResourceAttr(rn, "extra_specs.%", "2"),
+					resource.TestCheckResourceAttr(rn, "extra_specs.hw:cpu_policy", "shared"),
+					resource.TestCheckResourceAttr(rn, "extra_specs.hw:numa_nodes", "1"),
+				),
+			},
+			{
+				// Replace cpu_policy, remove numa_nodes, add mem_page_size.
+				Config: testAccFlavorExtraSpecsConfig(`extra_specs = { "hw:cpu_policy" = "dedicated", "hw:mem_page_size" = "large" }`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrWith(rn, "id", func(v string) error {
+						if v != flavorID {
+							return fmt.Errorf("flavor was replaced (%s -> %s); extra_specs should update in place", flavorID, v)
+						}
+						return nil
+					}),
+					resource.TestCheckResourceAttr(rn, "extra_specs.%", "2"),
+					resource.TestCheckResourceAttr(rn, "extra_specs.hw:cpu_policy", "dedicated"),
+					resource.TestCheckResourceAttr(rn, "extra_specs.hw:mem_page_size", "large"),
+					resource.TestCheckNoResourceAttr(rn, "extra_specs.hw:numa_nodes"),
+				),
+			},
+			{ResourceName: rn, ImportState: true, ImportStateVerify: true},
+		},
+	})
+}
+
+func testAccFlavorExtraSpecsConfig(specs string) string {
+	return fmt.Sprintf(`
+resource "pcd_compute_flavor" "test" {
+  name  = "tf-acc-flavor-es"
+  ram   = 256
+  vcpus = 1
+  disk  = 1
+  %s
+}
+`, specs)
+}
+
+// testAccCaptureID records a resource's ID for later comparison (e.g. asserting
+// the resource was not replaced across steps).
+func testAccCaptureID(n string, dst *string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs := s.RootModule().Resources[n]
+		if rs == nil {
+			return fmt.Errorf("not found in state: %s", n)
+		}
+		*dst = rs.Primary.ID
+		return nil
+	}
+}
+
 func testAccCheckFlavorExists(t *testing.T, n string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		rs := s.RootModule().Resources[n]
