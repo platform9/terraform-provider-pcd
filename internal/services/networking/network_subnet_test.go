@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -109,8 +110,10 @@ func testAccCheckNetworkDestroy(t *testing.T) resource.TestCheckFunc {
 		if err != nil {
 			return err
 		}
-		for _, rs := range s.RootModule().Resources {
-			if rs.Type != "pcd_networking_network" {
+		for addr, rs := range s.RootModule().Resources {
+			// Skip data sources (e.g. a data.pcd_networking_network lookup of a
+			// pre-existing external network); only managed networks are destroyed.
+			if strings.HasPrefix(addr, "data.") || rs.Type != "pcd_networking_network" {
 				continue
 			}
 			_, err := networks.Get(context.Background(), client, rs.Primary.ID).Extract()
