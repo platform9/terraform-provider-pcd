@@ -54,6 +54,11 @@ All notable changes to this project are documented here. The format is based on
 - Block storage (Cinder v3): `pcd_blockstorage_volume` resource (create/extend/import;
   code-complete — acceptance is blocked on the CE lab having no storage backend, see
   DECISIONS.md) and `pcd_blockstorage_volume` / `pcd_blockstorage_snapshot` data sources.
+- Block storage gap resources (close api-docs coverage): `pcd_blockstorage_volume_type`
+  (name/description/`is_public`/`extra_specs`, with in-place spec add/change/remove via the
+  extra-specs sub-API — needs no storage backend), `pcd_blockstorage_snapshot` (was
+  data-source-only; now a managed resource with async wait-for-`available`), and
+  `pcd_blockstorage_volume_backup` (backup/restore lifecycle, async waiter).
 - Load balancing (Octavia v2) — Phase 3: `pcd_lb_loadbalancer`, `pcd_lb_listener`,
   `pcd_lb_pool`, `pcd_lb_member`, `pcd_lb_monitor` resources and a `pcd_lb_loadbalancer`
   data source. Every child operation resolves the root load balancer and waits for its
