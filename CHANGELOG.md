@@ -45,9 +45,10 @@ All notable changes to this project are documented here. The format is based on
   (attach security groups to an unmanaged port, shared or exclusive via `enforce`); and
   `pcd_networking_floatingip_associate` (bind a pre-allocated floating IP to a port).
 - Compute (Nova v2): resources `pcd_compute_keypair`, `pcd_compute_flavor`,
-  `pcd_compute_servergroup` (acceptance-tested); `pcd_compute_instance` (code-complete —
-  boot verification is blocked on a lab image-library issue, see DECISIONS.md); data
+  `pcd_compute_servergroup`, `pcd_compute_instance` (boot, in-place resize, import); data
   sources `pcd_compute_flavor`, `pcd_compute_keypair`, `pcd_compute_availability_zones`.
+  The instance resource reads back all server-computed fields (availability zone,
+  security groups, network) after apply, and only pushes metadata when the user manages it.
 - Compute follow-ups: `pcd_compute_flavor` gains settable `extra_specs` (added/changed/
   removed in place; the flavor's other attributes are now correctly immutable);
   `pcd_compute_instance` supports in-place **resize** on a flavor change and booting by
