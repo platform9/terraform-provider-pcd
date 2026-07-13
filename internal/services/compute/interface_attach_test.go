@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"testing"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -21,10 +20,7 @@ import (
 // TestAccComputeInterfaceAttach_basic boots an instance and attaches a second
 // network interface to it by network_id. Requires a bootable instance.
 func TestAccComputeInterfaceAttach_basic(t *testing.T) {
-	imageURL := os.Getenv("PCD_ACC_IMAGE_URL")
-	if imageURL == "" {
-		imageURL = defaultTestImageURL
-	}
+	imageName := testAccBootImageName(t)
 	const rn = "pcd_compute_interface_attach.test"
 
 	resource.Test(t, resource.TestCase{
@@ -33,7 +29,7 @@ func TestAccComputeInterfaceAttach_basic(t *testing.T) {
 		CheckDestroy:             testAccCheckInterfaceAttachDestroy(t),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccInterfaceAttachConfig(imageURL),
+				Config: testAccInterfaceAttachConfig(imageName),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttrSet(rn, "port_id"),
 					resource.TestCheckResourceAttrSet(rn, "mac"),
@@ -57,8 +53,12 @@ func TestAccComputeInterfaceAttach_basic(t *testing.T) {
 	})
 }
 
-func testAccInterfaceAttachConfig(imageURL string) string {
+func testAccInterfaceAttachConfig(imageName string) string {
 	return fmt.Sprintf(`
+data "pcd_images_image" "boot" {
+  name = %q
+}
+
 resource "pcd_networking_network" "boot" {
   name = "tf-acc-ia-boot-net"
 }
@@ -77,16 +77,9 @@ resource "pcd_networking_subnet" "attach" {
   cidr       = "10.115.0.0/24"
 }
 
-resource "pcd_images_image" "test" {
-  name             = "tf-acc-ia-img"
-  container_format = "bare"
-  disk_format      = "qcow2"
-  image_source_url = %q
-}
-
 resource "pcd_compute_instance" "test" {
   name        = "tf-acc-ia-instance"
-  image_id    = pcd_images_image.test.id
+  image_id    = data.pcd_images_image.boot.id
   flavor_name = "m1.tiny"
 
   network {
@@ -102,7 +95,7 @@ resource "pcd_compute_interface_attach" "test" {
 
   depends_on = [pcd_networking_subnet.attach]
 }
-`, imageURL)
+`, imageName)
 }
 
 func testAccCheckInterfaceAttachDestroy(t *testing.T) resource.TestCheckFunc {
