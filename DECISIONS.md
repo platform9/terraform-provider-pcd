@@ -36,16 +36,39 @@ yet passable on this lab (reason noted). Generated registry docs are not committ
 | Compute | `pcd_compute_volume_attach` | **PENDING** — code-complete; needs a booted instance **and** a Cinder backend (both lab-blocked). Best-effort volume waiter degrades gracefully without Cinder. |
 | Block storage | `pcd_blockstorage_volume` | **PENDING** — no Cinder storage backend on the lab (`storageBackends={}`); volumes go `creating → error`. Create + waiter + error-detection verified. |
 | Block storage (DS) | `pcd_blockstorage_volume`, `_snapshot` | **PENDING** — untestable without volumes on this lab. |
-| Load balancing (Octavia) | `pcd_lb_loadbalancer`, `_listener`, `_pool`, `_member`, `_monitor`, `_l7policy`, `_l7rule` + `_loadbalancer` DS | **PENDING** — Phase 3, code-complete; per-LB wait-for-`ACTIVE` lifecycle, root-LB resolution for every child, echo-only churny fields. Full-tree acc test + examples written. Octavia is live on the lab (Step 0), but LB provisioning needs a working amphora/provider driver; not yet run live (credentials unavailable this session). |
+| Load balancing (Octavia) | `pcd_lb_loadbalancer`, `_listener`, `_pool`, `_member`, `_monitor` + `_loadbalancer` DS | **PENDING** — Phase 3, code-complete; per-LB wait-for-`ACTIVE` lifecycle, root-LB resolution for every child, echo-only churny fields. Full-tree acc test + examples written. **PCD ships the OVN provider only** (verified on the CE lab: `providers=[ovn]`, no amphora), which is L4 — use TCP/UDP/SCTP listeners and OVN-supported pool algorithms; L7 policy/rule resources were removed (see the 2026-07-12 backout entry). LB provisioning needs a subnet (blocked by the lab's missing tenant-network pool), so not yet run live. |
 | DNS (Designate) | `pcd_dns_zone`, `pcd_dns_recordset` + `pcd_dns_zone` DS | **PENDING** — Phase 3, code-complete; async create/update/delete → wait-for-`ACTIVE`/404. Acc test (zone + recordset + import) + examples written. Designate is live on the lab (Step 0) and DNS needs no compute/storage backend, so this should pass live — not yet run this session (credentials unavailable). |
 | Key management (Barbican) | `pcd_keymanager_secret`, `pcd_keymanager_container` + `pcd_keymanager_secret` DS | **PENDING** — Phase 3, code-complete; write-only echo-only `payload`, URL-ref→UUID id handling, wait-for-`ACTIVE` only on create-with-payload. Acc test (secret + container + data source + import) + examples written. Barbican is live on the lab (Step 0) and needs no compute/storage backend, so this should pass live — not yet run this session (credentials unavailable). |
 | Network QoS (Neutron) | `pcd_networking_qos_policy`, `_qos_bandwidth_limit_rule`, `_qos_dscp_marking_rule`, `_qos_minimum_bandwidth_rule` + `_qos_policy` DS | **PENDING** — Phase 3, code-complete; rules nested under a policy with composite `<policy_id>/<rule_id>` import, tags via the attributes-tags extension (`qos/policies` type), `ForceNew` on `qos_policy_id`. Full-tree acc test (policy + all three rules + data source + import) + examples written. Depends only on the Neutron `qos` extension (no compute/storage backend), so this should pass live — not yet run this session (credentials unavailable). |
-| VPNaaS (Neutron) | `pcd_vpnaas_service`, `pcd_vpnaas_ike_policy`, `pcd_vpnaas_ipsec_policy`, `pcd_vpnaas_endpoint_group`, `pcd_vpnaas_site_connection` | **PENDING** — Phase 3, code-complete; new `internal/services/vpnaas` package reusing `NetworkV2Client` (VPNaaS is a Neutron extension). Service + site connection wait for 404 after delete (async teardown); policies/endpoint groups delete synchronously. Nested `lifetime` (IKE/IPsec) and `dpd` (connection) as `SingleNestedAttribute` (Optional+Computed, whole-object + per-field `UseStateForUnknown`); `psk` sensitive. Full-tree acc test (service + policies + endpoint groups + connection + rename + import) + examples written. Needs the Neutron `vpnaas` extension enabled on the lab; not yet run this session (credentials unavailable). **Deferrals:** `value_specs` escape hatch (not in the PCD port), nova/neutron-only fields upstream omits. Avoided two upstream bugs: the `phase_1_negotiation_mode` update-key typo and the `peer_cidrs []string` cast panic. |
 | Project quotas | `pcd_compute_quotaset` (Nova), `pcd_networking_quota` (Neutron), `pcd_blockstorage_quotaset` (Cinder) | **PENDING** — Phase 3, code-complete; every quota field `Optional+Computed` with `UseStateForUnknown` (partial management — only user-set/changed fields are PUT via `*int` omitempty; server echoes the rest). No create API (Create = Update+read). **Delete is a deliberate no-op** (matches upstream `RemoveFromState`: destroying stops management without resetting quotas). Composite `<project_id>/<region>` id with legacy bare-`project_id` import tolerance; `project_id`/`region` are `ForceNew`. Per-service acc test (create project → set quotas → verify via API → update → import) + examples written. Needs live validation on the fresh CE lab (credentials unavailable this session). **Scope note:** matches upstream field-for-field except two deliberate deferrals — see the Deferred section. |
 
 Both PENDING items are lab-side configuration gaps (Platform9 / lab-ops), not provider
 defects; their acceptance tests flip green on a properly-configured PCD cloud.
 
+
+## 2026-07-12 — backed out code PCD does not ship (VPNaaS, Octavia L7)
+
+Live inspection of the CE lab's service catalog (all 14 services + the Octavia provider
+list) confirmed which of the built resources correspond to features PCD actually ships.
+Two were removed so the first-party provider only exposes what works on PCD:
+
+- **VPNaaS — entire family removed** (`internal/services/vpnaas`, 5 resources, examples,
+  the `vpnaas`→"VPN" doc subcategory, and the registrations). The Neutron `vpnaas`
+  extension is *advertised* in the API, but PCD does not productize/support VPNaaS, so a
+  supported PCD provider should not expose it. Re-add if PCD ships it later — the code is
+  in git history.
+- **Octavia L7 — `pcd_lb_l7policy` and `pcd_lb_l7rule` removed.** PCD ships only the
+  **OVN** Octavia provider (verified: `GET /octavia/v2/lbaas/providers` → `[ovn]`; the
+  `amphora` provider returns HTTP 400). OVN is a pure L4 load balancer with no HTTP
+  awareness, so L7 policies/rules can never function on PCD. The remaining five LB
+  resources (`loadbalancer`/`listener`/`pool`/`member`/`monitor`) work on OVN with L4
+  constraints (TCP/UDP/SCTP protocols, OVN pool algorithms, L4 health monitors), which is
+  a usage note, not a reason to remove them. `rootLBIDFromL7Policy` and the `l7policies`
+  import were removed from `loadbalancer.go`; `splitParentChildID` stays (the member
+  resource still uses it).
+
+Everything else in the catalog maps to a live, shipped service (identity, image, network,
+compute, volumev3, dns, key-manager, load-balancer), so nothing else was overbuilt.
 
 ## 2026-07-12 — quotas: scope and deferrals
 
@@ -125,8 +148,9 @@ Full evidence: [`docs/compatibility/ce-2026.4.md`](docs/compatibility/ce-2026.4.
 - **Segments not enabled.** No `segment`/`network-segment-range` extension present. Plan
   §8.2 marked `networking_segment` *parity* — reclassed to **conditional**, pending
   re-probe on other PCD deployments.
-- **VPNaaS is enabled** (`vpnaas`, `vpn-endpoint-groups`, `vpn-flavors`, …). Plan §8.3
-  guessed "likely disabled." VPNaaS family is **shippable** (Phase 3).
+- **VPNaaS extension is advertised** (`vpnaas`, `vpn-endpoint-groups`, `vpn-flavors`, …),
+  but PCD does not productize/support VPNaaS. The family was built in Phase 3 and then
+  **backed out** (see the 2026-07-12 backout entry) — advertised-but-unsupported ≠ shippable.
 - **Address groups, trunk, floating-IP port forwarding present** → the corresponding
   `[EXT]` conditional resources (§8.2/§8.3) are **confirmed shippable**.
 - **FWaaS / BGPVPN / TaaS absent** → **NA confirmed** (matches plan's expectation).

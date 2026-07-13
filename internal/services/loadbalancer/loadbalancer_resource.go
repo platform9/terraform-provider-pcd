@@ -68,7 +68,9 @@ func (r *loadBalancerResource) Schema(_ context.Context, _ resource.SchemaReques
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages an Octavia load balancer in PCD. Exactly one of `vip_subnet_id` or " +
 			"`vip_network_id` must be set. Octavia serializes changes per load balancer, so applies wait for the " +
-			"load balancer to return to an `ACTIVE` provisioning status.",
+			"load balancer to return to an `ACTIVE` provisioning status. PCD uses the OVN provider, which is " +
+			"Layer 4 (TCP/UDP/SCTP): use L4 listener protocols and OVN-supported pool algorithms; HTTP/L7 features " +
+			"are not available.",
 		Attributes: map[string]schema.Attribute{
 			"id":                  schema.StringAttribute{Computed: true, MarkdownDescription: "The load balancer ID.", PlanModifiers: useState},
 			"name":                schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The name of the load balancer.", PlanModifiers: useState},
