@@ -1,0 +1,1 @@
+terraform import pcd_blockstorage_volume_type.example <volume_type_id>
