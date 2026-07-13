@@ -1,1 +1,0 @@
-terraform import pcd_vpnaas_site_connection.example <site_connection_id>

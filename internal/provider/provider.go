@@ -18,7 +18,6 @@ import (
 	"github.com/platform9/terraform-provider-pcd/internal/services/keymanager"
 	"github.com/platform9/terraform-provider-pcd/internal/services/loadbalancer"
 	"github.com/platform9/terraform-provider-pcd/internal/services/networking"
-	"github.com/platform9/terraform-provider-pcd/internal/services/vpnaas"
 )
 
 // Ensure pcdProvider satisfies the provider.Provider interface.
@@ -82,17 +81,10 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		loadbalancer.NewPoolResource,
 		loadbalancer.NewMemberResource,
 		loadbalancer.NewMonitorResource,
-		loadbalancer.NewL7PolicyResource,
-		loadbalancer.NewL7RuleResource,
 		dns.NewZoneResource,
 		dns.NewRecordSetResource,
 		keymanager.NewSecretResource,
 		keymanager.NewContainerResource,
-		vpnaas.NewServiceResource,
-		vpnaas.NewIKEPolicyResource,
-		vpnaas.NewIPSecPolicyResource,
-		vpnaas.NewEndpointGroupResource,
-		vpnaas.NewSiteConnectionResource,
 	}
 }
 

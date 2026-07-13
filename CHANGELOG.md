@@ -55,11 +55,12 @@ All notable changes to this project are documented here. The format is based on
   code-complete — acceptance is blocked on the CE lab having no storage backend, see
   DECISIONS.md) and `pcd_blockstorage_volume` / `pcd_blockstorage_snapshot` data sources.
 - Load balancing (Octavia v2) — Phase 3: `pcd_lb_loadbalancer`, `pcd_lb_listener`,
-  `pcd_lb_pool`, `pcd_lb_member`, `pcd_lb_monitor`, `pcd_lb_l7policy`, `pcd_lb_l7rule`
-  resources and a `pcd_lb_loadbalancer` data source. Every child operation resolves the
-  root load balancer and waits for its `provisioning_status` to return to `ACTIVE` before
-  and after mutating (Octavia serializes changes per load balancer). Code-complete; see
-  DECISIONS.md for live-validation status.
+  `pcd_lb_pool`, `pcd_lb_member`, `pcd_lb_monitor` resources and a `pcd_lb_loadbalancer`
+  data source. Every child operation resolves the root load balancer and waits for its
+  `provisioning_status` to return to `ACTIVE` before and after mutating (Octavia serializes
+  changes per load balancer). PCD ships the **OVN** provider only, which is L4
+  (TCP/UDP/SCTP); use L4 listener protocols and OVN-supported pool algorithms. L7
+  policy/rule resources are omitted because the OVN provider does not support L7.
 - DNS (Designate v2) — Phase 3: `pcd_dns_zone` and `pcd_dns_recordset` resources plus a
   `pcd_dns_zone` data source. Zone and recordset create/update/delete are asynchronous,
   so applies wait for the object to reach `ACTIVE` (and to disappear after delete).
@@ -77,13 +78,6 @@ All notable changes to this project are documented here. The format is based on
   resource stops managing the quotas without resetting them to defaults (matching the upstream
   provider). Imported by a composite `<project_id>/<region>` ID (legacy bare `<project_id>` is
   also accepted). Cinder per-volume-type quotas (`volume_type_quota`) are not yet implemented.
-- VPNaaS (Neutron VPN extension) — Phase 3: `pcd_vpnaas_service`, `pcd_vpnaas_ike_policy`,
-  `pcd_vpnaas_ipsec_policy`, `pcd_vpnaas_endpoint_group`, and `pcd_vpnaas_site_connection`. Build a
-  site-to-site IPsec VPN: attach a service to a router, pair IKE/IPsec policies (with a nested
-  `lifetime` block) and local/peer endpoint groups, and connect with a site connection (nested
-  `dpd` block, sensitive `psk`). The service and site connection wait for the object to disappear
-  after delete (asynchronous teardown) so dependent routers/subnets can be destroyed in the same
-  apply. The provider-specific `value_specs` escape hatch is not implemented.
 
 - Registry documentation generation wired via `tfplugindocs` (`make generate`) — renders
   `docs/` for every resource and data source plus the provider index from schema
