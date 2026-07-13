@@ -25,6 +25,9 @@ All notable changes to this project are documented here. The format is based on
 - Identity (Keystone v3) resources: `pcd_identity_project`, `pcd_identity_role`,
   `pcd_identity_user`, `pcd_identity_role_assignment`, `pcd_identity_application_credential`.
 - Identity data sources: `pcd_identity_project`, `pcd_identity_user`, `pcd_identity_role`.
+- Identity groups (close api-docs coverage): `pcd_identity_group` resource + data source, and
+  `pcd_identity_group_membership` (one user↔group pair per resource, mapping to
+  `PUT/DELETE /groups/{id}/users/{user_id}`).
 - Images (Glance v2): `pcd_images_image` resource (local-file upload + web-download import,
   status waiter, checksum verify, unprotect-before-delete, settable custom `properties`
   metadata) and `pcd_images_image` / `pcd_images_image_ids` data sources.
