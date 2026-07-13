@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
-	"github.com/gophercloud/gophercloud/v2/openstack/loadbalancer/v2/l7policies"
 	"github.com/gophercloud/gophercloud/v2/openstack/loadbalancer/v2/listeners"
 	"github.com/gophercloud/gophercloud/v2/openstack/loadbalancer/v2/loadbalancers"
 	"github.com/gophercloud/gophercloud/v2/openstack/loadbalancer/v2/pools"
@@ -69,7 +68,7 @@ func mapToStrings(ctx context.Context, m types.Map, diags *diag.Diagnostics) map
 }
 
 // splitParentChildID parses a composite "<parent_id>/<child_id>" import ID used
-// by the nested resources (member = pool/member, l7rule = policy/rule).
+// by the nested resources (member = pool/member).
 func splitParentChildID(id string) (parent, child string, err error) {
 	parts := strings.SplitN(id, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -180,17 +179,4 @@ func rootLBIDFromPool(ctx context.Context, client *gophercloud.ServiceClient, po
 		return rootLBIDFromListener(ctx, client, p.Listeners[0].ID)
 	}
 	return "", fmt.Errorf("pool %s is not attached to a load balancer or listener", poolID)
-}
-
-// rootLBIDFromL7Policy resolves the load balancer an L7 policy belongs to via its
-// listener.
-func rootLBIDFromL7Policy(ctx context.Context, client *gophercloud.ServiceClient, policyID string) (string, error) {
-	p, err := l7policies.Get(ctx, client, policyID).Extract()
-	if err != nil {
-		return "", err
-	}
-	if p.ListenerID == "" {
-		return "", fmt.Errorf("l7 policy %s is not attached to a listener", policyID)
-	}
-	return rootLBIDFromListener(ctx, client, p.ListenerID)
 }
