@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/subnets"
@@ -263,11 +264,28 @@ func (r *subnetResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		return
 	}
 
-	if err := subnets.Delete(ctx, client, state.ID.ValueString()).ExtractErr(); err != nil {
-		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+	// A subnet can briefly report SubnetInUse (409) while Nova asynchronously
+	// releases the ports of a just-deleted instance. Retry until the ports are
+	// gone (or the subnet is), bounded by a timeout.
+	id := state.ID.ValueString()
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	for {
+		err := subnets.Delete(waitCtx, client, id).ExtractErr()
+		if err == nil || gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			return
 		}
-		resp.Diagnostics.AddError("networking: deleting subnet", err.Error())
+		if !gophercloud.ResponseCodeIs(err, http.StatusConflict) {
+			resp.Diagnostics.AddError("networking: deleting subnet", err.Error())
+			return
+		}
+		select {
+		case <-waitCtx.Done():
+			resp.Diagnostics.AddError("networking: deleting subnet",
+				fmt.Sprintf("subnet %s still in use (ports not yet released): %v", id, err))
+			return
+		case <-time.After(3 * time.Second):
+		}
 	}
 }
 

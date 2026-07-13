@@ -18,18 +18,24 @@ import (
 	"github.com/platform9/terraform-provider-pcd/internal/acctest"
 )
 
-// defaultTestImageURL is a small bootable qcow2 (CirrOS) fetched by Glance via
-// web-download, which bypasses the ingress upload-size cap. Override with
-// PCD_ACC_IMAGE_URL.
-const defaultTestImageURL = "https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img"
+// testAccBootImageName returns the name of a pre-synced bootable image to boot
+// VMs from, taken from PCD_ACC_IMAGE_NAME. PCD's image library does not propagate
+// web-download (copy-from) images to the hypervisor's local Glance, so the VM
+// boot tests require an image already uploaded to the library (e.g. a CirrOS
+// image). The test skips when the variable is unset.
+func testAccBootImageName(t *testing.T) string {
+	t.Helper()
+	name := os.Getenv("PCD_ACC_IMAGE_NAME")
+	if name == "" {
+		t.Skip("PCD_ACC_IMAGE_NAME not set; skipping VM-boot test (needs a bootable image already in the image library)")
+	}
+	return name
+}
 
 // TestAccComputeInstance_basic boots a real VM through Terraform end to end:
 // network + subnet + Glance image (web-download) + keypair + instance on m1.tiny.
 func TestAccComputeInstance_basic(t *testing.T) {
-	imageURL := os.Getenv("PCD_ACC_IMAGE_URL")
-	if imageURL == "" {
-		imageURL = defaultTestImageURL
-	}
+	imageName := testAccBootImageName(t)
 	const rn = "pcd_compute_instance.test"
 	var instanceID, flavorID string
 
@@ -39,7 +45,7 @@ func TestAccComputeInstance_basic(t *testing.T) {
 		CheckDestroy:             testAccCheckInstanceDestroy(t),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccInstanceConfig(imageURL, "tf-acc-instance", "m1.tiny"),
+				Config: testAccInstanceConfig(imageName, "tf-acc-instance", "m1.tiny"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckInstanceExists(t, rn),
 					testAccCaptureID(rn, &instanceID),
@@ -51,12 +57,12 @@ func TestAccComputeInstance_basic(t *testing.T) {
 				),
 			},
 			{
-				Config: testAccInstanceConfig(imageURL, "tf-acc-instance-renamed", "m1.tiny"),
+				Config: testAccInstanceConfig(imageName, "tf-acc-instance-renamed", "m1.tiny"),
 				Check:  resource.TestCheckResourceAttr(rn, "name", "tf-acc-instance-renamed"),
 			},
 			{
 				// Resize: change flavor in place (same instance ID, new flavor_id).
-				Config: testAccInstanceConfig(imageURL, "tf-acc-instance-renamed", "m1.small"),
+				Config: testAccInstanceConfig(imageName, "tf-acc-instance-renamed", "m1.small"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttrWith(rn, "id", func(v string) error {
 						if v != instanceID {
@@ -79,10 +85,7 @@ func TestAccComputeInstance_basic(t *testing.T) {
 // TestAccComputeInstance_imageName boots an instance referencing its image by
 // name (resolved via Glance) instead of image_id.
 func TestAccComputeInstance_imageName(t *testing.T) {
-	imageURL := os.Getenv("PCD_ACC_IMAGE_URL")
-	if imageURL == "" {
-		imageURL = defaultTestImageURL
-	}
+	imageName := testAccBootImageName(t)
 	const rn = "pcd_compute_instance.test"
 
 	resource.Test(t, resource.TestCase{
@@ -91,20 +94,24 @@ func TestAccComputeInstance_imageName(t *testing.T) {
 		CheckDestroy:             testAccCheckInstanceDestroy(t),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccInstanceImageNameConfig(imageURL),
+				Config: testAccInstanceImageNameConfig(imageName),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckInstanceExists(t, rn),
 					resource.TestCheckResourceAttr(rn, "status", "ACTIVE"),
 					// image_id is Computed and gets populated from the resolved image_name.
-					resource.TestCheckResourceAttrPair(rn, "image_id", "pcd_images_image.test", "id"),
+					resource.TestCheckResourceAttrPair(rn, "image_id", "data.pcd_images_image.boot", "id"),
 				),
 			},
 		},
 	})
 }
 
-func testAccInstanceConfig(imageURL, name, flavorName string) string {
+func testAccInstanceConfig(imageName, name, flavorName string) string {
 	return fmt.Sprintf(`
+data "pcd_images_image" "boot" {
+  name = %q
+}
+
 resource "pcd_networking_network" "test" {
   name = "tf-acc-inst-net"
 }
@@ -114,20 +121,13 @@ resource "pcd_networking_subnet" "test" {
   cidr       = "10.103.0.0/24"
 }
 
-resource "pcd_images_image" "test" {
-  name             = "tf-acc-inst-img"
-  container_format = "bare"
-  disk_format      = "qcow2"
-  image_source_url = %q
-}
-
 resource "pcd_compute_keypair" "test" {
   name = "tf-acc-inst-key"
 }
 
 resource "pcd_compute_instance" "test" {
   name        = %q
-  image_id    = pcd_images_image.test.id
+  image_id    = data.pcd_images_image.boot.id
   flavor_name = %q
   key_pair    = pcd_compute_keypair.test.name
 
@@ -137,11 +137,15 @@ resource "pcd_compute_instance" "test" {
 
   depends_on = [pcd_networking_subnet.test]
 }
-`, imageURL, name, flavorName)
+`, imageName, name, flavorName)
 }
 
-func testAccInstanceImageNameConfig(imageURL string) string {
+func testAccInstanceImageNameConfig(imageName string) string {
 	return fmt.Sprintf(`
+data "pcd_images_image" "boot" {
+  name = %[1]q
+}
+
 resource "pcd_networking_network" "test" {
   name = "tf-acc-instn-net"
 }
@@ -151,16 +155,9 @@ resource "pcd_networking_subnet" "test" {
   cidr       = "10.113.0.0/24"
 }
 
-resource "pcd_images_image" "test" {
-  name             = "tf-acc-instn-img"
-  container_format = "bare"
-  disk_format      = "qcow2"
-  image_source_url = %q
-}
-
 resource "pcd_compute_instance" "test" {
   name        = "tf-acc-instn"
-  image_name  = pcd_images_image.test.name
+  image_name  = %[1]q
   flavor_name = "m1.tiny"
 
   network {
@@ -169,7 +166,7 @@ resource "pcd_compute_instance" "test" {
 
   depends_on = [pcd_networking_subnet.test]
 }
-`, imageURL)
+`, imageName)
 }
 
 // testAccCaptureAttr records a resource attribute value for later comparison.
