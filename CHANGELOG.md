@@ -61,6 +61,8 @@ All notable changes to this project are documented here. The format is based on
   changes per load balancer). PCD ships the **OVN** provider only, which is L4
   (TCP/UDP/SCTP); use L4 listener protocols and OVN-supported pool algorithms. L7
   policy/rule resources are omitted because the OVN provider does not support L7.
+  `pcd_lb_loadbalancer` exposes `loadbalancer_provider` (defaults to `ovn`) — required
+  because Octavia's server-side default provider is `amphora`, which PCD does not enable.
 - DNS (Designate v2) — Phase 3: `pcd_dns_zone` and `pcd_dns_recordset` resources plus a
   `pcd_dns_zone` data source. Zone and recordset create/update/delete are asynchronous,
   so applies wait for the object to reach `ACTIVE` (and to disappear after delete).

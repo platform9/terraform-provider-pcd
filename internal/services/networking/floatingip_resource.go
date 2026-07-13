@@ -32,6 +32,7 @@ var (
 	_ resource.Resource                = (*floatingIPResource)(nil)
 	_ resource.ResourceWithConfigure   = (*floatingIPResource)(nil)
 	_ resource.ResourceWithImportState = (*floatingIPResource)(nil)
+	_ resource.ResourceWithModifyPlan  = (*floatingIPResource)(nil)
 )
 
 // NewFloatingIPResource is the factory registered with the provider.
@@ -74,13 +75,18 @@ func (r *floatingIPResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"floating_network_id": schema.StringAttribute{Computed: true, MarkdownDescription: "The ID of the external network `pool` resolved to.", PlanModifiers: useState},
 			"description":         schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "A description of the floating IP.", PlanModifiers: useState},
 			"address":             schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The floating IP address. Request a specific address by setting this; changing it forces a new resource.", PlanModifiers: forceNewStr},
-			"port_id":             schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The port to associate the floating IP with. Set to associate, remove to disassociate.", PlanModifiers: useState},
-			"fixed_ip":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The specific fixed IP on the associated port to map to. Defaults to the port's first address.", PlanModifiers: useState},
-			"tenant_id":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The owning project. Changing this forces a new resource.", PlanModifiers: forceNewStr},
-			"status":              schema.StringAttribute{Computed: true, MarkdownDescription: "The operational status of the floating IP."},
-			"router_id":           schema.StringAttribute{Computed: true, MarkdownDescription: "The router through which the floating IP is routed."},
-			"tags":                schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the floating IP.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
-			"region":              schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			// Set port_id to a port to associate, or to "" to disassociate. Leave
+			// it unset to let a separate pcd_networking_floatingip_associate
+			// resource manage the association (UseStateForUnknown keeps the
+			// server-managed value stable in that case). ModifyPlan marks the
+			// server-derived fields unknown when the association actually changes.
+			"port_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The port to associate the floating IP with. Set to a port ID to associate, or to an empty string to disassociate. Leave unset to manage the association with a separate `pcd_networking_floatingip_associate` resource.", PlanModifiers: useState},
+			"fixed_ip":  schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The specific fixed IP on the associated port to map to. Defaults to the port's first address.", PlanModifiers: useState},
+			"tenant_id": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The owning project. Changing this forces a new resource.", PlanModifiers: forceNewStr},
+			"status":    schema.StringAttribute{Computed: true, MarkdownDescription: "The operational status of the floating IP."},
+			"router_id": schema.StringAttribute{Computed: true, MarkdownDescription: "The router through which the floating IP is routed."},
+			"tags":      schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the floating IP.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
+			"region":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
 		},
 	}
 }
@@ -165,6 +171,40 @@ func (r *floatingIPResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// ModifyPlan keeps the server-derived fields consistent when the association
+// changes. When the user manages port_id inline (sets it to a port or to "") and
+// that value differs from state, the server recomputes fixed_ip, router_id, and
+// status — so they must be planned unknown, or Terraform reports an inconsistent
+// result. When port_id is left unset (config null), the association is managed
+// elsewhere (e.g. pcd_networking_floatingip_associate); UseStateForUnknown keeps
+// the values stable and we make no changes.
+func (r *floatingIPResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() {
+		return // destroy
+	}
+	var config floatingIPModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() || config.PortID.IsNull() {
+		return
+	}
+
+	changing := true
+	if !req.State.Raw.IsNull() {
+		var state floatingIPModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		changing = state.PortID.ValueString() != config.PortID.ValueString()
+	}
+	if !changing {
+		return
+	}
+
+	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("router_id"), types.StringUnknown())...)
+	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("status"), types.StringUnknown())...)
+	if config.FixedIP.IsNull() {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("fixed_ip"), types.StringUnknown())...)
+	}
 }
 
 func (r *floatingIPResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {

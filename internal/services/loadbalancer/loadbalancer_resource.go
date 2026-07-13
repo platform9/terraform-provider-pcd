@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
@@ -52,6 +53,7 @@ type loadBalancerModel struct {
 	VipAddress         types.String `tfsdk:"vip_address"`
 	VipPortID          types.String `tfsdk:"vip_port_id"`
 	FlavorID           types.String `tfsdk:"flavor_id"`
+	Provider           types.String `tfsdk:"loadbalancer_provider"`
 	Tags               types.Set    `tfsdk:"tags"`
 	ProvisioningStatus types.String `tfsdk:"provisioning_status"`
 	OperatingStatus    types.String `tfsdk:"operating_status"`
@@ -72,19 +74,20 @@ func (r *loadBalancerResource) Schema(_ context.Context, _ resource.SchemaReques
 			"Layer 4 (TCP/UDP/SCTP): use L4 listener protocols and OVN-supported pool algorithms; HTTP/L7 features " +
 			"are not available.",
 		Attributes: map[string]schema.Attribute{
-			"id":                  schema.StringAttribute{Computed: true, MarkdownDescription: "The load balancer ID.", PlanModifiers: useState},
-			"name":                schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The name of the load balancer.", PlanModifiers: useState},
-			"description":         schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "A description of the load balancer.", PlanModifiers: useState},
-			"admin_state_up":      schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "The administrative state of the load balancer."},
-			"vip_subnet_id":       schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Subnet on which to allocate the VIP (mutually exclusive with vip_network_id). Changing this forces a new resource.", PlanModifiers: forceNew},
-			"vip_network_id":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Network on which to allocate the VIP (mutually exclusive with vip_subnet_id). Changing this forces a new resource.", PlanModifiers: forceNew},
-			"vip_address":         schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The VIP address. Requesting a specific address changing it forces a new resource.", PlanModifiers: forceNew},
-			"vip_port_id":         schema.StringAttribute{Computed: true, MarkdownDescription: "The ID of the VIP port.", PlanModifiers: useState},
-			"flavor_id":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The Octavia flavor to use. Changing this forces a new resource.", PlanModifiers: forceNew},
-			"tags":                schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the load balancer.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
-			"provisioning_status": schema.StringAttribute{Computed: true, MarkdownDescription: "The provisioning status (e.g. ACTIVE).", PlanModifiers: useState},
-			"operating_status":    schema.StringAttribute{Computed: true, MarkdownDescription: "The operating status (e.g. ONLINE).", PlanModifiers: useState},
-			"region":              schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"id":                    schema.StringAttribute{Computed: true, MarkdownDescription: "The load balancer ID.", PlanModifiers: useState},
+			"name":                  schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The name of the load balancer.", PlanModifiers: useState},
+			"description":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "A description of the load balancer.", PlanModifiers: useState},
+			"admin_state_up":        schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "The administrative state of the load balancer."},
+			"vip_subnet_id":         schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Subnet on which to allocate the VIP (mutually exclusive with vip_network_id). Changing this forces a new resource.", PlanModifiers: forceNew},
+			"vip_network_id":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Network on which to allocate the VIP (mutually exclusive with vip_subnet_id). Changing this forces a new resource.", PlanModifiers: forceNew},
+			"vip_address":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The VIP address. Requesting a specific address changing it forces a new resource.", PlanModifiers: forceNew},
+			"vip_port_id":           schema.StringAttribute{Computed: true, MarkdownDescription: "The ID of the VIP port.", PlanModifiers: useState},
+			"flavor_id":             schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The Octavia flavor to use. Changing this forces a new resource.", PlanModifiers: forceNew},
+			"loadbalancer_provider": schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("ovn"), MarkdownDescription: "The Octavia provider driver. PCD ships only `ovn`, which is the default; changing this forces a new resource.", PlanModifiers: forceNew},
+			"tags":                  schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the load balancer.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
+			"provisioning_status":   schema.StringAttribute{Computed: true, MarkdownDescription: "The provisioning status (e.g. ACTIVE).", PlanModifiers: useState},
+			"operating_status":      schema.StringAttribute{Computed: true, MarkdownDescription: "The operating status (e.g. ONLINE).", PlanModifiers: useState},
+			"region":                schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
 		},
 	}
 }
@@ -121,6 +124,7 @@ func (r *loadBalancerResource) Create(ctx context.Context, req resource.CreateRe
 		VipNetworkID: plan.VipNetworkID.ValueString(),
 		VipAddress:   plan.VipAddress.ValueString(),
 		FlavorID:     plan.FlavorID.ValueString(),
+		Provider:     plan.Provider.ValueString(),
 		AdminStateUp: &adminUp,
 	}
 	if !plan.Tags.IsNull() && !plan.Tags.IsUnknown() {
@@ -286,6 +290,7 @@ func (r *loadBalancerResource) readInto(ctx context.Context, client *gophercloud
 	m.VipAddress = types.StringValue(lb.VipAddress)
 	m.VipPortID = types.StringValue(lb.VipPortID)
 	m.FlavorID = types.StringValue(lb.FlavorID)
+	m.Provider = types.StringValue(lb.Provider)
 	m.ProvisioningStatus = types.StringValue(lb.ProvisioningStatus)
 	m.OperatingStatus = types.StringValue(lb.OperatingStatus)
 

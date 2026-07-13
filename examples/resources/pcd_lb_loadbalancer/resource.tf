@@ -8,6 +8,7 @@ resource "pcd_networking_subnet" "example" {
 }
 
 resource "pcd_lb_loadbalancer" "example" {
-  name          = "tf-example-lb"
-  vip_subnet_id = pcd_networking_subnet.example.id
+  name                  = "tf-example-lb"
+  vip_subnet_id         = pcd_networking_subnet.example.id
+  loadbalancer_provider = "ovn" # PCD ships only the OVN (L4) provider; this is the default
 }
