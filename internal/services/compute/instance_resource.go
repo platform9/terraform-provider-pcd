@@ -24,6 +24,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -98,7 +99,7 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				MarkdownDescription: "Names of security groups to associate. Changing this forces a new resource.",
 				PlanModifiers:       []planmodifier.Set{setplanmodifier.RequiresReplace(), setplanmodifier.UseStateForUnknown()},
 			},
-			"metadata":          schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key-value metadata attached to the instance."},
+			"metadata":          schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key-value metadata attached to the instance.", PlanModifiers: []planmodifier.Map{mapplanmodifier.UseStateForUnknown()}},
 			"user_data":         schema.StringAttribute{Optional: true, MarkdownDescription: "User data (cloud-init) for the instance. Changing this forces a new resource.", PlanModifiers: fn},
 			"availability_zone": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Availability zone to launch in. Changing this forces a new resource.", PlanModifiers: fnC},
 			"config_drive":      schema.BoolAttribute{Optional: true, MarkdownDescription: "Whether to use a config drive. Changing this forces a new resource.", PlanModifiers: []planmodifier.Bool{}},
@@ -110,9 +111,9 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"network": schema.ListNestedBlock{
 				MarkdownDescription: "Networks to attach. Changing this forces a new resource.",
 				NestedObject: schema.NestedBlockObject{Attributes: map[string]schema.Attribute{
-					"uuid": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Network UUID to attach to (required unless port is set)."},
+					"uuid": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Network UUID to attach to (required unless port is set).", PlanModifiers: stable},
 					"name": schema.StringAttribute{Optional: true, MarkdownDescription: "Network name (informational)."},
-					"port": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Existing port to attach (required unless uuid is set)."},
+					"port": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Existing port to attach (required unless uuid is set).", PlanModifiers: stable},
 				}},
 				PlanModifiers: []planmodifier.List{listplanmodifier.RequiresReplace(), listplanmodifier.UseStateForUnknown()},
 			},
@@ -273,13 +274,14 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		}
 	}
 
-	if !plan.Metadata.Equal(state.Metadata) {
-		var meta map[string]string
-		if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() {
-			resp.Diagnostics.Append(plan.Metadata.ElementsAs(ctx, &meta, false)...)
-			if resp.Diagnostics.HasError() {
-				return
-			}
+	// Only push metadata when the user actually set it and it changed. A null or
+	// unknown plan value means "unmanaged" — Nova rejects a nil metadata map
+	// (metadata: None) with a 400.
+	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && !plan.Metadata.Equal(state.Metadata) {
+		meta := map[string]string{}
+		resp.Diagnostics.Append(plan.Metadata.ElementsAs(ctx, &meta, false)...)
+		if resp.Diagnostics.HasError() {
+			return
 		}
 		if _, err := servers.UpdateMetadata(ctx, client, plan.ID.ValueString(), servers.MetadataOpts(meta)).Extract(); err != nil {
 			resp.Diagnostics.AddError("compute: updating instance metadata", err.Error())
@@ -389,6 +391,43 @@ func (r *instanceResource) flatten(ctx context.Context, server *servers.Server, 
 	metaMap, d := types.MapValueFrom(ctx, types.StringType, meta)
 	diags = append(diags, d...)
 	m.Metadata = metaMap
+
+	// availability_zone and security_groups are Optional+Computed: when the user
+	// omits them the server assigns values, which must be read back or they stay
+	// unknown after apply ("invalid result object").
+	m.AvailabilityZone = types.StringValue(server.AvailabilityZone)
+
+	seenSG := make(map[string]bool, len(server.SecurityGroups))
+	sgs := make([]string, 0, len(server.SecurityGroups))
+	for _, sg := range server.SecurityGroups {
+		// Nova can list the same security group once per attached port; dedupe so
+		// the Set is valid.
+		if name, ok := sg["name"].(string); ok && !seenSG[name] {
+			seenSG[name] = true
+			sgs = append(sgs, name)
+		}
+	}
+	sgSet, d := types.SetValueFrom(ctx, types.StringType, sgs)
+	diags = append(diags, d...)
+	m.SecurityGroups = sgSet
+
+	// The network block's uuid/port are Optional+Computed; resolve any that the
+	// user left unset (unknown) to a concrete value so the block is fully known.
+	if !m.Network.IsNull() && !m.Network.IsUnknown() {
+		var blocks []instanceNetworkModel
+		diags = append(diags, m.Network.ElementsAs(ctx, &blocks, false)...)
+		for i := range blocks {
+			if blocks[i].UUID.IsNull() || blocks[i].UUID.IsUnknown() {
+				blocks[i].UUID = types.StringValue("")
+			}
+			if blocks[i].Port.IsNull() || blocks[i].Port.IsUnknown() {
+				blocks[i].Port = types.StringValue("")
+			}
+		}
+		netList, d := types.ListValueFrom(ctx, m.Network.ElementType(ctx), blocks)
+		diags = append(diags, d...)
+		m.Network = netList
+	}
 
 	if m.Region.IsNull() || m.Region.IsUnknown() {
 		m.Region = types.StringValue(r.config.Region)

@@ -42,6 +42,28 @@ real backend fault):**
 - DNS `zone`/`recordset`: Designate returns `500 no_servers_configured` — the pool has no
   nameservers (BIND9 / `pools.yaml` from the runbook's Phase E step 7 not applied).
 
+### Follow-up run (2026-07-13): compute + Cinder unblocked
+
+After the lab operator uploaded a bootable image to the library and fixed the Cinder
+backend, the compute and block-storage suites were re-run. Block-storage volume passed.
+Compute boot passed once pointed at a library-synced image, and surfaced several real
+provider bugs in `pcd_compute_instance` (all fixed) that were latent because the instance
+had never actually booted before:
+- `flatten` did not read back `availability_zone`, `security_groups`, or the `network`
+  block, so they stayed unknown after apply ("invalid result object"). Now populated
+  (with the security-group list deduplicated, since Nova can repeat `default`).
+- The `network` block's inner `uuid`/`port` lacked `UseStateForUnknown`, so an in-place
+  flavor change re-planned them unknown and tripped `RequiresReplace` — the resize
+  replaced the instance instead of resizing. Fixed.
+- `metadata` was pushed on every update even when unset, sending Nova a nil map
+  (`metadata: None` → 400). Fixed with `UseStateForUnknown` + a guarded update.
+- Separately, `pcd_networking_subnet` delete now retries on `409 SubnetInUse` to ride out
+  Nova's asynchronous port release after an instance is deleted.
+
+The compute VM-boot acc tests now resolve an existing image by name via a data source
+(env `PCD_ACC_IMAGE_NAME`); they skip when it is unset, since PCD does not sync
+web-download images to the hypervisor's local Glance.
+
 | Family | Item | Status |
 |---|---|---|
 | Provider core | password auth + project scope, self-signed TLS (`insecure`), `pcd_identity_auth_scope` | **VALIDATED** |
@@ -61,12 +83,12 @@ real backend fault):**
 | Networking | `pcd_networking_floatingip_associate` | **VALIDATED** (2026-07-12) — associates a separately-allocated floating IP to a port; acc test builds the router path and skips unless `PCD_ACC_EXTERNAL_NETWORK` set. |
 | Compute | `pcd_compute_keypair`, `_flavor`, `_servergroup` | **VALIDATED** |
 | Compute (DS) | `pcd_compute_flavor`, `_keypair`, `_availability_zones` | **VALIDATED** |
-| Compute | `pcd_compute_instance` (boot) | **PENDING** — lab image-library gap: images don't reach the onboarded host's local library → nova returns HTTP 204 for image data. Create/schedule/wait/error-report verified; passes with a library-backed image. |
-| Compute | `pcd_compute_flavor` `extra_specs` | **PENDING** — code-complete; in-place add/change/remove; other flavor attrs now correctly force replacement. Acc test written (create + in-place update + import). Not yet run live (credentials unavailable this session). No lab blocker expected — flavors work on the lab. |
-| Compute | `pcd_compute_instance` resize + `image_name` | **PENDING** — code-complete; flavor change → Nova resize/confirm (revert on failure); `image_name` resolved via Glance. Boot-blocked (same as instance boot above). |
-| Compute | `pcd_compute_interface_attach` | **PENDING** — code-complete; needs a booted instance (boot-blocked). Acc test written. |
-| Compute | `pcd_compute_volume_attach` | **PENDING** — code-complete; needs a booted instance **and** a Cinder backend (both lab-blocked). Best-effort volume waiter degrades gracefully without Cinder. |
-| Block storage | `pcd_blockstorage_volume` | **PENDING** — no Cinder storage backend on the lab (`storageBackends={}`); volumes go `creating → error`. Create + waiter + error-detection verified. |
+| Compute | `pcd_compute_instance` (boot) | **VALIDATED** (2026-07-13) — boots against a library-synced image. The acc test resolves an existing image by name via a data source (env `PCD_ACC_IMAGE_NAME`), because PCD does not sync web-download (`copy-from`) images to the hypervisor's local Glance. |
+| Compute | `pcd_compute_flavor` `extra_specs` | **VALIDATED** — in-place add/change/remove; other flavor attrs force replacement. |
+| Compute | `pcd_compute_instance` resize + `image_name` | **VALIDATED** (2026-07-13) — flavor change resizes in place (verified same instance ID); `image_name` resolved via Glance. |
+| Compute | `pcd_compute_interface_attach` | **VALIDATED** (2026-07-13) — hot-attach a second NIC + import. |
+| Compute | `pcd_compute_volume_attach` | **VALIDATED** (2026-07-13) — boot + Cinder volume attach + import. |
+| Block storage | `pcd_blockstorage_volume` | **VALIDATED** (2026-07-13) — create on the `synology-iscsi` backend → available → extend → import. |
 | Block storage (DS) | `pcd_blockstorage_volume`, `_snapshot` | **PENDING** — untestable without volumes on this lab. |
 | Load balancing (Octavia) | `pcd_lb_loadbalancer`, `_listener`, `_pool`, `_member`, `_monitor` + `_loadbalancer` DS | **VALIDATED** (2026-07-12) — full-tree apply on OVN (lb + TCP listener + `SOURCE_IP_PORT` pool + member + TCP monitor + DS + rename + import). **PCD ships the OVN provider only** (`providers=[ovn]`, no amphora), which is L4 — use TCP/UDP/SCTP listeners and OVN pool algorithms; L7 policy/rule resources were removed (see backout entry). `loadbalancer_provider` was added (default `ovn`) because Octavia's server-side default `amphora` is not enabled — without it every create failed. |
 | DNS (Designate) | `pcd_dns_zone`, `pcd_dns_recordset` + `pcd_dns_zone` DS | **PENDING** — Phase 3, code-complete; async create/update/delete → wait-for-`ACTIVE`/404. Acc test (zone + recordset + import) + examples written. Designate is live on the lab (Step 0) and DNS needs no compute/storage backend, so this should pass live — not yet run this session (credentials unavailable). |
