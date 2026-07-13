@@ -45,7 +45,14 @@ func TestAccDNSZoneAndRecordSet_basic(t *testing.T) {
 				Config: testAccDNSConfig(`["10.1.0.3"]`),
 				Check:  resource.TestCheckResourceAttr(rrName, "records.#", "1"),
 			},
-			{ResourceName: zoneName, ImportState: true, ImportStateVerify: true},
+			{
+				ResourceName:      zoneName,
+				ImportState:       true,
+				ImportStateVerify: true,
+				// Designate auto-increments the SOA serial out of band, so the
+				// value re-read on import can differ from the last-applied state.
+				ImportStateVerifyIgnore: []string{"serial"},
+			},
 			{
 				ResourceName:      rrName,
 				ImportState:       true,

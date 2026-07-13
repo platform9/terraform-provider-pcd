@@ -32,15 +32,18 @@ SOURCE_IP_PORT pool + member + TCP monitor + data source).
   tests lacked the router a floating IP needs, and `testAccCheckNetworkDestroy` matched
   data-source networks.
 
-**Lab-side blockers (not provider defects — the resources create correctly and surface the
-real backend fault):**
-- Compute VM boot (`instance`, `interface_attach`, `volume_attach`): nova-compute cannot
-  connect to Glance to fetch image **data** ("Failed to call glance method data") — an
-  image-library data-path gap on the hypervisor.
-- Block storage `volume`: the `cinder-volume@synology` service is **down** (Synology NAS at
-  192.168.1.25 unreachable or credentials wrong); volumes go straight to `error`.
-- DNS `zone`/`recordset`: Designate returns `500 no_servers_configured` — the pool has no
-  nameservers (BIND9 / `pools.yaml` from the runbook's Phase E step 7 not applied).
+**Lab-side blockers from the initial run — all since resolved by lab-ops and then validated
+live (each was a backend gap, not a provider defect; the resources created correctly and
+surfaced the real fault):**
+- Compute VM boot (`instance`, `interface_attach`, `volume_attach`): was nova-compute unable
+  to fetch image **data** from Glance. Resolved by uploading a library-synced image;
+  **VALIDATED 2026-07-13**. (The acc tests now boot a pre-synced image named via
+  `PCD_ACC_IMAGE_NAME` — PCD does not sync web-download images to the host's local Glance.)
+- Block storage `volume`: was `cinder-volume@synology` down. Backend fixed; **VALIDATED 2026-07-13**.
+- DNS `zone`/`recordset`: was Designate `500 no_servers_configured`. Pool given a BIND9
+  nameserver (runbook Phase E step 7); **VALIDATED 2026-07-13**.
+
+Every resource that maps to a configured PCD backend is now validated live.
 
 ### Follow-up run (2026-07-13): compute + Cinder unblocked
 
@@ -91,7 +94,7 @@ web-download images to the hypervisor's local Glance.
 | Block storage | `pcd_blockstorage_volume` | **VALIDATED** (2026-07-13) — create on the `synology-iscsi` backend → available → extend → import. |
 | Block storage (DS) | `pcd_blockstorage_volume`, `_snapshot` | **PENDING** — untestable without volumes on this lab. |
 | Load balancing (Octavia) | `pcd_lb_loadbalancer`, `_listener`, `_pool`, `_member`, `_monitor` + `_loadbalancer` DS | **VALIDATED** (2026-07-12) — full-tree apply on OVN (lb + TCP listener + `SOURCE_IP_PORT` pool + member + TCP monitor + DS + rename + import). **PCD ships the OVN provider only** (`providers=[ovn]`, no amphora), which is L4 — use TCP/UDP/SCTP listeners and OVN pool algorithms; L7 policy/rule resources were removed (see backout entry). `loadbalancer_provider` was added (default `ovn`) because Octavia's server-side default `amphora` is not enabled — without it every create failed. |
-| DNS (Designate) | `pcd_dns_zone`, `pcd_dns_recordset` + `pcd_dns_zone` DS | **PENDING** — Phase 3, code-complete; async create/update/delete → wait-for-`ACTIVE`/404. Acc test (zone + recordset + import) + examples written. Designate is live on the lab (Step 0) and DNS needs no compute/storage backend, so this should pass live — not yet run this session (credentials unavailable). |
+| DNS (Designate) | `pcd_dns_zone`, `pcd_dns_recordset` + `pcd_dns_zone` DS | **VALIDATED** (2026-07-13) — zone + recordset create → `ACTIVE`, verify, import, destroy, against a Designate pool backed by BIND9. The zone import ignores `serial` (Designate auto-increments the SOA serial out of band). Requires the pool to have a nameserver target; see `~/Documents/PCD-CE/DNS-validation-lab-setup.md`. |
 | Key management (Barbican) | `pcd_keymanager_secret`, `pcd_keymanager_container` + `pcd_keymanager_secret` DS | **PENDING** — Phase 3, code-complete; write-only echo-only `payload`, URL-ref→UUID id handling, wait-for-`ACTIVE` only on create-with-payload. Acc test (secret + container + data source + import) + examples written. Barbican is live on the lab (Step 0) and needs no compute/storage backend, so this should pass live — not yet run this session (credentials unavailable). |
 | Network QoS (Neutron) | `pcd_networking_qos_policy`, `_qos_bandwidth_limit_rule`, `_qos_dscp_marking_rule`, `_qos_minimum_bandwidth_rule` + `_qos_policy` DS | **PENDING** — Phase 3, code-complete; rules nested under a policy with composite `<policy_id>/<rule_id>` import, tags via the attributes-tags extension (`qos/policies` type), `ForceNew` on `qos_policy_id`. Full-tree acc test (policy + all three rules + data source + import) + examples written. Depends only on the Neutron `qos` extension (no compute/storage backend), so this should pass live — not yet run this session (credentials unavailable). |
 | Project quotas | `pcd_compute_quotaset` (Nova), `pcd_networking_quota` (Neutron), `pcd_blockstorage_quotaset` (Cinder) | **PENDING** — Phase 3, code-complete; every quota field `Optional+Computed` with `UseStateForUnknown` (partial management — only user-set/changed fields are PUT via `*int` omitempty; server echoes the rest). No create API (Create = Update+read). **Delete is a deliberate no-op** (matches upstream `RemoveFromState`: destroying stops management without resetting quotas). Composite `<project_id>/<region>` id with legacy bare-`project_id` import tolerance; `project_id`/`region` are `ForceNew`. Per-service acc test (create project → set quotas → verify via API → update → import) + examples written. Needs live validation on the fresh CE lab (credentials unavailable this session). **Scope note:** matches upstream field-for-field except two deliberate deferrals — see the Deferred section. |
