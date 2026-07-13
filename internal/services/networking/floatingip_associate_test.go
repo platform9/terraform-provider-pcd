@@ -47,6 +47,10 @@ func TestAccNetworkingFloatingIPAssociate_basic(t *testing.T) {
 
 func testAccFloatingIPAssociateConfig(pool string) string {
 	return fmt.Sprintf(`
+data "pcd_networking_network" "ext" {
+  name = %[1]q
+}
+
 resource "pcd_networking_network" "test" {
   name = "tf-acc-fipa-net"
 }
@@ -55,6 +59,18 @@ resource "pcd_networking_subnet" "test" {
   name       = "tf-acc-fipa-subnet"
   network_id = pcd_networking_network.test.id
   cidr       = "10.107.0.0/24"
+}
+
+# A floating IP can only be bound to a port whose subnet reaches the external
+# network through a router (external gateway + interface on the subnet).
+resource "pcd_networking_router" "test" {
+  name                = "tf-acc-fipa-router"
+  external_network_id = data.pcd_networking_network.ext.id
+}
+
+resource "pcd_networking_router_interface" "test" {
+  router_id = pcd_networking_router.test.id
+  subnet_id = pcd_networking_subnet.test.id
 }
 
 resource "pcd_networking_port" "test" {
@@ -67,12 +83,13 @@ resource "pcd_networking_port" "test" {
 }
 
 resource "pcd_networking_floatingip" "test" {
-  pool = %q
+  pool = %[1]q
 }
 
 resource "pcd_networking_floatingip_associate" "test" {
   floating_ip_id = pcd_networking_floatingip.test.id
   port_id        = pcd_networking_port.test.id
+  depends_on     = [pcd_networking_router_interface.test]
 }
 `, pool)
 }

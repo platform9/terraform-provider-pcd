@@ -10,6 +10,38 @@ CheckDestroy). **PENDING** = code-complete and verified up to a lab-side limitat
 yet passable on this lab (reason noted). Generated registry docs are not committed; run
 `make generate` (tfplugindocs) to produce them.
 
+### Live run on the fully-featured CE lab (2026-07-12)
+
+Ran the acceptance suites against a CE lab with compute (KVM), image library, Cinder
+(Synology iSCSI), and DNS roles converged. **Green live:** identity, images, key
+management, the entire networking suite (network/subnet/secgroup/router/port/routes/QoS/
+quotas **and floating IPs**), compute control-plane (keypair/flavor/servergroup/quotaset),
+all three quotasets, and the **full load-balancer tree on OVN** (lb + TCP listener +
+SOURCE_IP_PORT pool + member + TCP monitor + data source).
+
+**Provider bugs found and fixed by the live run:**
+- `pcd_lb_loadbalancer` had no `loadbalancer_provider` field, so Octavia fell back to its
+  server-default `amphora` (which PCD does not enable) and **every LB create failed**.
+  Added the field, defaulting to `ovn`.
+- `pcd_networking_floatingip` could not disassociate and produced "inconsistent result
+  after apply" when the association changed: `port_id`/`fixed_ip` used
+  `UseStateForUnknown` (which hid a removal) and the server-derived fields
+  (`router_id`, `status`, `fixed_ip`) were not re-planned. Fixed with a `ModifyPlan`;
+  inline disassociation is now `port_id = ""` (leaving it unset delegates to
+  `pcd_networking_floatingip_associate`). Also fixed two test bugs surfaced here: the FIP
+  tests lacked the router a floating IP needs, and `testAccCheckNetworkDestroy` matched
+  data-source networks.
+
+**Lab-side blockers (not provider defects — the resources create correctly and surface the
+real backend fault):**
+- Compute VM boot (`instance`, `interface_attach`, `volume_attach`): nova-compute cannot
+  connect to Glance to fetch image **data** ("Failed to call glance method data") — an
+  image-library data-path gap on the hypervisor.
+- Block storage `volume`: the `cinder-volume@synology` service is **down** (Synology NAS at
+  192.168.1.25 unreachable or credentials wrong); volumes go straight to `error`.
+- DNS `zone`/`recordset`: Designate returns `500 no_servers_configured` — the pool has no
+  nameservers (BIND9 / `pools.yaml` from the runbook's Phase E step 7 not applied).
+
 | Family | Item | Status |
 |---|---|---|
 | Provider core | password auth + project scope, self-signed TLS (`insecure`), `pcd_identity_auth_scope` | **VALIDATED** |
@@ -21,12 +53,12 @@ yet passable on this lab (reason noted). Generated registry docs are not committ
 | Networking | `pcd_networking_network`, `_subnet`, `_secgroup`, `_secgroup_rule`, `_router`, `_router_interface` | **VALIDATED** |
 | Networking (DS) | `pcd_networking_network`, `_subnet`, `_secgroup` | **VALIDATED** |
 | Networking | `pcd_networking_port` | **PENDING** — code-complete, build/vet/lint/docs clean; acceptance test written (create/update/import). Not yet run live: lab credentials were unavailable in this session. No lab-side blocker expected. |
-| Networking | `pcd_networking_floatingip` | **PENDING** — code-complete. Needs an **external network** in the lab (allocation pool); acc test skips unless `PCD_ACC_EXTERNAL_NETWORK` names one. |
+| Networking | `pcd_networking_floatingip` | **VALIDATED** (2026-07-12) — allocate/associate/disassociate/import against an external network; the disassociation and inconsistent-result bugs found here are fixed. Requires an external network; the acc test builds the router path a floating IP needs and skips unless `PCD_ACC_EXTERNAL_NETWORK` names one. |
 | Networking (DS) | `pcd_networking_port`, `_port_ids`, `_router`, `_subnet_ids` | **PENDING** — code-complete; acc test written. Not yet run live (credentials unavailable this session). |
 | Networking (DS) | `pcd_networking_floatingip` | **PENDING** — depends on a floating IP existing (see external-network note above). |
 | Networking | `pcd_networking_router_route`, `_subnet_route` | **PENDING** — code-complete; single-route read-modify-write under a per-parent mutex so concurrent routes on one router/subnet don't clobber. Acc tests written (router route needs a router interface for a valid next-hop). Not yet run live. |
 | Networking | `pcd_networking_port_secgroup_associate` | **PENDING** — code-complete; shared (`enforce=false`) and exclusive (`enforce=true`) modes. Acc test written. Not yet run live. |
-| Networking | `pcd_networking_floatingip_associate` | **PENDING** — code-complete. Needs an external network (see note above); acc test skips unless `PCD_ACC_EXTERNAL_NETWORK` set. |
+| Networking | `pcd_networking_floatingip_associate` | **VALIDATED** (2026-07-12) — associates a separately-allocated floating IP to a port; acc test builds the router path and skips unless `PCD_ACC_EXTERNAL_NETWORK` set. |
 | Compute | `pcd_compute_keypair`, `_flavor`, `_servergroup` | **VALIDATED** |
 | Compute (DS) | `pcd_compute_flavor`, `_keypair`, `_availability_zones` | **VALIDATED** |
 | Compute | `pcd_compute_instance` (boot) | **PENDING** — lab image-library gap: images don't reach the onboarded host's local library → nova returns HTTP 204 for image data. Create/schedule/wait/error-report verified; passes with a library-backed image. |
@@ -36,7 +68,7 @@ yet passable on this lab (reason noted). Generated registry docs are not committ
 | Compute | `pcd_compute_volume_attach` | **PENDING** — code-complete; needs a booted instance **and** a Cinder backend (both lab-blocked). Best-effort volume waiter degrades gracefully without Cinder. |
 | Block storage | `pcd_blockstorage_volume` | **PENDING** — no Cinder storage backend on the lab (`storageBackends={}`); volumes go `creating → error`. Create + waiter + error-detection verified. |
 | Block storage (DS) | `pcd_blockstorage_volume`, `_snapshot` | **PENDING** — untestable without volumes on this lab. |
-| Load balancing (Octavia) | `pcd_lb_loadbalancer`, `_listener`, `_pool`, `_member`, `_monitor` + `_loadbalancer` DS | **PENDING** — Phase 3, code-complete; per-LB wait-for-`ACTIVE` lifecycle, root-LB resolution for every child, echo-only churny fields. Full-tree acc test + examples written. **PCD ships the OVN provider only** (verified on the CE lab: `providers=[ovn]`, no amphora), which is L4 — use TCP/UDP/SCTP listeners and OVN-supported pool algorithms; L7 policy/rule resources were removed (see the 2026-07-12 backout entry). LB provisioning needs a subnet (blocked by the lab's missing tenant-network pool), so not yet run live. |
+| Load balancing (Octavia) | `pcd_lb_loadbalancer`, `_listener`, `_pool`, `_member`, `_monitor` + `_loadbalancer` DS | **VALIDATED** (2026-07-12) — full-tree apply on OVN (lb + TCP listener + `SOURCE_IP_PORT` pool + member + TCP monitor + DS + rename + import). **PCD ships the OVN provider only** (`providers=[ovn]`, no amphora), which is L4 — use TCP/UDP/SCTP listeners and OVN pool algorithms; L7 policy/rule resources were removed (see backout entry). `loadbalancer_provider` was added (default `ovn`) because Octavia's server-side default `amphora` is not enabled — without it every create failed. |
 | DNS (Designate) | `pcd_dns_zone`, `pcd_dns_recordset` + `pcd_dns_zone` DS | **PENDING** — Phase 3, code-complete; async create/update/delete → wait-for-`ACTIVE`/404. Acc test (zone + recordset + import) + examples written. Designate is live on the lab (Step 0) and DNS needs no compute/storage backend, so this should pass live — not yet run this session (credentials unavailable). |
 | Key management (Barbican) | `pcd_keymanager_secret`, `pcd_keymanager_container` + `pcd_keymanager_secret` DS | **PENDING** — Phase 3, code-complete; write-only echo-only `payload`, URL-ref→UUID id handling, wait-for-`ACTIVE` only on create-with-payload. Acc test (secret + container + data source + import) + examples written. Barbican is live on the lab (Step 0) and needs no compute/storage backend, so this should pass live — not yet run this session (credentials unavailable). |
 | Network QoS (Neutron) | `pcd_networking_qos_policy`, `_qos_bandwidth_limit_rule`, `_qos_dscp_marking_rule`, `_qos_minimum_bandwidth_rule` + `_qos_policy` DS | **PENDING** — Phase 3, code-complete; rules nested under a policy with composite `<policy_id>/<rule_id>` import, tags via the attributes-tags extension (`qos/policies` type), `ForceNew` on `qos_policy_id`. Full-tree acc test (policy + all three rules + data source + import) + examples written. Depends only on the Neutron `qos` extension (no compute/storage backend), so this should pass live — not yet run this session (credentials unavailable). |

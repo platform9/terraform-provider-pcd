@@ -14,13 +14,13 @@ resource "pcd_lb_loadbalancer" "example" {
 
 resource "pcd_lb_listener" "example" {
   loadbalancer_id = pcd_lb_loadbalancer.example.id
-  protocol        = "HTTP"
+  protocol        = "TCP"
   protocol_port   = 80
 }
 
 resource "pcd_lb_pool" "example" {
   name        = "tf-example-pool"
   listener_id = pcd_lb_listener.example.id
-  protocol    = "HTTP"
-  lb_method   = "ROUND_ROBIN"
+  protocol    = "TCP" # OVN provider is L4
+  lb_method   = "SOURCE_IP_PORT"
 }
