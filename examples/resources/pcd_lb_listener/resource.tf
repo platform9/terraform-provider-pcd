@@ -15,6 +15,6 @@ resource "pcd_lb_loadbalancer" "example" {
 resource "pcd_lb_listener" "example" {
   name            = "tf-example-listener"
   loadbalancer_id = pcd_lb_loadbalancer.example.id
-  protocol        = "HTTP"
+  protocol        = "TCP" # OVN provider is L4: TCP/UDP/SCTP
   protocol_port   = 80
 }

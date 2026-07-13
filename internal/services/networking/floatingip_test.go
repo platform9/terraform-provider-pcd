@@ -60,11 +60,17 @@ func TestAccNetworkingFloatingIP_basic(t *testing.T) {
 }
 
 func testAccFloatingIPConfig(pool string, associate bool) string {
-	portAssoc := ""
+	// Disassociate inline by setting port_id to "" (leaving it unset instead
+	// would delegate association to a separate resource, not disassociate).
+	portAssoc := `port_id = ""`
 	if associate {
 		portAssoc = "port_id = pcd_networking_port.test.id"
 	}
 	return fmt.Sprintf(`
+data "pcd_networking_network" "ext" {
+  name = %[1]q
+}
+
 resource "pcd_networking_network" "test" {
   name = "tf-acc-fip-net"
 }
@@ -73,6 +79,18 @@ resource "pcd_networking_subnet" "test" {
   name       = "tf-acc-fip-subnet"
   network_id = pcd_networking_network.test.id
   cidr       = "10.104.0.0/24"
+}
+
+# A floating IP can only be associated when the fixed IP's subnet reaches the
+# external network through a router (external gateway + interface on the subnet).
+resource "pcd_networking_router" "test" {
+  name                = "tf-acc-fip-router"
+  external_network_id = data.pcd_networking_network.ext.id
+}
+
+resource "pcd_networking_router_interface" "test" {
+  router_id = pcd_networking_router.test.id
+  subnet_id = pcd_networking_subnet.test.id
 }
 
 resource "pcd_networking_port" "test" {
@@ -85,8 +103,9 @@ resource "pcd_networking_port" "test" {
 }
 
 resource "pcd_networking_floatingip" "test" {
-  pool = %q
-  %s
+  pool = %[1]q
+  %[2]s
+  depends_on = [pcd_networking_router_interface.test]
 }
 `, pool, portAssoc)
 }

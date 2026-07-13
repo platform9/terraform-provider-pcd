@@ -15,15 +15,14 @@ resource "pcd_lb_loadbalancer" "example" {
 resource "pcd_lb_pool" "example" {
   name            = "tf-example-pool"
   loadbalancer_id = pcd_lb_loadbalancer.example.id
-  protocol        = "HTTP"
-  lb_method       = "ROUND_ROBIN"
+  protocol        = "TCP" # OVN provider is L4
+  lb_method       = "SOURCE_IP_PORT"
 }
 
 resource "pcd_lb_monitor" "example" {
   pool_id     = pcd_lb_pool.example.id
-  type        = "HTTP"
+  type        = "TCP"
   delay       = 10
   timeout     = 5
   max_retries = 3
-  url_path    = "/healthz"
 }

@@ -38,10 +38,11 @@ func TestAccLBLoadBalancer_tree(t *testing.T) {
 					resource.TestCheckResourceAttr(lbName, "provisioning_status", "ACTIVE"),
 					resource.TestCheckResourceAttrSet(lbName, "vip_address"),
 					resource.TestCheckResourceAttrSet(lbName, "vip_port_id"),
+					resource.TestCheckResourceAttr(lbName, "loadbalancer_provider", "ovn"),
 					resource.TestCheckResourceAttrPair("pcd_lb_listener.test", "loadbalancer_id", lbName, "id"),
-					resource.TestCheckResourceAttr("pcd_lb_pool.test", "lb_method", "ROUND_ROBIN"),
+					resource.TestCheckResourceAttr("pcd_lb_pool.test", "lb_method", "SOURCE_IP_PORT"),
 					resource.TestCheckResourceAttr("pcd_lb_member.test", "protocol_port", "8080"),
-					resource.TestCheckResourceAttr("pcd_lb_monitor.test", "type", "HTTP"),
+					resource.TestCheckResourceAttr("pcd_lb_monitor.test", "type", "TCP"),
 					resource.TestCheckResourceAttrPair("data.pcd_lb_loadbalancer.by_name", "id", lbName, "id"),
 				),
 			},
@@ -67,22 +68,23 @@ resource "pcd_networking_subnet" "test" {
 }
 
 resource "pcd_lb_loadbalancer" "test" {
-  name          = %q
-  vip_subnet_id = pcd_networking_subnet.test.id
+  name                  = %q
+  vip_subnet_id         = pcd_networking_subnet.test.id
+  loadbalancer_provider = "ovn"
 }
 
 resource "pcd_lb_listener" "test" {
   name            = "tf-acc-lb-listener"
   loadbalancer_id = pcd_lb_loadbalancer.test.id
-  protocol        = "HTTP"
+  protocol        = "TCP"
   protocol_port   = 80
 }
 
 resource "pcd_lb_pool" "test" {
   name        = "tf-acc-lb-pool"
   listener_id = pcd_lb_listener.test.id
-  protocol    = "HTTP"
-  lb_method   = "ROUND_ROBIN"
+  protocol    = "TCP"
+  lb_method   = "SOURCE_IP_PORT"
 }
 
 resource "pcd_lb_member" "test" {
@@ -94,11 +96,10 @@ resource "pcd_lb_member" "test" {
 
 resource "pcd_lb_monitor" "test" {
   pool_id     = pcd_lb_pool.test.id
-  type        = "HTTP"
+  type        = "TCP"
   delay       = 10
   timeout     = 5
   max_retries = 3
-  url_path    = "/healthz"
 }
 
 data "pcd_lb_loadbalancer" "by_name" {
