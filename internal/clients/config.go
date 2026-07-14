@@ -235,6 +235,30 @@ func (c *Config) BlockStorageV3Client() (*gophercloud.ServiceClient, error) {
 	return client, nil
 }
 
+// ResmgrV2Client returns a client for the PCD resource manager (`resmgr`) v2
+// API. resmgr is a Platform9-specific REST service (not part of OpenStack, so it
+// has no gophercloud constructor); it backs cluster blueprints, host configs,
+// and host role/config assignment. The endpoint is resolved from the Keystone
+// catalog (service type `resmgr`) and the shared authenticated ProviderClient
+// supplies the token, so requests use `client.Get/Post/Put/Delete`.
+func (c *Config) ResmgrV2Client() (*gophercloud.ServiceClient, error) {
+	url, err := c.Provider.EndpointLocator(gophercloud.EndpointOpts{
+		Type:         "resmgr",
+		Region:       c.Region,
+		Availability: gophercloud.AvailabilityPublic,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pcd: locating resmgr endpoint: %w", err)
+	}
+	client := &gophercloud.ServiceClient{
+		ProviderClient: c.Provider,
+		Endpoint:       strings.TrimRight(url, "/") + "/v2/",
+		Type:           "resmgr",
+	}
+	c.applyOverride(client, "resmgr")
+	return client, nil
+}
+
 // LoadBalancerV2Client returns an Octavia v2 service client, honoring an
 // endpoint_overrides entry for the "load-balancer" service type if present.
 func (c *Config) LoadBalancerV2Client() (*gophercloud.ServiceClient, error) {

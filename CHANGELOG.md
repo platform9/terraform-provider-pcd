@@ -90,6 +90,13 @@ All notable changes to this project are documented here. The format is based on
   provider). Imported by a composite `<project_id>/<region>` ID (legacy bare `<project_id>` is
   also accepted). Cinder per-volume-type quotas (`volume_type_quota`) are not yet implemented.
 
+- Cluster blueprint / host management (PCD `resmgr` API — the first non-OpenStack, non-gophercloud
+  service): a thin `resmgr` v2 REST client (`clients.Config.ResmgrV2Client()`, endpoint resolved
+  from the Keystone catalog, token via the shared ProviderClient) plus `pcd_host_config` (interface
+  ↔ traffic-type mapping and physical-network labels), `pcd_host_role` (assign a role such as
+  `pf9-ostackhost-neutron` to a host), `pcd_host_config_assignment` (attach a host config to a host),
+  and a `pcd_cluster_blueprint` data source (read a blueprint by name). The `pcd_cluster_blueprint`
+  resource (write path) is tracked separately — see DECISIONS.md.
 - Registry documentation generation wired via `tfplugindocs` (`make generate`) — renders
   `docs/` for every resource and data source plus the provider index from schema
   descriptions. Generated docs are produced on demand / at release and are not committed.

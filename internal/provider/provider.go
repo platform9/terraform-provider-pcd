@@ -18,6 +18,7 @@ import (
 	"github.com/platform9/terraform-provider-pcd/internal/services/keymanager"
 	"github.com/platform9/terraform-provider-pcd/internal/services/loadbalancer"
 	"github.com/platform9/terraform-provider-pcd/internal/services/networking"
+	"github.com/platform9/terraform-provider-pcd/internal/services/resmgr"
 )
 
 // Ensure pcdProvider satisfies the provider.Provider interface.
@@ -90,6 +91,9 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		dns.NewRecordSetResource,
 		keymanager.NewSecretResource,
 		keymanager.NewContainerResource,
+		resmgr.NewHostConfigResource,
+		resmgr.NewHostRoleResource,
+		resmgr.NewHostConfigAssignmentResource,
 	}
 }
 
@@ -119,5 +123,6 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		loadbalancer.NewLoadBalancerDataSource,
 		dns.NewZoneDataSource,
 		keymanager.NewSecretDataSource,
+		resmgr.NewBlueprintDataSource,
 	}
 }
