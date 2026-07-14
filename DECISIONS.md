@@ -117,13 +117,39 @@ catalog endpoint and reuses the authenticated ProviderClient for tokens (verifie
 against the CE lab). Shipped: `pcd_host_config`, `pcd_host_role`,
 `pcd_host_config_assignment`, and a `pcd_cluster_blueprint` **data source**.
 
-**The `pcd_cluster_blueprint` resource (write path) is deliberately deferred to a focused
-follow-up.** Its object is uniquely hairy: a full-object `PUT` (partial models risk
-clearing fields), a `storageBackends` map that carries **plaintext driver credentials**,
-and create semantics (`POST` vs `PUT`) that cannot be safely verified without mutating the
-lab's single working blueprint. It deserves its own careful pass. The mutating resmgr
-resources' acceptance tests are opt-in (`PCD_ACC_RESMGR`) so they never touch a live
-cluster by accident.
+The mutating resmgr resources' acceptance tests are opt-in (`PCD_ACC_RESMGR`) so they never
+touch a live cluster by accident.
+
+### Kubernetes (PCD-K / Cluster-API) — OUT OF SCOPE (2026-07-13)
+
+The `kubernetes` api-docs service (`pcd_kubernetes_cluster` — a Cluster-API `Cluster` with
+ClusterClass topology) is **deliberately out of scope** for this provider. It is a
+fundamentally different API model (CAPI/Kubernetes-native, not the OpenStack/resmgr REST
+shape everything else uses) and targets a different audience; it belongs in a dedicated
+CAPI/Kubernetes provider, not this IaaS provider. Decision by the maintainer. Revisit only
+if there is explicit demand to manage PCD-K clusters as Terraform resources here.
+
+### `pcd_cluster_blueprint` resource — NOT SHIPPED; blueprint write API is not viable (2026-07-13)
+
+Attempted the write resource and drove the live `resmgr/v2` blueprint API directly (the lab
+blueprint was made freely mutable for this). Findings on CE 2026.4:
+
+- **Create** (`POST /blueprint`) works, but only with a *complete* object that includes a
+  valid, non-empty `storageBackends`. Any partial object — missing scalar fields, or an
+  empty/`null` `storageBackends` — returns an opaque **HTTP 500** (not a validation 400),
+  giving no guidance on what is required.
+- **Delete** (`DELETE /blueprint/{name}`) works.
+- **Update has no working path.** The documented `PUT /blueprint/{clusterName}` returns
+  **404 even for a blueprint that exists**; `POST /blueprint/{name}` → 404, `PATCH` → 405,
+  `PUT /blueprint` → 500, and a repeat `POST /blueprint` → 404. Nothing edits an existing
+  blueprint in place.
+
+A Terraform resource is not viable on this API: with no working update it would have to
+force-replace on every change, and replacing a cluster-defining object (that hosts/clusters
+depend on) is dangerous — while create is itself fragile (opaque 500s). So the write
+resource is **not shipped**; the `pcd_cluster_blueprint` **data source** (read) is the
+supported surface, and blueprints are authored via the PCD UI wizard. Revisit if a later CE
+build fixes the blueprint update path (and returns proper validation errors on create).
 
 ## 2026-07-12 — backed out code PCD does not ship (VPNaaS, Octavia L7)
 
