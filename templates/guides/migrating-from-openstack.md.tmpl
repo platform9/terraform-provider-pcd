@@ -78,6 +78,19 @@ So `openstack_networking_network_v2` becomes `pcd_networking_network`.
 Not every OpenStack resource has a PCD equivalent yet; unported resources are
 tracked on the project roadmap.
 
+## Beyond OpenStack: PCD-native resources
+
+The PCD provider also ships resources that have **no `openstack_*` equivalent** — they
+manage Platform9's own control plane (the `resmgr` service) rather than an OpenStack
+service. There is nothing to migrate *from*; these are net-new capability:
+
+- **`pcd_cluster_blueprint`** — the region's cluster blueprint (networking type, virtual-
+  network segmentation, image-library and VM storage, Cinder backends, VM HA, auto-
+  rebalancing). PCD keeps one per region, so `terraform import` it and manage in place.
+- **`pcd_host_config`** — a host's traffic-type-to-interface mapping and network labels.
+- **`pcd_host_role`** — assign a PCD role (e.g. `pf9-ostackhost-neutron`) to a host.
+- **`pcd_host_config_assignment`** — attach a host configuration to a host.
+
 ## Behavioral notes
 
 A few resources differ slightly from their upstream counterparts:
@@ -90,6 +103,11 @@ A few resources differ slightly from their upstream counterparts:
   system/read-only properties are ignored to avoid a perpetual diff.
 - **`pcd_networking_floatingip`** — allocate from an external network by its name
   via `pool`, exactly as upstream.
+- **`pcd_lb_loadbalancer`** and the LB tree — PCD ships only the **OVN** Octavia provider,
+  which is Layer 4. `loadbalancer_provider` defaults to `ovn`; use TCP/UDP/SCTP listener
+  protocols and OVN-supported pool algorithms. There are no L7 policy/rule resources
+  (`openstack_lb_l7policy_v2` / `_l7rule_v2` have no PCD equivalent) because OVN does not
+  do L7.
 
 ## Moving existing infrastructure
 

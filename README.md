@@ -2,14 +2,32 @@
 
 A first-party Terraform provider for **Platform9 Private Cloud Director (PCD)**.
 
-It manages the OpenStack services PCD exposes — compute (Nova), networking (Neutron),
-block storage (Cinder), images (Glance), identity (Keystone) — plus PCD-specific
-surfaces: host and cluster management (`resmgr`), VM leases (`mors`), and VM high
-availability (`hamgr`).
+It manages the OpenStack services PCD exposes — identity (Keystone), compute (Nova),
+networking (Neutron, including QoS and quotas), block storage (Cinder), images (Glance),
+load balancing (Octavia / OVN), DNS (Designate), and key management (Barbican) — **and,
+uniquely, the PCD-native infrastructure the standard OpenStack provider cannot manage:
+cluster blueprints and host configuration/roles via the Platform9 `resmgr` API** (see
+[PCD-native resources](#pcd-native-resources)).
 
 > **Status: pre-release, under active development.** Not yet published to the Terraform
-> Registry. Resource coverage is being built out in phases (core IaaS parity →
-> PCD-specific → extended parity).
+> Registry.
+
+## PCD-native resources
+
+These are the value-add over [`terraform-provider-openstack`](https://github.com/terraform-provider-openstack/terraform-provider-openstack):
+they manage Platform9's own control plane (the `resmgr` service), so you can declare a
+PCD region's cluster topology and host onboarding as code — something no OpenStack provider
+can do.
+
+| Resource | What it manages |
+|---|---|
+| `pcd_cluster_blueprint` | The region's **cluster blueprint** — the shared config every virtualized cluster inherits: networking type (OVN/OVS), virtual-network segmentation range, image-library and VM storage, Cinder backends, VM HA, and auto-rebalancing. PCD keeps one per region, so the usual flow is `terraform import` then manage in place. Also available read-only as the `pcd_cluster_blueprint` data source. |
+| `pcd_host_config` | A **host configuration** — the mapping of each traffic type (management, VM console, tunneling, image library, live migration) to a network interface, plus physical-network labels. |
+| `pcd_host_role` | Assigns a **PCD role** (e.g. `pf9-ostackhost-neutron`) to an onboarded host. |
+| `pcd_host_config_assignment` | Attaches a host configuration to a host. |
+
+Everything else mirrors `terraform-provider-openstack` closely (attribute names, import IDs,
+`OS_*` env), so migrating an existing OpenStack configuration is largely mechanical.
 
 ## Compatibility
 
