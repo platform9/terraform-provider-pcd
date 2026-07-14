@@ -17,8 +17,7 @@ All notable changes to this project are documented here. The format is based on
 - Data source `pcd_identity_auth_scope` (ported from
   `openstack_identity_auth_scope_v3`) — reports the current token's user, project,
   domain, and roles.
-- Committed CE 2026.4 compatibility evidence from Step 0 preflight
-  (`docs/compatibility/ce-2026.4.md`).
+- Verified CE 2026.4 compatibility from Step 0 preflight.
 - Acceptance test harness (`internal/acctest`: protocol-6 provider factory + `PreCheck`)
   and the first acceptance test for `pcd_identity_auth_scope` (passes against the CE lab).
 - `test.yml` CI: build, vet, gofmt, unit tests, and `terraform fmt` on examples.
@@ -38,7 +37,7 @@ All notable changes to this project are documented here. The format is based on
   pairs, tags) and `pcd_networking_floatingip` (allocate from an external network by
   `pool` name, associate/disassociate to a port); data sources `pcd_networking_port`,
   `_port_ids`, `_router`, `_subnet_ids`, and `_floatingip`. Ports and floating IPs are
-  code-complete with acceptance tests; see DECISIONS.md for live-validation status.
+  code-complete with acceptance tests.
 - Networking route and association resources: `pcd_networking_router_route` and
   `pcd_networking_subnet_route` (manage a single static/host route without disturbing
   others, serialized per parent to avoid clobbering); `pcd_networking_port_secgroup_associate`
@@ -56,8 +55,8 @@ All notable changes to this project are documented here. The format is based on
   `pcd_compute_interface_attach` (attach a port/network to a server) and
   `pcd_compute_volume_attach` (attach a Cinder volume to a server).
 - Block storage (Cinder v3): `pcd_blockstorage_volume` resource (create/extend/import;
-  code-complete — acceptance is blocked on the CE lab having no storage backend, see
-  DECISIONS.md) and `pcd_blockstorage_volume` / `pcd_blockstorage_snapshot` data sources.
+  code-complete — acceptance is blocked on the CE lab having no storage backend) and
+  `pcd_blockstorage_volume` / `pcd_blockstorage_snapshot` data sources.
 - Block storage gap resources (close api-docs coverage): `pcd_blockstorage_volume_type`
   (name/description/`is_public`/`extra_specs`, with in-place spec add/change/remove via the
   extra-specs sub-API — needs no storage backend), `pcd_blockstorage_snapshot` (was

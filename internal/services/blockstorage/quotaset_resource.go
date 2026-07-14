@@ -5,7 +5,7 @@
 // (openstack/resource_openstack_blockstorage_quotaset_v3.go), adapted for the
 // terraform-plugin-framework and PCD. The upstream resource also exposes a
 // per-volume-type quota map (volume_type_quota); that is deliberately deferred
-// (see DECISIONS.md) and this resource manages the scalar quotas only.
+// and this resource manages the scalar quotas only.
 
 package blockstorage
 

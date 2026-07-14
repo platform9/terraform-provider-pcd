@@ -20,7 +20,7 @@ import (
 // TestAccBlockStorageVolume_basic exercises create (wait for available), extend,
 // and import. It requires a working Cinder storage backend on the target cloud;
 // on the CE lab used during development there is none configured, so volumes go
-// straight to ERROR (see DECISIONS.md).
+// straight to ERROR.
 func TestAccBlockStorageVolume_basic(t *testing.T) {
 	const rn = "pcd_blockstorage_volume.test"
 
