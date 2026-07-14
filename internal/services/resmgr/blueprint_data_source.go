@@ -53,7 +53,19 @@ type blueprintAPI struct {
 	ImageLibrarySharedStorage bool                  `json:"imageLibrarySharedStorage"`
 	InstanceSharedStorage     bool                  `json:"instanceSharedStorage"`
 	VMStorage                 string                `json:"vmStorage"`
+	VMHighAvailability        *haAPI                `json:"vmHighAvailability"`
+	AutoResourceRebalancing   *rebalanceAPI         `json:"autoResourceRebalancing"`
 	StorageBackends           json.RawMessage       `json:"storageBackends"`
+}
+
+type haAPI struct {
+	Enabled bool `json:"enabled"`
+}
+
+type rebalanceAPI struct {
+	Enabled                  bool   `json:"enabled"`
+	RebalancingStrategy      string `json:"rebalancingStrategy"`
+	RebalancingFrequencyMins int64  `json:"rebalancingFrequencyMins"`
 }
 
 type virtualNetworkingAPI struct {

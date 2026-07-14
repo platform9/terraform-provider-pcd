@@ -129,27 +129,30 @@ shape everything else uses) and targets a different audience; it belongs in a de
 CAPI/Kubernetes provider, not this IaaS provider. Decision by the maintainer. Revisit only
 if there is explicit demand to manage PCD-K clusters as Terraform resources here.
 
-### `pcd_cluster_blueprint` resource — NOT SHIPPED; blueprint write API is not viable (2026-07-13)
+### `pcd_cluster_blueprint` resource — SHIPPED (2026-07-13; supersedes the earlier "not viable" call)
 
-Attempted the write resource and drove the live `resmgr/v2` blueprint API directly (the lab
-blueprint was made freely mutable for this). Findings on CE 2026.4:
+An earlier pass concluded the blueprint write API had no working update path. **That was
+wrong** — it was an artifact of the single-blueprint CE lab. PCD supports **one blueprint per
+region**; the earlier update test created a *second* blueprint on the CE lab (a state PCD
+does not really support), whose `PUT /blueprint/{name}` then 404'd. Re-tested against a demo
+environment that has a single real blueprint (`cluster-1`):
 
-- **Create** (`POST /blueprint`) works, but only with a *complete* object that includes a
-  valid, non-empty `storageBackends`. Any partial object — missing scalar fields, or an
-  empty/`null` `storageBackends` — returns an opaque **HTTP 500** (not a validation 400),
-  giving no guidance on what is required.
-- **Delete** (`DELETE /blueprint/{name}`) works.
-- **Update has no working path.** The documented `PUT /blueprint/{clusterName}` returns
-  **404 even for a blueprint that exists**; `POST /blueprint/{name}` → 404, `PATCH` → 405,
-  `PUT /blueprint` → 500, and a repeat `POST /blueprint` → 404. Nothing edits an existing
-  blueprint in place.
+- **Update** (`PUT /blueprint/{name}`) **works** — verified end-to-end through the provider:
+  `terraform import` the existing blueprint, `plan` is clean (round-trip correct), then an
+  in-place `apply` changed `dns_domain_name` (`0 added, 1 changed, 0 destroyed`, confirmed via
+  the API), and was reverted. No replace.
+- **Create** (`POST /blueprint`) works but requires a *complete* object with a valid,
+  non-empty `storageBackends` (partial/empty → opaque 500). The resource therefore requires
+  `storage_backends_json` on create and builds a full-object body.
+- **Delete** works.
 
-A Terraform resource is not viable on this API: with no working update it would have to
-force-replace on every change, and replacing a cluster-defining object (that hosts/clusters
-depend on) is dangerous — while create is itself fragile (opaque 500s). So the write
-resource is **not shipped**; the `pcd_cluster_blueprint` **data source** (read) is the
-supported surface, and blueprints are authored via the PCD UI wizard. Revisit if a later CE
-build fixes the blueprint update path (and returns proper validation errors on create).
+Design: the resource sends the whole object on every write (the API requires it), so all
+attributes are `Optional+Computed` and round-tripped from the server. The common workflow is
+**import the existing blueprint, then manage it** (there is normally only one). `name` is
+`ForceNew`. `storage_backends_json` is `Sensitive` (plaintext driver credentials) and read
+back from the server so the required complete-object write always carries the current
+backends; leave it unset to preserve them, set it (in the server's canonical nested shape)
+only to change them. Mutating acc tests stay opt-in (`PCD_ACC_RESMGR`).
 
 ## 2026-07-12 — backed out code PCD does not ship (VPNaaS, Octavia L7)
 

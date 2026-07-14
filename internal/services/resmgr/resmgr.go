@@ -41,6 +41,20 @@ func getJSON(ctx context.Context, client *gophercloud.ServiceClient, url string,
 	return err
 }
 
+// postJSON issues an authenticated POST with a JSON body, optionally decoding
+// the response into out (pass nil to ignore the body).
+func postJSON(ctx context.Context, client *gophercloud.ServiceClient, url string, body, out any) error {
+	_, err := client.Post(ctx, url, body, out, &gophercloud.RequestOpts{OkCodes: []int{200, 201, 202}})
+	return err
+}
+
+// putJSON issues an authenticated PUT with a JSON body, optionally decoding the
+// response into out (pass nil to ignore the body).
+func putJSON(ctx context.Context, client *gophercloud.ServiceClient, url string, body, out any) error {
+	_, err := client.Put(ctx, url, body, out, &gophercloud.RequestOpts{OkCodes: []int{200, 201, 202, 204}})
+	return err
+}
+
 // isNotFound reports whether err is an HTTP 404.
 func isNotFound(err error) bool {
 	return gophercloud.ResponseCodeIs(err, http.StatusNotFound)
