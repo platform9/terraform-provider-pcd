@@ -103,6 +103,28 @@ Both PENDING items are lab-side configuration gaps (Platform9 / lab-ops), not pr
 defects; their acceptance tests flip green on a properly-configured PCD cloud.
 
 
+## 2026-07-13 — api-docs coverage: PCD-native services (resmgr / cluster blueprint)
+
+An audit of `docs.platform9.com/api-docs` (7 services) vs the provider found the
+OpenStack-service families fully/near-covered, but two PCD-native services entirely
+unbuilt: **cluster-blueprint** (`resmgr/v2`) and **kubernetes** (PCD-K/CAPI). Tier-2
+gaps (blockstorage volume_type/snapshot/backup, identity group) were closed first
+(#26, #27).
+
+For the cluster-blueprint family, `resmgr` is the first **non-OpenStack** service, so it
+gets a hand-written REST client (`Config.ResmgrV2Client()`) that resolves the `resmgr`
+catalog endpoint and reuses the authenticated ProviderClient for tokens (verified live
+against the CE lab). Shipped: `pcd_host_config`, `pcd_host_role`,
+`pcd_host_config_assignment`, and a `pcd_cluster_blueprint` **data source**.
+
+**The `pcd_cluster_blueprint` resource (write path) is deliberately deferred to a focused
+follow-up.** Its object is uniquely hairy: a full-object `PUT` (partial models risk
+clearing fields), a `storageBackends` map that carries **plaintext driver credentials**,
+and create semantics (`POST` vs `PUT`) that cannot be safely verified without mutating the
+lab's single working blueprint. It deserves its own careful pass. The mutating resmgr
+resources' acceptance tests are opt-in (`PCD_ACC_RESMGR`) so they never touch a live
+cluster by accident.
+
 ## 2026-07-12 — backed out code PCD does not ship (VPNaaS, Octavia L7)
 
 Live inspection of the CE lab's service catalog (all 14 services + the Octavia provider
