@@ -95,8 +95,13 @@ All notable changes to this project are documented here. The format is based on
   from the Keystone catalog, token via the shared ProviderClient) plus `pcd_host_config` (interface
   ↔ traffic-type mapping and physical-network labels), `pcd_host_role` (assign a role such as
   `pf9-ostackhost-neutron` to a host), `pcd_host_config_assignment` (attach a host config to a host),
-  and a `pcd_cluster_blueprint` data source (read a blueprint by name). The `pcd_cluster_blueprint`
-  resource (write path) is tracked separately — see DECISIONS.md.
+  and a `pcd_cluster_blueprint` data source (read a blueprint by name).
+- `pcd_cluster_blueprint` resource — manage a cluster blueprint (networking, image library, VM
+  storage, HA/rebalancing, and Cinder backends). PCD supports one blueprint per region, so the
+  usual workflow is to `terraform import` the existing blueprint and manage it in place (in-place
+  update verified live). The write API requires the whole object, so all attributes are
+  `Optional+Computed` and round-tripped; `storage_backends_json` is sensitive (driver credentials)
+  and is read back so writes preserve the current backends unless you change it.
 - Registry documentation generation wired via `tfplugindocs` (`make generate`) — renders
   `docs/` for every resource and data source plus the provider index from schema
   descriptions. Generated docs are produced on demand / at release and are not committed.
