@@ -34,12 +34,14 @@ terraform.rc
 PCD-CE-Deployment-Handoff.md
 
 # Local, untracked working-dir docs (kept on the developer's machine, never committed):
-# CLAUDE.md guidance and the comprehensive live-validation record.
+# maintainer-internal notes and evidence that are not appropriate for the public repo.
 CLAUDE.md
 PCD-Terraform-Provider-Validation-Status.md
+DECISIONS.md
+docs/compatibility/ce-2026.4.md
 
 # Generated registry docs — produced by `make generate` (tfplugindocs) on demand and
-# at release time; not committed. (docs/compatibility/ is hand-written and kept.)
+# at release time; not committed.
 # Guides are authored in templates/guides/ and rendered into docs/guides/.
 /docs/index.md
 /docs/resources/
