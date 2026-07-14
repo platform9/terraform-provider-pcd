@@ -33,6 +33,11 @@ terraform.rc
 # The CE deployment handoff must never enter the repo
 PCD-CE-Deployment-Handoff.md
 
+# Local, untracked working-dir docs (kept on the developer's machine, never committed):
+# CLAUDE.md guidance and the comprehensive live-validation record.
+CLAUDE.md
+PCD-Terraform-Provider-Validation-Status.md
+
 # Generated registry docs — produced by `make generate` (tfplugindocs) on demand and
 # at release time; not committed. (docs/compatibility/ is hand-written and kept.)
 # Guides are authored in templates/guides/ and rendered into docs/guides/.
