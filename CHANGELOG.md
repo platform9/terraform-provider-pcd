@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-07
+
+Initial public release: a first-party Terraform provider for Platform9 Private Cloud
+Director, covering the OpenStack services PCD exposes plus PCD-native cluster/host
+management (`resmgr`) that has no OpenStack-provider equivalent.
+
 ### Added
 - Initial provider scaffold (`terraform-plugin-framework`, protocol 6), module
   `github.com/platform9/terraform-provider-pcd`, registry address `platform9/pcd`.
