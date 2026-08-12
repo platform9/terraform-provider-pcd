@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-11
+
+### Changed
+- Render the provider name as **PCD** (not `pcd`) in generated documentation titles — the
+  overview page heading is now "PCD Provider" and each resource/data-source page title reads
+  "… - PCD". Done via `tfplugindocs --rendered-provider-name PCD` (wired into `make generate`
+  and the CI docs job). Resource/data-source *type* names (`pcd_*`) are unchanged, as is the
+  provider's registry address `platform9/pcd`. Docs-only; no provider behavior change.
+
 ## [0.1.1] - 2026-08-11
 
 ### Changed

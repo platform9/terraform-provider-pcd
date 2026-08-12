@@ -56,7 +56,7 @@ jobs:
       # Generated docs are not committed; this verifies tfplugindocs still renders
       # cleanly from the schema descriptions (catches broken/missing descriptions).
       - name: generate docs
-        run: go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name pcd
+        run: go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name pcd --rendered-provider-name PCD
 
   release-config:
     name: goreleaser check

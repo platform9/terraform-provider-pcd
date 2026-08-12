@@ -30,7 +30,7 @@ fmt:
 
 # Regenerate registry docs from schema descriptions + examples (tfplugindocs).
 generate:
-	go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name pcd
+	go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name pcd --rendered-provider-name PCD
 
 # Remove lab resources left by failed acceptance runs (tf-acc- prefix). Added per family.
 sweep:
