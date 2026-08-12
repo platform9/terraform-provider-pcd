@@ -40,13 +40,11 @@ PCD-Terraform-Provider-Validation-Status.md
 DECISIONS.md
 docs/compatibility/ce-2026.4.md
 
-# Generated registry docs — produced by `make generate` (tfplugindocs) on demand and
-# at release time; not committed.
-# Guides are authored in templates/guides/ and rendered into docs/guides/.
-/docs/index.md
-/docs/resources/
-/docs/data-sources/
-/docs/guides/
+# Generated registry docs (docs/index.md, docs/resources/, docs/data-sources/, docs/guides/)
+# ARE committed: the Terraform Registry renders provider documentation from the docs/ tree at
+# the release tag, so it must be in the repo. Regenerate with `make generate` (tfplugindocs)
+# and commit the result. Only the maintainer-internal docs/compatibility/ note above stays
+# untracked.
 
 # Editors / OS
 .idea/

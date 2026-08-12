@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-11
+
+### Changed
+- Commit the generated registry documentation (`docs/`) so the Terraform Registry renders the
+  provider's resource, data-source, and guide pages. v0.1.0 shipped without a committed `docs/`
+  tree — the Registry builds documentation from the repository at the release tag, so its
+  "Documentation" tab was empty. The docs are now generated with `tfplugindocs` (`make generate`)
+  from the schema descriptions, `examples/`, and `templates/`, and committed. No provider
+  behavior change.
+
 ## [0.1.0] - 2026-08-07
 
 Initial public release: a first-party Terraform provider for Platform9 Private Cloud
