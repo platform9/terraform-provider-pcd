@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **`pcd_host_role` could not assign a role at all.** Create and Delete issued
+  `PUT`/`DELETE /resmgr/v2/hosts/<id>/roles/<name>`, but resmgr exposes no writable roles
+  sub-resource on v2 and answers `404 RoleNotFound`; role assignment lives only on v1. Every
+  `pcd_host_role` apply failed against PCD 2026.4. The resource now uses a v1 client.
+  Blueprints and host configs are unaffected — they exist only on v2 (`/resmgr/v1/blueprint`
+  and `/resmgr/v1/hostconfigs` both 404) and continue to use it.
+- **`pcd_host_role` reported permanent drift**, which would have persisted even once the
+  write path was fixed. Read compared the configured role name against `GET /v2/hosts/<id>`,
+  whose `roles` are mapped "uber-roles" (`hypervisor`) rather than the granular `pf9-*` names
+  a role is assigned by, so the match never succeeded and Terraform removed the resource from
+  state and recreated it on every plan. Read now uses v1, which reports granular names.
+- **`pcd_cluster_blueprint` showed a `storage_backends_json` diff on every plan.** resmgr
+  echoes the blob with its own spacing and in insertion order, while `jsonencode()` emits
+  compact output with sorted keys — semantically identical, textually different, so Terraform
+  reported an in-place update that never converged. The read-back is now canonicalised
+  (compact, keys sorted) in both the resource and the data source.
+
+### Added
+- `Config.ResmgrV1Client()` alongside `ResmgrV2Client()`. An `endpoint_overrides` entry for
+  `resmgr` now names the service rather than one of its API versions: the required version is
+  applied to it, replacing any version the override already carries, so a single override
+  serves both clients.
+
 ## [0.1.3] - 2026-08-14
 
 ### Changed

@@ -345,7 +345,7 @@ func (r *blueprintResource) setState(m *blueprintResourceModel, bp *blueprintAPI
 	}
 
 	if len(bp.StorageBackends) > 0 && string(bp.StorageBackends) != "null" {
-		m.StorageBackendsJSON = types.StringValue(string(bp.StorageBackends))
+		m.StorageBackendsJSON = types.StringValue(canonicalJSON(bp.StorageBackends))
 	} else {
 		m.StorageBackendsJSON = types.StringNull()
 	}

@@ -68,7 +68,7 @@ func (r *hostRoleResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	client, err := r.config.ResmgrV2Client()
+	client, err := r.config.ResmgrV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("resmgr: building client", err.Error())
 		return
@@ -93,7 +93,7 @@ func (r *hostRoleResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
-	client, err := r.config.ResmgrV2Client()
+	client, err := r.config.ResmgrV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("resmgr: building client", err.Error())
 		return
@@ -129,7 +129,7 @@ func (r *hostRoleResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
-	client, err := r.config.ResmgrV2Client()
+	client, err := r.config.ResmgrV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("resmgr: building client", err.Error())
 		return
