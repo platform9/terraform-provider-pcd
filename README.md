@@ -9,9 +9,6 @@ uniquely, the PCD-native infrastructure the standard OpenStack provider cannot m
 cluster blueprints and host configuration/roles via the Platform9 `resmgr` API** (see
 [PCD-native resources](#pcd-native-resources)).
 
-> **Status: pre-release, under active development.** Not yet published to the Terraform
-> Registry.
-
 ## PCD-native resources
 
 These are the value-add over [`terraform-provider-openstack`](https://github.com/terraform-provider-openstack/terraform-provider-openstack):

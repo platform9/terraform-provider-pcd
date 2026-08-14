@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-14
+
+### Changed
+- Drop the stale "pre-release, not yet published to the Terraform Registry" status note from
+  the README — the provider has been published at
+  [`platform9/pcd`](https://registry.terraform.io/providers/platform9/pcd) since v0.1.0.
+  Docs-only; no provider behavior change.
+
 ## [0.1.2] - 2026-08-11
 
 ### Changed
