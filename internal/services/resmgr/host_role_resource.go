@@ -47,8 +47,14 @@ func (r *hostRoleResource) Metadata(_ context.Context, req resource.MetadataRequ
 func (r *hostRoleResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	forceNew := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Assigns a PCD role (e.g. `pf9-ostackhost-neutron`) to a host. Use one resource per " +
-			"host↔role pair. Role-specific settings are applied with their defaults.",
+		MarkdownDescription: "Assigns a granular PCD role (e.g. `pf9-ostackhost-neutron`) to a host via the low-level " +
+			"resmgr v1 API. Use one resource per host↔role pair. Role settings are applied with their defaults.\n\n" +
+			"~> **Onboard hosts with `pcd_host_cluster_role` instead.** Cluster roles (`hypervisor`, `image-library`, " +
+			"`persistent-storage`, `dns`) make the control plane compute each granular role's settings from the cluster " +
+			"blueprint and host configuration. This resource applies a role's *default* settings, and for roles whose " +
+			"settings are required — notably `pf9-cindervolume-config`, whose default `backends` is empty — that " +
+			"produces a convergence failure that blocks every role on the host and cannot be repaired while the host " +
+			"is converging (resmgr answers 409). Reserve this resource for roles that genuinely take no settings.",
 		Attributes: map[string]schema.Attribute{
 			"id":        schema.StringAttribute{Computed: true, MarkdownDescription: "The composite `<host_id>/<role_name>` ID.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
 			"host_id":   schema.StringAttribute{Required: true, MarkdownDescription: "The host to assign the role to. Changing this forces a new resource.", PlanModifiers: forceNew},

@@ -3,12 +3,15 @@
 page_title: "pcd_host_role Resource - PCD"
 subcategory: "Cluster Blueprint"
 description: |-
-  Assigns a PCD role (e.g. pf9-ostackhost-neutron) to a host. Use one resource per host↔role pair. Role-specific settings are applied with their defaults.
+  Assigns a granular PCD role (e.g. pf9-ostackhost-neutron) to a host via the low-level resmgr v1 API. Use one resource per host↔role pair. Role settings are applied with their defaults.
+  ~> Onboard hosts with pcd_host_cluster_role instead. Cluster roles (hypervisor, image-library, persistent-storage, dns) make the control plane compute each granular role's settings from the cluster blueprint and host configuration. This resource applies a role's default settings, and for roles whose settings are required — notably pf9-cindervolume-config, whose default backends is empty — that produces a convergence failure that blocks every role on the host and cannot be repaired while the host is converging (resmgr answers 409). Reserve this resource for roles that genuinely take no settings.
 ---
 
 # pcd_host_role (Resource)
 
-Assigns a PCD role (e.g. `pf9-ostackhost-neutron`) to a host. Use one resource per host↔role pair. Role-specific settings are applied with their defaults.
+Assigns a granular PCD role (e.g. `pf9-ostackhost-neutron`) to a host via the low-level resmgr v1 API. Use one resource per host↔role pair. Role settings are applied with their defaults.
+
+~> **Onboard hosts with `pcd_host_cluster_role` instead.** Cluster roles (`hypervisor`, `image-library`, `persistent-storage`, `dns`) make the control plane compute each granular role's settings from the cluster blueprint and host configuration. This resource applies a role's *default* settings, and for roles whose settings are required — notably `pf9-cindervolume-config`, whose default `backends` is empty — that produces a convergence failure that blocks every role on the host and cannot be repaired while the host is converging (resmgr answers 409). Reserve this resource for roles that genuinely take no settings.
 
 ## Example Usage
 

@@ -92,8 +92,10 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		keymanager.NewSecretResource,
 		keymanager.NewContainerResource,
 		resmgr.NewBlueprintResource,
+		resmgr.NewClusterResource,
 		resmgr.NewHostConfigResource,
 		resmgr.NewHostRoleResource,
+		resmgr.NewHostClusterRoleResource,
 		resmgr.NewHostConfigAssignmentResource,
 	}
 }

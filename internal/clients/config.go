@@ -193,10 +193,27 @@ func (c *Config) IdentityV3Client() (*gophercloud.ServiceClient, error) {
 
 // ImageV2Client returns a Glance v2 service client, honoring an endpoint_overrides
 // entry for the "image" service type if present.
+//
+// PCD runs two Glance deployments sharing one database: a control-plane pod
+// behind the public endpoint whose default store is pod-local `file`, and the
+// image-library host's Glance behind the ADMIN endpoint, backed by the storage
+// the cluster blueprint declares. An image uploaded through the public endpoint
+// lands in the pod's local store, where no hypervisor can fetch it — the boot
+// then fails with "Image not found in any configured backend". The PCD UI
+// uploads via the admin endpoint for exactly this reason, so this client
+// prefers it too, falling back to the public endpoint only when no admin
+// endpoint is in the catalog. Deployments where the admin endpoint is not
+// routable from where Terraform runs should set `endpoint_overrides.image` to
+// a reachable URL for the image-library host's Glance.
 func (c *Config) ImageV2Client() (*gophercloud.ServiceClient, error) {
-	client, err := openstack.NewImageV2(c.Provider, c.endpointOpts())
+	opts := c.endpointOpts()
+	opts.Availability = gophercloud.AvailabilityAdmin
+	client, err := openstack.NewImageV2(c.Provider, opts)
 	if err != nil {
-		return nil, fmt.Errorf("pcd: creating image v2 client: %w", err)
+		client, err = openstack.NewImageV2(c.Provider, c.endpointOpts())
+		if err != nil {
+			return nil, fmt.Errorf("pcd: creating image v2 client: %w", err)
+		}
 	}
 	c.applyOverride(client, "image")
 	return client, nil

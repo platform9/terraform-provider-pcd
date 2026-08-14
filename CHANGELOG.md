@@ -25,10 +25,35 @@ All notable changes to this project are documented here. The format is based on
   (compact, keys sorted) in both the resource and the data source.
 
 ### Added
+- **New resource `pcd_host_cluster_role`** — assigns PCD *cluster roles* (`hypervisor`,
+  `image-library`, `persistent-storage`, `dns`) via the resmgr v2 uber-role API, the same
+  call the PCD UI onboards hosts with. The control plane expands a cluster role into its
+  granular `pf9-*` roles and computes their settings from the cluster blueprint and the
+  host's host configuration (`persistent-storage` takes a `backends` list naming entries in
+  the blueprint's `storage_backends_json`; `hypervisor` takes `host_cluster`, which PCD
+  2026.4 requires). An optional `wait_until_converged` blocks until the host reports
+  `role_status = ok` — tolerating the transient `failed` flaps normal onboarding produces —
+  so a single configuration can onboard a hypervisor and boot instances on it in one apply.
+  Assignment and removal retry through resmgr's transient `409 RoleUpdateConflict` while a
+  host is converging. This closes the gap that made a fresh region impossible to bring up
+  with Terraform alone: `pcd_host_role` applies granular roles with *default* settings,
+  which wedges the host on settings-bearing roles (see its documentation for when it is
+  still appropriate).
+- **New resource `pcd_cluster`** — manages PCD clusters (host clusters / host groups), the
+  unit hypervisors join and the scope for VM high-availability, auto-rebalancing, GPU, and
+  CPU-model settings. Required by `pcd_host_cluster_role`'s `hypervisor` role, whose
+  `host_cluster` names it.
 - `Config.ResmgrV1Client()` alongside `ResmgrV2Client()`. An `endpoint_overrides` entry for
   `resmgr` now names the service rather than one of its API versions: the required version is
   applied to it, replacing any version the override already carries, so a single override
   serves both clients.
+- **`pcd_networking_network` gains `segments`** — provider-network attributes (admin only),
+  mirroring `openstack_networking_network_v2`. A single segment creates a physical network
+  (`network_type` `flat`/`vlan` on a `physical_network` label, optional `segmentation_id`),
+  sent as top-level `provider:*` attributes; multiple segments use Neutron's multi-provider
+  `segments` form. Create-only and not refreshed from the API, matching the upstream
+  provider's behavior. Without this, provider networks — including any external network —
+  could not be created by Terraform at all.
 
 ## [0.1.3] - 2026-08-14
 

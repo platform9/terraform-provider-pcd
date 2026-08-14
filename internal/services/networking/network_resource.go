@@ -14,12 +14,14 @@ import (
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/external"
+	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/provider"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/networks"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -53,6 +55,13 @@ type networkModel struct {
 	TenantID     types.String `tfsdk:"tenant_id"`
 	Tags         types.Set    `tfsdk:"tags"`
 	Region       types.String `tfsdk:"region"`
+	Segments     types.List   `tfsdk:"segments"`
+}
+
+type segmentModel struct {
+	PhysicalNetwork types.String `tfsdk:"physical_network"`
+	NetworkType     types.String `tfsdk:"network_type"`
+	SegmentationID  types.Int64  `tfsdk:"segmentation_id"`
 }
 
 // networkExtended embeds the base network plus the external-router extension so
@@ -85,8 +94,60 @@ func (r *networkResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			},
 			"tags":   schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the network.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
 			"region": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"segments": schema.ListNestedAttribute{
+				Optional: true,
+				MarkdownDescription: "Provider-network segments (admin only). One segment creates a physical network " +
+					"(e.g. `network_type = \"flat\"` / `\"vlan\"` on a `physical_network` label from the host config); " +
+					"multiple segments create a multi-provider network. Create-only: segments are not refreshed from " +
+					"the API and cannot be imported. Changing this forces a new resource.",
+				PlanModifiers: []planmodifier.List{listplanmodifier.RequiresReplace()},
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"physical_network": schema.StringAttribute{Optional: true, MarkdownDescription: "The physical network label (e.g. `physnet1`, as mapped in the host configuration's `network_labels`)."},
+						"network_type":     schema.StringAttribute{Optional: true, MarkdownDescription: "The segment type: `flat`, `vlan`, `vxlan`, or `geneve`."},
+						"segmentation_id":  schema.Int64Attribute{Optional: true, MarkdownDescription: "The segmentation ID (e.g. VLAN ID). Omit for `flat`."},
+					},
+				},
+			},
 		},
 	}
+}
+
+// segmentsCreateOptsExt injects provider-network attributes into the create
+// body. A single segment is sent as top-level `provider:*` keys — the form
+// Neutron's provider extension expects for ordinary physical networks (and the
+// one OVN accepts); multiple segments use the multi-provider `segments` list.
+type segmentsCreateOptsExt struct {
+	networks.CreateOptsBuilder
+	segments []provider.Segment
+}
+
+func (o segmentsCreateOptsExt) ToNetworkCreateMap() (map[string]any, error) {
+	base, err := o.CreateOptsBuilder.ToNetworkCreateMap()
+	if err != nil {
+		return nil, err
+	}
+	net, ok := base["network"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("networking: unexpected create body shape (no network object)")
+	}
+	switch len(o.segments) {
+	case 0:
+	case 1:
+		s := o.segments[0]
+		if s.NetworkType != "" {
+			net["provider:network_type"] = s.NetworkType
+		}
+		if s.PhysicalNetwork != "" {
+			net["provider:physical_network"] = s.PhysicalNetwork
+		}
+		if s.SegmentationID != 0 {
+			net["provider:segmentation_id"] = s.SegmentationID
+		}
+	default:
+		net["segments"] = o.segments
+	}
+	return base, nil
 }
 
 func (r *networkResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -121,7 +182,23 @@ func (r *networkResource) Create(ctx context.Context, req resource.CreateRequest
 	var createOpts networks.CreateOptsBuilder = base
 	if !plan.External.IsNull() && !plan.External.IsUnknown() {
 		ext := plan.External.ValueBool()
-		createOpts = external.CreateOptsExt{CreateOptsBuilder: base, External: &ext}
+		createOpts = external.CreateOptsExt{CreateOptsBuilder: createOpts, External: &ext}
+	}
+	if !plan.Segments.IsNull() && !plan.Segments.IsUnknown() {
+		var segs []segmentModel
+		resp.Diagnostics.Append(plan.Segments.ElementsAs(ctx, &segs, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		providerSegs := make([]provider.Segment, 0, len(segs))
+		for _, s := range segs {
+			providerSegs = append(providerSegs, provider.Segment{
+				PhysicalNetwork: s.PhysicalNetwork.ValueString(),
+				NetworkType:     s.NetworkType.ValueString(),
+				SegmentationID:  int(s.SegmentationID.ValueInt64()),
+			})
+		}
+		createOpts = segmentsCreateOptsExt{CreateOptsBuilder: createOpts, segments: providerSegs}
 	}
 
 	n, err := networks.Create(ctx, client, createOpts).Extract()
