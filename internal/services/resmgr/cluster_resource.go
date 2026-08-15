@@ -57,11 +57,24 @@ var clusterCPUAttrTypes = map[string]attr.Type{
 
 // clusterAPI is the JSON body/response for /v2/clusters.
 type clusterAPI struct {
-	Name                    string         `json:"name"`
-	VMHighAvailability      *haAPI         `json:"vmHighAvailability,omitempty"`
-	AutoResourceRebalancing *rebalanceAPI  `json:"autoResourceRebalancing,omitempty"`
-	GPU                     *clusterGPUAPI `json:"gpu,omitempty"`
-	CPU                     *clusterCPUAPI `json:"cpu,omitempty"`
+	Name                    string               `json:"name"`
+	VMHighAvailability      *haAPI               `json:"vmHighAvailability,omitempty"`
+	AutoResourceRebalancing *clusterRebalanceAPI `json:"autoResourceRebalancing,omitempty"`
+	GPU                     *clusterGPUAPI       `json:"gpu,omitempty"`
+	CPU                     *clusterCPUAPI       `json:"cpu,omitempty"`
+}
+
+// clusterRebalanceAPI is the rebalancing block for /v2/clusters. The optional
+// leaves are pointers with omitempty on purpose: resmgr does no server-side
+// normalization — it stores exactly what it is sent and only applies its
+// defaults (rebalancingFrequencyMins 10) when a key is ABSENT. Marshalling Go
+// zero values for leaves the user did not configure would persist "" and 0 on
+// the server, and those then come back on every read as the "server value".
+// A null leaf must therefore be an absent key, not a zero.
+type clusterRebalanceAPI struct {
+	Enabled                  bool    `json:"enabled"`
+	RebalancingStrategy      *string `json:"rebalancingStrategy,omitempty"`
+	RebalancingFrequencyMins *int64  `json:"rebalancingFrequencyMins,omitempty"`
 }
 
 type clusterGPUAPI struct {
@@ -170,10 +183,7 @@ func (r *clusterResource) Create(ctx context.Context, req resource.CreateRequest
 		}
 	}
 
-	if readDiags := r.readInto(ctx, client, plan.Name.ValueString(), &plan); readDiags.HasError() {
-		resp.Diagnostics.AddWarning("resmgr: cluster created but read-back failed",
-			"The cluster was created; state reconciles on the next refresh.")
-	}
+	r.refresh(ctx, client, &plan, "cluster created", &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -199,7 +209,9 @@ func (r *clusterResource) Read(ctx context.Context, req resource.ReadRequest, re
 		resp.Diagnostics.AddError("resmgr: reading cluster", err.Error())
 		return
 	}
+	prior := state
 	resp.Diagnostics.Append(r.setState(&state, &c)...)
+	mergeConfiguredCluster(&state, &prior)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -225,10 +237,7 @@ func (r *clusterResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	if readDiags := r.readInto(ctx, client, plan.Name.ValueString(), &plan); readDiags.HasError() {
-		resp.Diagnostics.AddWarning("resmgr: cluster updated but read-back failed",
-			"The update was applied; state reconciles on the next refresh.")
-	}
+	r.refresh(ctx, client, &plan, "cluster updated", &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -257,6 +266,65 @@ func (r *clusterResource) ImportState(ctx context.Context, req resource.ImportSt
 	resource.ImportStatePassthroughID(ctx, path.Root("name"), req, resp)
 }
 
+// refresh reconciles state after a write: it reads the server object, then
+// puts the user's configured (known) nested values back over it. resmgr
+// normalizes the nested settings — it injects a default
+// rebalancingFrequencyMins even when rebalancing is disabled and omits
+// rebalancingStrategy entirely — so a naive read-back yields "" and 10 where
+// the config has null. Nested objects are atomic to Terraform, so that is not
+// drift but a hard "inconsistent result after apply". Only attributes the user
+// left unknown are taken from the server; a read-back failure is a warning,
+// never a failed apply.
+func (r *clusterResource) refresh(ctx context.Context, client *gophercloud.ServiceClient, plan *clusterModel, what string, diags *diag.Diagnostics) {
+	saved := *plan
+	if readDiags := r.readInto(ctx, client, plan.Name.ValueString(), plan); readDiags.HasError() {
+		diags.AddWarning("resmgr: "+what+" but read-back failed",
+			"The write was applied; state reflects the plan and reconciles on the next refresh.")
+		*plan = saved
+		return
+	}
+	mergeConfiguredCluster(plan, &saved)
+}
+
+// mergeConfiguredCluster overlays every KNOWN nested value from src onto dst,
+// keeping dst's (server-sourced) value only where src is null or unknown.
+// Applied per leaf attribute, not per object, so a partially-specified block
+// such as { enabled = false } keeps its configured `enabled` while the leaves
+// it left null keep the server's values — which is exactly what makes the
+// object consistent with the config across apply and refresh.
+func mergeConfiguredCluster(dst, src *clusterModel) {
+	dst.Name = src.Name
+	dst.VMHighAvailability = mergeObject(dst.VMHighAvailability, src.VMHighAvailability)
+	dst.AutoResourceRebalancing = mergeObject(dst.AutoResourceRebalancing, src.AutoResourceRebalancing)
+	dst.GPU = mergeObject(dst.GPU, src.GPU)
+	dst.CPU = mergeObject(dst.CPU, src.CPU)
+}
+
+// mergeObject returns server with each attribute replaced by configured's value
+// wherever configured supplies a known one. A wholly null/unknown configured
+// object leaves server untouched (the user delegated the block to the server);
+// a null/unknown server object yields configured as-is.
+func mergeObject(server, configured types.Object) types.Object {
+	if configured.IsNull() || configured.IsUnknown() {
+		return server
+	}
+	if server.IsNull() || server.IsUnknown() {
+		return configured
+	}
+	out := make(map[string]attr.Value, len(server.Attributes()))
+	for k, sv := range server.Attributes() {
+		out[k] = sv
+		if cv, ok := configured.Attributes()[k]; ok && !cv.IsNull() && !cv.IsUnknown() {
+			out[k] = cv
+		}
+	}
+	obj, d := types.ObjectValue(server.AttributeTypes(context.Background()), out)
+	if d.HasError() {
+		return server
+	}
+	return obj
+}
+
 func (r *clusterResource) readInto(ctx context.Context, client *gophercloud.ServiceClient, name string, m *clusterModel) diag.Diagnostics {
 	var c clusterAPI
 	if err := getJSON(ctx, client, client.ServiceURL("clusters", name), &c); err != nil {
@@ -282,10 +350,18 @@ func (r *clusterResource) setState(m *clusterModel, c *clusterAPI) diag.Diagnost
 	}
 
 	if c.AutoResourceRebalancing != nil {
+		strategy := types.StringNull()
+		if c.AutoResourceRebalancing.RebalancingStrategy != nil {
+			strategy = types.StringValue(*c.AutoResourceRebalancing.RebalancingStrategy)
+		}
+		freq := types.Int64Null()
+		if c.AutoResourceRebalancing.RebalancingFrequencyMins != nil {
+			freq = types.Int64Value(*c.AutoResourceRebalancing.RebalancingFrequencyMins)
+		}
 		obj, d := types.ObjectValue(rebalanceAttrTypes, map[string]attr.Value{
 			"enabled":                    types.BoolValue(c.AutoResourceRebalancing.Enabled),
-			"rebalancing_strategy":       types.StringValue(c.AutoResourceRebalancing.RebalancingStrategy),
-			"rebalancing_frequency_mins": types.Int64Value(c.AutoResourceRebalancing.RebalancingFrequencyMins),
+			"rebalancing_strategy":       strategy,
+			"rebalancing_frequency_mins": freq,
 		})
 		diags.Append(d...)
 		m.AutoResourceRebalancing = obj
@@ -328,10 +404,12 @@ func (r *clusterResource) setState(m *clusterModel, c *clusterAPI) diag.Diagnost
 // toAPI builds the request body. Every group is always sent: the create API
 // requires the full object, and absent groups default to disabled.
 func (r *clusterResource) toAPI(ctx context.Context, m *clusterModel, diags *diag.Diagnostics) *clusterAPI {
+	// Every group is present on the wire (resmgr 500s on a missing group), but
+	// optional leaves inside a group are only sent when configured.
 	c := &clusterAPI{
 		Name:                    m.Name.ValueString(),
 		VMHighAvailability:      &haAPI{},
-		AutoResourceRebalancing: &rebalanceAPI{},
+		AutoResourceRebalancing: &clusterRebalanceAPI{},
 		GPU:                     &clusterGPUAPI{},
 		CPU:                     &clusterCPUAPI{},
 	}
@@ -351,11 +429,16 @@ func (r *clusterResource) toAPI(ctx context.Context, m *clusterModel, diags *dia
 			RebalancingFrequencyMins types.Int64  `tfsdk:"rebalancing_frequency_mins"`
 		}
 		diags.Append(m.AutoResourceRebalancing.As(ctx, &rb, basetypes.ObjectAsOptions{})...)
-		c.AutoResourceRebalancing = &rebalanceAPI{
-			Enabled:                  rb.Enabled.ValueBool(),
-			RebalancingStrategy:      rb.RebalancingStrategy.ValueString(),
-			RebalancingFrequencyMins: rb.RebalancingFrequencyMins.ValueInt64(),
+		out := &clusterRebalanceAPI{Enabled: rb.Enabled.ValueBool()}
+		if !rb.RebalancingStrategy.IsNull() && !rb.RebalancingStrategy.IsUnknown() {
+			v := rb.RebalancingStrategy.ValueString()
+			out.RebalancingStrategy = &v
 		}
+		if !rb.RebalancingFrequencyMins.IsNull() && !rb.RebalancingFrequencyMins.IsUnknown() {
+			v := rb.RebalancingFrequencyMins.ValueInt64()
+			out.RebalancingFrequencyMins = &v
+		}
+		c.AutoResourceRebalancing = out
 	}
 
 	if !m.GPU.IsNull() && !m.GPU.IsUnknown() {

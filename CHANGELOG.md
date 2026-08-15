@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **`pcd_cluster` failed with "inconsistent result after apply" whenever
+  `auto_resource_rebalancing` was set with a `rebalancing_strategy`, and a partial block such as
+  `{ enabled = false }` persisted `""`/`0` on the server.** resmgr does no server-side
+  normalization: it stores exactly what it is sent and applies its defaults only to absent
+  keys, and the request marshalled Go zero values for every leaf the user did not configure.
+  Unconfigured optional leaves are now omitted from the request so the server applies its
+  own defaults, and read-back keeps configured values while adopting server values only for
+  leaves the config left unset. All three shapes — partial, full, and omitted — now apply
+  cleanly and plan with no changes, including after a forced refresh and an in-place update.
+
 ## [0.1.4] - 2026-08-14
 
 ### Fixed
