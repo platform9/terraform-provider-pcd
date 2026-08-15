@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-08-15
+
 ### Fixed
 - **`pcd_cluster` failed with "inconsistent result after apply" whenever
   `auto_resource_rebalancing` was set with a `rebalancing_strategy`, and a partial block such as
