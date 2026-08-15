@@ -6,6 +6,70 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-14
+
+### Fixed
+- **`pcd_host_role` could not assign a role at all.** Create and Delete issued
+  `PUT`/`DELETE /resmgr/v2/hosts/<id>/roles/<name>`, but resmgr exposes no writable roles
+  sub-resource on v2 and answers `404 RoleNotFound`; role assignment lives only on v1. Every
+  `pcd_host_role` apply failed against PCD 2026.4. The resource now uses a v1 client.
+  Blueprints and host configs are unaffected — they exist only on v2 (`/resmgr/v1/blueprint`
+  and `/resmgr/v1/hostconfigs` both 404) and continue to use it.
+- **`pcd_host_role` reported permanent drift**, which would have persisted even once the
+  write path was fixed. Read compared the configured role name against `GET /v2/hosts/<id>`,
+  whose `roles` are mapped "uber-roles" (`hypervisor`) rather than the granular `pf9-*` names
+  a role is assigned by, so the match never succeeded and Terraform removed the resource from
+  state and recreated it on every plan. Read now uses v1, which reports granular names.
+- **`pcd_cluster_blueprint` showed a `storage_backends_json` diff on every plan.** resmgr
+  echoes the blob with its own spacing and in insertion order, while `jsonencode()` emits
+  compact output with sorted keys — semantically identical, textually different, so Terraform
+  reported an in-place update that never converged. The read-back is now canonicalised
+  (compact, keys sorted) in both the resource and the data source.
+
+### Fixed (found by one-shot region bring-up validation)
+- **`pcd_host_cluster_role.wait_until_converged` could return early during onboarding.**
+  `role_status` aggregates only the roles assigned at that moment, so while several cluster
+  roles were being assigned concurrently there was a window where it read `ok` before the
+  others landed — un-gating downstream resources (an image upload against a Glance that was
+  not serving yet). The wait now also requires the cluster role's own granular marker
+  (e.g. `pf9-glance-role` for `image-library`) to report applied.
+- **`pcd_cluster` creation failed on freshly deployed regions.** resmgr answers
+  `500 Request Failed` to `POST /v2/clusters` until the compute control plane is warm
+  (the PCD UI health-checks Nova before offering the dialog); the identical request
+  succeeds minutes later. Create now retries 500s for a bounded window so a single apply
+  can bring up a region from nothing.
+
+### Added
+- **New resource `pcd_host_cluster_role`** — assigns PCD *cluster roles* (`hypervisor`,
+  `image-library`, `persistent-storage`, `dns`) via the resmgr v2 uber-role API, the same
+  call the PCD UI onboards hosts with. The control plane expands a cluster role into its
+  granular `pf9-*` roles and computes their settings from the cluster blueprint and the
+  host's host configuration (`persistent-storage` takes a `backends` list naming entries in
+  the blueprint's `storage_backends_json`; `hypervisor` takes `host_cluster`, which PCD
+  2026.4 requires). An optional `wait_until_converged` blocks until the host reports
+  `role_status = ok` — tolerating the transient `failed` flaps normal onboarding produces —
+  so a single configuration can onboard a hypervisor and boot instances on it in one apply.
+  Assignment and removal retry through resmgr's transient `409 RoleUpdateConflict` while a
+  host is converging. This closes the gap that made a fresh region impossible to bring up
+  with Terraform alone: `pcd_host_role` applies granular roles with *default* settings,
+  which wedges the host on settings-bearing roles (see its documentation for when it is
+  still appropriate).
+- **New resource `pcd_cluster`** — manages PCD clusters (host clusters / host groups), the
+  unit hypervisors join and the scope for VM high-availability, auto-rebalancing, GPU, and
+  CPU-model settings. Required by `pcd_host_cluster_role`'s `hypervisor` role, whose
+  `host_cluster` names it.
+- `Config.ResmgrV1Client()` alongside `ResmgrV2Client()`. An `endpoint_overrides` entry for
+  `resmgr` now names the service rather than one of its API versions: the required version is
+  applied to it, replacing any version the override already carries, so a single override
+  serves both clients.
+- **`pcd_networking_network` gains `segments`** — provider-network attributes (admin only),
+  mirroring `openstack_networking_network_v2`. A single segment creates a physical network
+  (`network_type` `flat`/`vlan` on a `physical_network` label, optional `segmentation_id`),
+  sent as top-level `provider:*` attributes; multiple segments use Neutron's multi-provider
+  `segments` form. Create-only and not refreshed from the API, matching the upstream
+  provider's behavior. Without this, provider networks — including any external network —
+  could not be created by Terraform at all.
+
 ## [0.1.3] - 2026-08-14
 
 ### Changed

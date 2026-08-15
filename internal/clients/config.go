@@ -193,10 +193,27 @@ func (c *Config) IdentityV3Client() (*gophercloud.ServiceClient, error) {
 
 // ImageV2Client returns a Glance v2 service client, honoring an endpoint_overrides
 // entry for the "image" service type if present.
+//
+// PCD runs two Glance deployments sharing one database: a control-plane pod
+// behind the public endpoint whose default store is pod-local `file`, and the
+// image-library host's Glance behind the ADMIN endpoint, backed by the storage
+// the cluster blueprint declares. An image uploaded through the public endpoint
+// lands in the pod's local store, where no hypervisor can fetch it — the boot
+// then fails with "Image not found in any configured backend". The PCD UI
+// uploads via the admin endpoint for exactly this reason, so this client
+// prefers it too, falling back to the public endpoint only when no admin
+// endpoint is in the catalog. Deployments where the admin endpoint is not
+// routable from where Terraform runs should set `endpoint_overrides.image` to
+// a reachable URL for the image-library host's Glance.
 func (c *Config) ImageV2Client() (*gophercloud.ServiceClient, error) {
-	client, err := openstack.NewImageV2(c.Provider, c.endpointOpts())
+	opts := c.endpointOpts()
+	opts.Availability = gophercloud.AvailabilityAdmin
+	client, err := openstack.NewImageV2(c.Provider, opts)
 	if err != nil {
-		return nil, fmt.Errorf("pcd: creating image v2 client: %w", err)
+		client, err = openstack.NewImageV2(c.Provider, c.endpointOpts())
+		if err != nil {
+			return nil, fmt.Errorf("pcd: creating image v2 client: %w", err)
+		}
 	}
 	c.applyOverride(client, "image")
 	return client, nil
@@ -235,13 +252,24 @@ func (c *Config) BlockStorageV3Client() (*gophercloud.ServiceClient, error) {
 	return client, nil
 }
 
-// ResmgrV2Client returns a client for the PCD resource manager (`resmgr`) v2
-// API. resmgr is a Platform9-specific REST service (not part of OpenStack, so it
-// has no gophercloud constructor); it backs cluster blueprints, host configs,
-// and host role/config assignment. The endpoint is resolved from the Keystone
-// catalog (service type `resmgr`) and the shared authenticated ProviderClient
-// supplies the token, so requests use `client.Get/Post/Put/Delete`.
-func (c *Config) ResmgrV2Client() (*gophercloud.ServiceClient, error) {
+// resmgrClient returns a client for a specific PCD resource manager (`resmgr`)
+// API version. resmgr is a Platform9-specific REST service (not part of
+// OpenStack, so it has no gophercloud constructor).
+//
+// The two versions are NOT interchangeable and the provider needs both:
+//
+//	v2  cluster blueprints, host configs, host-config assignment
+//	    (v1 serves none of these — /v1/blueprint and /v1/hostconfigs are 404)
+//	v1  host role assignment
+//	    (v2 has no writable roles sub-resource — PUT/DELETE
+//	    /v2/hosts/<id>/roles/<name> returns 404 RoleNotFound — and its read
+//	    view reports mapped "uber-roles" such as `hypervisor` instead of the
+//	    granular `pf9-*` names roles are assigned by)
+//
+// The base URL is resolved from the Keystone catalog (service type `resmgr`)
+// and the shared authenticated ProviderClient supplies the token, so requests
+// use `client.Get/Post/Put/Delete`.
+func (c *Config) resmgrClient(version string) (*gophercloud.ServiceClient, error) {
 	url, err := c.Provider.EndpointLocator(gophercloud.EndpointOpts{
 		Type:         "resmgr",
 		Region:       c.Region,
@@ -250,13 +278,47 @@ func (c *Config) ResmgrV2Client() (*gophercloud.ServiceClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pcd: locating resmgr endpoint: %w", err)
 	}
-	client := &gophercloud.ServiceClient{
-		ProviderClient: c.Provider,
-		Endpoint:       strings.TrimRight(url, "/") + "/v2/",
-		Type:           "resmgr",
+	// An endpoint_overrides entry for "resmgr" names the service, not one of
+	// its API versions, so the version this client needs is (re-)applied to it.
+	// That lets a single override serve both versions; applyOverride cannot be
+	// used here because it replaces the endpoint wholesale, which would send
+	// v1 calls to a v2 URL.
+	base := url
+	if override, ok := c.EndpointOverrides["resmgr"]; ok && override != "" {
+		base = override
 	}
-	c.applyOverride(client, "resmgr")
-	return client, nil
+	return &gophercloud.ServiceClient{
+		ProviderClient: c.Provider,
+		Endpoint:       resmgrVersionedURL(base, version),
+		Type:           "resmgr",
+	}, nil
+}
+
+// resmgrVersionedURL returns base carrying exactly one trailing API-version
+// segment. Any version already on base is replaced, so a bare service root and
+// an already-versioned URL (which an endpoint_overrides entry may supply) both
+// resolve correctly.
+func resmgrVersionedURL(base, version string) string {
+	b := strings.TrimRight(base, "/")
+	if i := strings.LastIndex(b, "/"); i != -1 {
+		switch b[i+1:] {
+		case "v1", "v2":
+			b = b[:i]
+		}
+	}
+	return b + "/" + version + "/"
+}
+
+// ResmgrV2Client returns a resmgr v2 client: cluster blueprints, host configs,
+// and host-config assignment.
+func (c *Config) ResmgrV2Client() (*gophercloud.ServiceClient, error) {
+	return c.resmgrClient("v2")
+}
+
+// ResmgrV1Client returns a resmgr v1 client. Host role assignment lives only
+// here; see resmgrClient for why v2 cannot serve it.
+func (c *Config) ResmgrV1Client() (*gophercloud.ServiceClient, error) {
+	return c.resmgrClient("v1")
 }
 
 // LoadBalancerV2Client returns an Octavia v2 service client, honoring an

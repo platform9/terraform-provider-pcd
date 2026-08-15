@@ -155,7 +155,7 @@ func (d *blueprintDataSource) Read(ctx context.Context, req datasource.ReadReque
 	}
 
 	if len(bp.StorageBackends) > 0 && string(bp.StorageBackends) != "null" {
-		data.StorageBackendsJSON = types.StringValue(string(bp.StorageBackends))
+		data.StorageBackendsJSON = types.StringValue(canonicalJSON(bp.StorageBackends))
 	} else {
 		data.StorageBackendsJSON = types.StringNull()
 	}

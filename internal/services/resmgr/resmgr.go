@@ -4,12 +4,20 @@
 // Package resmgr implements the PCD resource-manager (resmgr) resources and data
 // sources: cluster blueprints, host configurations, and host role / host-config
 // assignment. resmgr is a Platform9-specific REST API (not OpenStack), reached
-// through clients.Config.ResmgrV2Client(), which resolves the `resmgr` catalog
-// endpoint and reuses the shared authenticated ProviderClient for tokens.
+// through the clients.Config resmgr constructors, which resolve the `resmgr`
+// catalog endpoint and reuse the shared authenticated ProviderClient for tokens.
+//
+// The API version differs by resource and the two are not interchangeable:
+//
+//	ResmgrV2Client  blueprints, host configs, host-config assignment
+//	ResmgrV1Client  host roles — v2 exposes no writable roles sub-resource and
+//	                reports mapped "uber-roles" on read, so both assignment and
+//	                verification must go through v1.
 package resmgr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -58,4 +66,31 @@ func putJSON(ctx context.Context, client *gophercloud.ServiceClient, url string,
 // isNotFound reports whether err is an HTTP 404.
 func isNotFound(err error) bool {
 	return gophercloud.ResponseCodeIs(err, http.StatusNotFound)
+}
+
+// canonicalJSON re-marshals raw JSON into Go's canonical encoding: compact,
+// with object keys sorted. That is byte-for-byte what Terraform's jsonencode()
+// produces, so a value read back from the API compares equal to the configured
+// one.
+//
+// Without this, a JSON blob stored as an opaque string diffs on every plan:
+// resmgr echoes storage backends with its own spacing and in insertion order
+// (`{"a": 1, "c": 2, "b": 3}`) while jsonencode() emits compact and sorted
+// (`{"a":1,"b":3,"c":2}`). The two are semantically identical and textually
+// different, which Terraform reports as a perpetual in-place update.
+//
+// A configured value that is valid JSON but not canonical (hand-written with
+// custom spacing rather than built by jsonencode) still diffs; jsonencode is
+// the documented pattern. Input that is not valid JSON is passed through
+// unchanged rather than dropped.
+func canonicalJSON(raw json.RawMessage) string {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return string(raw)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return string(raw)
+	}
+	return string(b)
 }
