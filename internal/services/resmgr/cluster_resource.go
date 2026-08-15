@@ -5,6 +5,7 @@ package resmgr
 
 import (
 	"context"
+	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -144,9 +145,29 @@ func (r *clusterResource) Create(ctx context.Context, req resource.CreateRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if err := postJSON(ctx, client, client.ServiceURL("clusters"), body, nil); err != nil {
-		resp.Diagnostics.AddError("resmgr: creating cluster", err.Error())
-		return
+	// Cluster creation depends on the compute control plane being warm: on a
+	// freshly deployed region the identical POST answers `500 Request Failed`
+	// for the first several minutes and succeeds afterwards (the PCD UI
+	// health-checks Nova before even offering the dialog). Retry 500s for a
+	// bounded window so one-shot region bring-up works; a genuinely invalid
+	// request still fails, just after the window.
+	const window = 8 * time.Minute
+	deadline := time.Now().Add(window)
+	for {
+		err := postJSON(ctx, client, client.ServiceURL("clusters"), body, nil)
+		if err == nil {
+			break
+		}
+		if !gophercloud.ResponseCodeIs(err, 500) || time.Now().After(deadline) {
+			resp.Diagnostics.AddError("resmgr: creating cluster", err.Error())
+			return
+		}
+		select {
+		case <-ctx.Done():
+			resp.Diagnostics.AddError("resmgr: creating cluster", ctx.Err().Error())
+			return
+		case <-time.After(15 * time.Second):
+		}
 	}
 
 	if readDiags := r.readInto(ctx, client, plan.Name.ValueString(), &plan); readDiags.HasError() {

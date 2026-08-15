@@ -24,6 +24,19 @@ All notable changes to this project are documented here. The format is based on
   reported an in-place update that never converged. The read-back is now canonicalised
   (compact, keys sorted) in both the resource and the data source.
 
+### Fixed (found by one-shot region bring-up validation)
+- **`pcd_host_cluster_role.wait_until_converged` could return early during onboarding.**
+  `role_status` aggregates only the roles assigned at that moment, so while several cluster
+  roles were being assigned concurrently there was a window where it read `ok` before the
+  others landed — un-gating downstream resources (an image upload against a Glance that was
+  not serving yet). The wait now also requires the cluster role's own granular marker
+  (e.g. `pf9-glance-role` for `image-library`) to report applied.
+- **`pcd_cluster` creation failed on freshly deployed regions.** resmgr answers
+  `500 Request Failed` to `POST /v2/clusters` until the compute control plane is warm
+  (the PCD UI health-checks Nova before offering the dialog); the identical request
+  succeeds minutes later. Create now retries 500s for a bounded window so a single apply
+  can bring up a region from nothing.
+
 ### Added
 - **New resource `pcd_host_cluster_role`** — assigns PCD *cluster roles* (`hypervisor`,
   `image-library`, `persistent-storage`, `dns`) via the resmgr v2 uber-role API, the same

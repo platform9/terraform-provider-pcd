@@ -42,6 +42,21 @@ var clusterRoles = map[string]bool{
 	"dns":                true,
 }
 
+// clusterRoleMarkers names one granular role each cluster role expands into,
+// used by waitConverged to verify THIS role's convergence rather than only the
+// host aggregate. role_status is computed over the roles assigned at that
+// moment, so during onboarding there is a window where it reads "ok" before a
+// concurrently-assigned cluster role's PUT has landed — an aggregate-only wait
+// returns early and un-gates downstream resources (e.g. an image upload
+// against a Glance that is not serving yet). (KVM markers; the VMware
+// variants are out of scope for this provider today.)
+var clusterRoleMarkers = map[string]string{
+	"hypervisor":         "pf9-ostackhost-neutron",
+	"image-library":      "pf9-glance-role",
+	"persistent-storage": "pf9-cindervolume-base",
+	"dns":                "pf9-designate",
+}
+
 // NewHostClusterRoleResource is the factory registered with the provider.
 func NewHostClusterRoleResource() resource.Resource {
 	return &hostClusterRoleResource{}
@@ -184,7 +199,7 @@ func (r *hostClusterRoleResource) Create(ctx context.Context, req resource.Creat
 	plan.ID = types.StringValue(hostID + "/" + role)
 
 	if plan.WaitUntilConverged.ValueBool() {
-		if err := r.waitConverged(ctx, hostID); err != nil {
+		if err := r.waitConverged(ctx, hostID, role); err != nil {
 			// The assignment itself succeeded: keep the resource in state so a
 			// re-apply retries the wait instead of duplicating the assignment.
 			resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -202,7 +217,7 @@ func (r *hostClusterRoleResource) Create(ctx context.Context, req resource.Creat
 // hostagent gives up a converge round, resmgr re-issues the desired state, and
 // the next round proceeds), so a single failed poll is not terminal — only a
 // failed state that persists across consecutive polls is.
-func (r *hostClusterRoleResource) waitConverged(ctx context.Context, hostID string) error {
+func (r *hostClusterRoleResource) waitConverged(ctx context.Context, hostID, role string) error {
 	clientV1, err := r.config.ResmgrV1Client()
 	if err != nil {
 		return err
@@ -224,7 +239,12 @@ func (r *hostClusterRoleResource) waitConverged(ctx context.Context, hostID stri
 		}
 		switch host.RoleStatus {
 		case "ok":
-			return nil
+			// The aggregate alone is not proof: require this cluster role's
+			// granular marker to be present and applied too.
+			if marker := clusterRoleMarkers[role]; marker == "" || host.RolesStatus[marker] == "applied" || host.RolesStatus[marker] == "ok" {
+				return nil
+			}
+			failedStreak = 0
 		case "failed":
 			failedStreak++
 			if failedStreak >= failedThreshold {
@@ -322,7 +342,7 @@ func (r *hostClusterRoleResource) Update(ctx context.Context, req resource.Updat
 	}
 	plan.ID = types.StringValue(hostID + "/" + role)
 	if plan.WaitUntilConverged.ValueBool() {
-		if err := r.waitConverged(ctx, hostID); err != nil {
+		if err := r.waitConverged(ctx, hostID, role); err != nil {
 			resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 			resp.Diagnostics.AddError("resmgr: waiting for host convergence", err.Error())
 			return
