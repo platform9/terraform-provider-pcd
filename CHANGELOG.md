@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-14
+
 ### Fixed
 - **`pcd_host_role` could not assign a role at all.** Create and Delete issued
   `PUT`/`DELETE /resmgr/v2/hosts/<id>/roles/<name>`, but resmgr exposes no writable roles
