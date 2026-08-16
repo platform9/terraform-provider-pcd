@@ -6,6 +6,32 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-08-15
+
+### Fixed
+- **`pcd_cluster_blueprint` silently accepted `vm_high_availability` and
+  `auto_resource_rebalancing`.** These are cluster-scoped settings: the blueprint API does
+  not store them (a POST carrying them returns an object without either key), and the PCD
+  UI never sends them. A user who set them on the blueprint believed HA/DRR were enabled
+  when nothing had happened. Both attributes are removed; they live on `pcd_cluster`, where
+  they take effect. Not a breaking change for configurations that omitted them.
+- **`networking_type` and `enable_distributed_routing` are now read-only.** No product
+  surface exposes them (the PCD UI hardcodes `ovn`/`true`; `pcdctl` has no blueprint
+  capability), yet the API requires both on create with no server default. The provider now
+  supplies the product values itself and rejects attempts to configure them, so a Terraform
+  user cannot put a region into a state the UI would never produce.
+
+### Added
+- **`pcd_cluster_blueprint.vnc_floating_ip`** (and on the data source): the floating IP
+  through which VM VNC consoles are reached. Set `""` to clear. Works around a resmgr
+  quirk where `POST /v2/blueprint` silently discards `vncFloatingIp` and only `PUT`
+  persists it — on create the provider follows the POST with a PUT when the value is set.
+
+### Changed
+- `instance_shared_storage` documentation now matches the UI toggle it maps to ("Enable
+  if this path is mounted as shared storage (e.g. NFS) across all hosts") and references
+  `vm_storage`, so the flag is discoverable next to the path it qualifies.
+
 ## [0.1.5] - 2026-08-15
 
 ### Fixed

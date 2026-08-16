@@ -17,7 +17,6 @@ Manages a PCD cluster blueprint — the shared, declarative configuration that v
 # the existing blueprint (see import.sh) and then manage it here.
 resource "pcd_cluster_blueprint" "example" {
   name            = "cluster-1"
-  networking_type = "ovn"
   dns_domain_name = "example.local."
 
   virtual_networking = {
@@ -26,9 +25,21 @@ resource "pcd_cluster_blueprint" "example" {
     vnid_range    = "1000:2000"
   }
 
+  # Where instance (ephemeral) disks live on each hypervisor. Set
+  # instance_shared_storage = true only if this path is mounted as shared
+  # storage (e.g. NFS) across all hosts.
+  vm_storage              = "/opt/data/instances"
+  instance_shared_storage = false
+
+  # Optional: a floating IP through which VM VNC consoles are reached.
+  # vnc_floating_ip = "203.0.113.10"
+
   # storage_backends_json is omitted here so the imported Cinder backends are
   # preserved. It is required only when creating a brand-new blueprint, and it
   # carries driver credentials (sensitive).
+
+  # networking_type and enable_distributed_routing are set by PCD (ovn / true)
+  # and are read-only here; they appear in state but are not configurable.
 }
 ```
 
@@ -41,27 +52,19 @@ resource "pcd_cluster_blueprint" "example" {
 
 ### Optional
 
-- `auto_resource_rebalancing` (Attributes) Automatic workload-rebalancing settings. (see [below for nested schema](#nestedatt--auto_resource_rebalancing))
 - `dns_domain_name` (String) The internal DNS domain name suffix for VMs (not Designate).
-- `enable_distributed_routing` (Boolean) Whether cluster-wide distributed routing is enabled.
 - `image_library_shared_storage` (Boolean) Whether the image library uses shared storage.
 - `image_library_storage` (String) The image library storage location.
-- `instance_shared_storage` (Boolean) Whether instance ephemeral storage is shared.
-- `networking_type` (String) The networking type: `ovn` (default) or `ovs`.
+- `instance_shared_storage` (Boolean) Set `true` when `vm_storage` is mounted as shared storage (e.g. NFS) across all hosts, so PCD can treat instance disks as shared. Matches the UI's "Enable if this path is mounted as shared storage across all hosts" toggle. Defaults to `false` (local disk).
 - `storage_backends_json` (String, Sensitive) The Cinder storage backends as a JSON string (contains credentials). Read back from the server; set it only to change backends.
 - `virtual_networking` (Attributes) Virtual (tenant) networking settings. (see [below for nested schema](#nestedatt--virtual_networking))
-- `vm_high_availability` (Attributes) VM high-availability settings. (see [below for nested schema](#nestedatt--vm_high_availability))
-- `vm_storage` (String) The VM ephemeral storage path.
+- `vm_storage` (String) The path on each hypervisor where instance (ephemeral) storage lives, e.g. `/opt/data/instances`.
+- `vnc_floating_ip` (String) A floating IP through which VM VNC consoles are reached. Leave unset for none.
 
-<a id="nestedatt--auto_resource_rebalancing"></a>
-### Nested Schema for `auto_resource_rebalancing`
+### Read-Only
 
-Optional:
-
-- `enabled` (Boolean) Whether auto-rebalancing is enabled.
-- `rebalancing_frequency_mins` (Number) Rebalancing frequency in minutes (1-60).
-- `rebalancing_strategy` (String) `vm_workload_consolidation` or `node_resource_consolidation`.
-
+- `enable_distributed_routing` (Boolean) Whether distributed routing is enabled. Always `true` — set by the provider to match the product; not user-configurable.
+- `networking_type` (String) The region's networking type. Always `ovn` — set by the provider to match the product; not user-configurable.
 
 <a id="nestedatt--virtual_networking"></a>
 ### Nested Schema for `virtual_networking`
@@ -71,14 +74,6 @@ Optional:
 - `enabled` (Boolean) Whether virtual networking is enabled.
 - `underlay_type` (String) The underlay type: `vlan` or `other`.
 - `vnid_range` (String) The VLAN/VNI segmentation ID range (e.g. `1000:2000`).
-
-
-<a id="nestedatt--vm_high_availability"></a>
-### Nested Schema for `vm_high_availability`
-
-Optional:
-
-- `enabled` (Boolean) Auto-detect host failure and recover VMs.
 
 ## Import
 

@@ -48,8 +48,7 @@ type blueprintResourceModel struct {
 	ImageLibrarySharedStorage types.Bool   `tfsdk:"image_library_shared_storage"`
 	InstanceSharedStorage     types.Bool   `tfsdk:"instance_shared_storage"`
 	VMStorage                 types.String `tfsdk:"vm_storage"`
-	VMHighAvailability        types.Object `tfsdk:"vm_high_availability"`
-	AutoResourceRebalancing   types.Object `tfsdk:"auto_resource_rebalancing"`
+	VNCFloatingIP             types.String `tfsdk:"vnc_floating_ip"`
 	StorageBackendsJSON       types.String `tfsdk:"storage_backends_json"`
 }
 
@@ -78,9 +77,16 @@ func (r *blueprintResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"manage it. Changing `name` forces a new resource. Destroying this resource only removes it from " +
 			"Terraform state — it does not delete the region's blueprint (use the PCD UI for that).",
 		Attributes: map[string]schema.Attribute{
-			"name":                       schema.StringAttribute{Required: true, MarkdownDescription: "The blueprint (cluster) name. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
-			"networking_type":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The networking type: `ovn` (default) or `ovs`.", PlanModifiers: useState},
-			"enable_distributed_routing": schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Whether cluster-wide distributed routing is enabled.", PlanModifiers: boolUseState},
+			"name": schema.StringAttribute{Required: true, MarkdownDescription: "The blueprint (cluster) name. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
+			// networking_type and enable_distributed_routing are not user-configurable
+			// anywhere in the product: the PCD UI hardcodes ovn / true and pcdctl has
+			// no blueprint capability. The API, however, REQUIRES both on create and
+			// has no server-side default (omitted or "" networkingType is rejected;
+			// omitted enableDistributedRouting is a 500). So the provider takes the
+			// UI's role and always sends the product values. Computed-only keeps them
+			// visible in state and rejects any attempt to set them.
+			"networking_type":            schema.StringAttribute{Computed: true, MarkdownDescription: "The region's networking type. Always `ovn` — set by the provider to match the product; not user-configurable.", PlanModifiers: useState},
+			"enable_distributed_routing": schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether distributed routing is enabled. Always `true` — set by the provider to match the product; not user-configurable.", PlanModifiers: boolUseState},
 			"dns_domain_name":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The internal DNS domain name suffix for VMs (not Designate).", PlanModifiers: useState},
 			"virtual_networking": schema.SingleNestedAttribute{
 				Optional:            true,
@@ -95,28 +101,10 @@ func (r *blueprintResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			},
 			"image_library_storage":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The image library storage location.", PlanModifiers: useState},
 			"image_library_shared_storage": schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Whether the image library uses shared storage.", PlanModifiers: boolUseState},
-			"instance_shared_storage":      schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Whether instance ephemeral storage is shared.", PlanModifiers: boolUseState},
-			"vm_storage":                   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The VM ephemeral storage path.", PlanModifiers: useState},
-			"vm_high_availability": schema.SingleNestedAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "VM high-availability settings.",
-				PlanModifiers:       objUseState,
-				Attributes: map[string]schema.Attribute{
-					"enabled": schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Auto-detect host failure and recover VMs."},
-				},
-			},
-			"auto_resource_rebalancing": schema.SingleNestedAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Automatic workload-rebalancing settings.",
-				PlanModifiers:       objUseState,
-				Attributes: map[string]schema.Attribute{
-					"enabled":                    schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Whether auto-rebalancing is enabled."},
-					"rebalancing_strategy":       schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "`vm_workload_consolidation` or `node_resource_consolidation`."},
-					"rebalancing_frequency_mins": schema.Int64Attribute{Optional: true, Computed: true, MarkdownDescription: "Rebalancing frequency in minutes (1-60)."},
-				},
-			},
+			"vm_storage":                   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The path on each hypervisor where instance (ephemeral) storage lives, e.g. `/opt/data/instances`.", PlanModifiers: useState},
+			"instance_shared_storage": schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Set `true` when `vm_storage` is mounted as shared storage (e.g. NFS) across all hosts, so PCD can treat instance disks as shared. " +
+				"Matches the UI's \"Enable if this path is mounted as shared storage across all hosts\" toggle. Defaults to `false` (local disk).", PlanModifiers: boolUseState},
+			"vnc_floating_ip": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "A floating IP through which VM VNC consoles are reached. Leave unset for none.", PlanModifiers: useState},
 			// storage_backends_json carries plaintext driver credentials, so it is
 			// Sensitive. Leave it unset to preserve the existing backends (the value
 			// is read back from the server and re-sent in the required complete-object
@@ -159,6 +147,20 @@ func (r *blueprintResource) Create(ctx context.Context, req resource.CreateReque
 	if err := postJSON(ctx, client, client.ServiceURL("blueprint"), body, nil); err != nil {
 		resp.Diagnostics.AddError("resmgr: creating blueprint", err.Error())
 		return
+	}
+
+	// resmgr silently discards vncFloatingIp on POST and only persists it on
+	// PUT (verified against 2026.4: identical body, POST stores null, PUT stores
+	// the value). The PCD UI never trips this because it creates first and sets
+	// the VNC IP on a later save. Compensate the same way: follow the create
+	// with a PUT whenever the user configured one, so a single apply matches
+	// the configuration.
+	if body.VNCFloatingIP != nil && *body.VNCFloatingIP != "" {
+		if err := putJSON(ctx, client, client.ServiceURL("blueprint", plan.Name.ValueString()), body, nil); err != nil {
+			resp.Diagnostics.AddError("resmgr: setting vnc_floating_ip on new blueprint",
+				"The blueprint was created but the follow-up PUT that persists vnc_floating_ip failed: "+err.Error())
+			return
+		}
 	}
 
 	r.refresh(ctx, client, &plan, "blueprint created", &resp.Diagnostics)
@@ -262,11 +264,8 @@ func restoreKnown(m, saved *blueprintResourceModel) {
 	if knownStr(saved.VMStorage) {
 		m.VMStorage = saved.VMStorage
 	}
-	if knownObj(saved.VMHighAvailability) {
-		m.VMHighAvailability = saved.VMHighAvailability
-	}
-	if knownObj(saved.AutoResourceRebalancing) {
-		m.AutoResourceRebalancing = saved.AutoResourceRebalancing
+	if knownStr(saved.VNCFloatingIP) {
+		m.VNCFloatingIP = saved.VNCFloatingIP
 	}
 	if knownStr(saved.StorageBackendsJSON) {
 		m.StorageBackendsJSON = saved.StorageBackendsJSON
@@ -322,26 +321,13 @@ func (r *blueprintResource) setState(m *blueprintResourceModel, bp *blueprintAPI
 		m.VirtualNetworking = types.ObjectNull(virtualNetworkingAttrTypes)
 	}
 
-	if bp.VMHighAvailability != nil {
-		obj, d := types.ObjectValue(haAttrTypes, map[string]attr.Value{
-			"enabled": types.BoolValue(bp.VMHighAvailability.Enabled),
-		})
-		diags.Append(d...)
-		m.VMHighAvailability = obj
+	// The API reports "no floating IP" as null; the provider models it as ""
+	// so a user can clear the value with vnc_floating_ip = "" and get a stable
+	// plan (a nullable string cannot be cleared from config any other way).
+	if bp.VNCFloatingIP != nil {
+		m.VNCFloatingIP = types.StringValue(*bp.VNCFloatingIP)
 	} else {
-		m.VMHighAvailability = types.ObjectNull(haAttrTypes)
-	}
-
-	if bp.AutoResourceRebalancing != nil {
-		obj, d := types.ObjectValue(rebalanceAttrTypes, map[string]attr.Value{
-			"enabled":                    types.BoolValue(bp.AutoResourceRebalancing.Enabled),
-			"rebalancing_strategy":       types.StringValue(bp.AutoResourceRebalancing.RebalancingStrategy),
-			"rebalancing_frequency_mins": types.Int64Value(bp.AutoResourceRebalancing.RebalancingFrequencyMins),
-		})
-		diags.Append(d...)
-		m.AutoResourceRebalancing = obj
-	} else {
-		m.AutoResourceRebalancing = types.ObjectNull(rebalanceAttrTypes)
+		m.VNCFloatingIP = types.StringValue("")
 	}
 
 	if len(bp.StorageBackends) > 0 && string(bp.StorageBackends) != "null" {
@@ -355,10 +341,22 @@ func (r *blueprintResource) setState(m *blueprintResourceModel, bp *blueprintAPI
 // toAPI builds the full blueprint request body from the plan (the write API
 // requires a complete object).
 func (r *blueprintResource) toAPI(ctx context.Context, m *blueprintResourceModel, diags *diag.Diagnostics) *blueprintAPI {
+	// networkingType and enableDistributedRouting are required by the API and
+	// have no server default; the product's fixed values are supplied here (the
+	// same ones the PCD UI hardcodes). An existing blueprint's stored values are
+	// preserved on update via the read-back in state.
+	networkingType := m.NetworkingType.ValueString()
+	if networkingType == "" {
+		networkingType = "ovn"
+	}
+	dvr := true
+	if knownBool(m.EnableDistributedRouting) {
+		dvr = m.EnableDistributedRouting.ValueBool()
+	}
 	bp := &blueprintAPI{
 		Name:                      m.Name.ValueString(),
-		NetworkingType:            m.NetworkingType.ValueString(),
-		EnableDistributedRouting:  m.EnableDistributedRouting.ValueBool(),
+		NetworkingType:            networkingType,
+		EnableDistributedRouting:  dvr,
 		DNSDomainName:             m.DNSDomainName.ValueString(),
 		ImageLibraryStorage:       m.ImageLibraryStorage.ValueString(),
 		ImageLibrarySharedStorage: m.ImageLibrarySharedStorage.ValueBool(),
@@ -380,26 +378,12 @@ func (r *blueprintResource) toAPI(ctx context.Context, m *blueprintResourceModel
 		}
 	}
 
-	if !m.VMHighAvailability.IsNull() && !m.VMHighAvailability.IsUnknown() {
-		var ha struct {
-			Enabled types.Bool `tfsdk:"enabled"`
-		}
-		diags.Append(m.VMHighAvailability.As(ctx, &ha, basetypes.ObjectAsOptions{})...)
-		bp.VMHighAvailability = &haAPI{Enabled: ha.Enabled.ValueBool()}
-	}
-
-	if !m.AutoResourceRebalancing.IsNull() && !m.AutoResourceRebalancing.IsUnknown() {
-		var rb struct {
-			Enabled                  types.Bool   `tfsdk:"enabled"`
-			RebalancingStrategy      types.String `tfsdk:"rebalancing_strategy"`
-			RebalancingFrequencyMins types.Int64  `tfsdk:"rebalancing_frequency_mins"`
-		}
-		diags.Append(m.AutoResourceRebalancing.As(ctx, &rb, basetypes.ObjectAsOptions{})...)
-		bp.AutoResourceRebalancing = &rebalanceAPI{
-			Enabled:                  rb.Enabled.ValueBool(),
-			RebalancingStrategy:      rb.RebalancingStrategy.ValueString(),
-			RebalancingFrequencyMins: rb.RebalancingFrequencyMins.ValueInt64(),
-		}
+	// Send the value whenever configured, including "": the API's PUT is a
+	// complete-object write, so omitting the key would silently keep the old IP
+	// when the user's intent is to clear it. A pointer to "" clears server-side.
+	if knownStr(m.VNCFloatingIP) {
+		v := m.VNCFloatingIP.ValueString()
+		bp.VNCFloatingIP = &v
 	}
 
 	if !m.StorageBackendsJSON.IsNull() && !m.StorageBackendsJSON.IsUnknown() && m.StorageBackendsJSON.ValueString() != "" {

@@ -39,6 +39,7 @@ type blueprintDataSourceModel struct {
 	ImageLibrarySharedStorage types.Bool   `tfsdk:"image_library_shared_storage"`
 	InstanceSharedStorage     types.Bool   `tfsdk:"instance_shared_storage"`
 	VMStorage                 types.String `tfsdk:"vm_storage"`
+	VNCFloatingIP             types.String `tfsdk:"vnc_floating_ip"`
 	StorageBackendsJSON       types.String `tfsdk:"storage_backends_json"`
 }
 
@@ -53,9 +54,9 @@ type blueprintAPI struct {
 	ImageLibrarySharedStorage bool                  `json:"imageLibrarySharedStorage"`
 	InstanceSharedStorage     bool                  `json:"instanceSharedStorage"`
 	VMStorage                 string                `json:"vmStorage"`
-	VMHighAvailability        *haAPI                `json:"vmHighAvailability"`
-	AutoResourceRebalancing   *rebalanceAPI         `json:"autoResourceRebalancing"`
-	StorageBackends           json.RawMessage       `json:"storageBackends"`
+	// Pointer: the API returns null for "no floating IP".
+	VNCFloatingIP   *string         `json:"vncFloatingIp"`
+	StorageBackends json.RawMessage `json:"storageBackends"`
 }
 
 type haAPI struct {
@@ -89,8 +90,8 @@ func (d *blueprintDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 		MarkdownDescription: "Reads a PCD cluster blueprint by name.",
 		Attributes: map[string]schema.Attribute{
 			"name":                       schema.StringAttribute{Required: true, MarkdownDescription: "The blueprint (cluster) name."},
-			"networking_type":            schema.StringAttribute{Computed: true, MarkdownDescription: "The networking type (`ovn` or `ovs`)."},
-			"enable_distributed_routing": schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether distributed routing is enabled."},
+			"networking_type":            schema.StringAttribute{Computed: true, MarkdownDescription: "The networking type PCD selected for the region (`ovn`). PCD-set; not user-configurable."},
+			"enable_distributed_routing": schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether distributed routing is enabled for the region. PCD-set; not user-configurable."},
 			"dns_domain_name":            schema.StringAttribute{Computed: true, MarkdownDescription: "The internal DNS domain name for VMs."},
 			"virtual_networking": schema.SingleNestedAttribute{
 				Computed:            true,
@@ -103,8 +104,9 @@ func (d *blueprintDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 			},
 			"image_library_storage":        schema.StringAttribute{Computed: true, MarkdownDescription: "The image library storage location."},
 			"image_library_shared_storage": schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether the image library uses shared storage."},
-			"instance_shared_storage":      schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether instance storage is shared."},
-			"vm_storage":                   schema.StringAttribute{Computed: true, MarkdownDescription: "The VM ephemeral storage path."},
+			"vm_storage":                   schema.StringAttribute{Computed: true, MarkdownDescription: "The path on each hypervisor where instance (ephemeral) storage lives."},
+			"instance_shared_storage":      schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether `vm_storage` is mounted as shared storage (e.g. NFS) across all hosts."},
+			"vnc_floating_ip":              schema.StringAttribute{Computed: true, MarkdownDescription: "The floating IP through which VM VNC consoles are reached, if any."},
 			"storage_backends_json":        schema.StringAttribute{Computed: true, Sensitive: true, MarkdownDescription: "The Cinder storage backends as a JSON string (contains credentials)."},
 		},
 	}
@@ -141,6 +143,11 @@ func (d *blueprintDataSource) Read(ctx context.Context, req datasource.ReadReque
 	data.ImageLibrarySharedStorage = types.BoolValue(bp.ImageLibrarySharedStorage)
 	data.InstanceSharedStorage = types.BoolValue(bp.InstanceSharedStorage)
 	data.VMStorage = types.StringValue(bp.VMStorage)
+	if bp.VNCFloatingIP != nil {
+		data.VNCFloatingIP = types.StringValue(*bp.VNCFloatingIP)
+	} else {
+		data.VNCFloatingIP = types.StringValue("")
+	}
 
 	if bp.VirtualNetworking != nil {
 		obj, diags := types.ObjectValue(virtualNetworkingAttrTypes, map[string]attr.Value{
