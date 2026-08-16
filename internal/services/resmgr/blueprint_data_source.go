@@ -59,16 +59,6 @@ type blueprintAPI struct {
 	StorageBackends json.RawMessage `json:"storageBackends"`
 }
 
-type haAPI struct {
-	Enabled bool `json:"enabled"`
-}
-
-type rebalanceAPI struct {
-	Enabled                  bool   `json:"enabled"`
-	RebalancingStrategy      string `json:"rebalancingStrategy"`
-	RebalancingFrequencyMins int64  `json:"rebalancingFrequencyMins"`
-}
-
 type virtualNetworkingAPI struct {
 	Enabled      bool   `json:"enabled"`
 	UnderlayType string `json:"underlayType"`

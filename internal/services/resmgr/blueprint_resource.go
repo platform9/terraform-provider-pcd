@@ -52,16 +52,6 @@ type blueprintResourceModel struct {
 	StorageBackendsJSON       types.String `tfsdk:"storage_backends_json"`
 }
 
-var haAttrTypes = map[string]attr.Type{
-	"enabled": types.BoolType,
-}
-
-var rebalanceAttrTypes = map[string]attr.Type{
-	"enabled":                    types.BoolType,
-	"rebalancing_strategy":       types.StringType,
-	"rebalancing_frequency_mins": types.Int64Type,
-}
-
 func (r *blueprintResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_cluster_blueprint"
 }

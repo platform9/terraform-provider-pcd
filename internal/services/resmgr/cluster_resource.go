@@ -45,6 +45,16 @@ type clusterModel struct {
 	CPU                     types.Object `tfsdk:"cpu"`
 }
 
+var haAttrTypes = map[string]attr.Type{
+	"enabled": types.BoolType,
+}
+
+var rebalanceAttrTypes = map[string]attr.Type{
+	"enabled":                    types.BoolType,
+	"rebalancing_strategy":       types.StringType,
+	"rebalancing_frequency_mins": types.Int64Type,
+}
+
 var clusterGPUAttrTypes = map[string]attr.Type{
 	"enabled": types.BoolType,
 	"mode":    types.StringType,
@@ -75,6 +85,10 @@ type clusterRebalanceAPI struct {
 	Enabled                  bool    `json:"enabled"`
 	RebalancingStrategy      *string `json:"rebalancingStrategy,omitempty"`
 	RebalancingFrequencyMins *int64  `json:"rebalancingFrequencyMins,omitempty"`
+}
+
+type haAPI struct {
+	Enabled bool `json:"enabled"`
 }
 
 type clusterGPUAPI struct {
