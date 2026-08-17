@@ -19,6 +19,7 @@ import (
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/keypairs"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
 	"github.com/gophercloud/gophercloud/v2/openstack/image/v2/images"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -153,6 +154,7 @@ type instanceModel struct {
 	SecurityGroups    types.Set    `tfsdk:"security_groups"`
 	Network           types.List   `tfsdk:"network"`
 	BlockDevice       types.List   `tfsdk:"block_device"`
+	SchedulerHints    types.List   `tfsdk:"scheduler_hints"`
 	Metadata          types.Map    `tfsdk:"metadata"`
 	MigrationPriority types.String `tfsdk:"migration_priority"`
 	UserData          types.String `tfsdk:"user_data"`
@@ -183,6 +185,61 @@ type instanceBlockDeviceModel struct {
 	GuestFormat         types.String `tfsdk:"guest_format"`
 	DeviceType          types.String `tfsdk:"device_type"`
 	DiskBus             types.String `tfsdk:"disk_bus"`
+}
+
+// instanceSchedulerHintsModel mirrors openstack_compute_instance_v2's
+// scheduler_hints block (the subset PCD's scheduler honours). Nova does not
+// return hints, so the block is create-only and state simply carries the config.
+type instanceSchedulerHintsModel struct {
+	Group                types.String `tfsdk:"group"`
+	DifferentHost        types.List   `tfsdk:"different_host"`
+	SameHost             types.List   `tfsdk:"same_host"`
+	AdditionalProperties types.Map    `tfsdk:"additional_properties"`
+}
+
+func schedulerHintsObjectType() types.ObjectType {
+	return types.ObjectType{AttrTypes: map[string]attr.Type{
+		"group":                 types.StringType,
+		"different_host":        types.ListType{ElemType: types.StringType},
+		"same_host":             types.ListType{ElemType: types.StringType},
+		"additional_properties": types.MapType{ElemType: types.StringType},
+	}}
+}
+
+// schedulerHintsFromList converts the optional scheduler_hints block into the
+// os:scheduler_hints body. nil when the block is absent (no hints key sent).
+func schedulerHintsFromList(ctx context.Context, l types.List, diags *diag.Diagnostics) servers.SchedulerHintOptsBuilder {
+	if l.IsNull() || l.IsUnknown() || len(l.Elements()) == 0 {
+		return nil
+	}
+	var blocks []instanceSchedulerHintsModel
+	diags.Append(l.ElementsAs(ctx, &blocks, false)...)
+	if diags.HasError() {
+		return nil
+	}
+	if len(blocks) > 1 {
+		diags.AddAttributeError(path.Root("scheduler_hints"), "Too many scheduler_hints blocks", "At most one scheduler_hints block is allowed.")
+		return nil
+	}
+	b := blocks[0]
+	opts := servers.SchedulerHintOpts{Group: b.Group.ValueString()}
+	if !b.DifferentHost.IsNull() && !b.DifferentHost.IsUnknown() {
+		diags.Append(b.DifferentHost.ElementsAs(ctx, &opts.DifferentHost, false)...)
+	}
+	if !b.SameHost.IsNull() && !b.SameHost.IsUnknown() {
+		diags.Append(b.SameHost.ElementsAs(ctx, &opts.SameHost, false)...)
+	}
+	if !b.AdditionalProperties.IsNull() && !b.AdditionalProperties.IsUnknown() {
+		var extra map[string]string
+		diags.Append(b.AdditionalProperties.ElementsAs(ctx, &extra, false)...)
+		if len(extra) > 0 {
+			opts.AdditionalProperties = make(map[string]any, len(extra))
+			for k, v := range extra {
+				opts.AdditionalProperties[k] = v
+			}
+		}
+	}
+	return opts
 }
 
 func (r *instanceResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -255,6 +312,20 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				}},
 				PlanModifiers: []planmodifier.List{listplanmodifier.RequiresReplace()},
 			},
+			"scheduler_hints": schema.ListNestedBlock{
+				MarkdownDescription: "Scheduler hints passed to Nova at boot (`os:scheduler_hints`). Mirrors " +
+					"`openstack_compute_instance_v2`. Use `group` with a `pcd_compute_servergroup` for affinity / " +
+					"anti-affinity placement, `different_host` / `same_host` to place relative to existing instances. " +
+					"At most one block. Create-only: changing this forces a new resource. Nova does not report hints " +
+					"back, so the block round-trips from configuration.",
+				NestedObject: schema.NestedBlockObject{Attributes: map[string]schema.Attribute{
+					"group":                 schema.StringAttribute{Optional: true, MarkdownDescription: "A server group ID to place the instance in (see `pcd_compute_servergroup`)."},
+					"different_host":        schema.ListAttribute{Optional: true, ElementType: types.StringType, MarkdownDescription: "Instance IDs whose hosts this instance must NOT be scheduled on."},
+					"same_host":             schema.ListAttribute{Optional: true, ElementType: types.StringType, MarkdownDescription: "Instance IDs whose host this instance MUST be scheduled on."},
+					"additional_properties": schema.MapAttribute{Optional: true, ElementType: types.StringType, MarkdownDescription: "Arbitrary extra hints (key → value) passed through unvalidated, e.g. `query`."},
+				}},
+				PlanModifiers: []planmodifier.List{listplanmodifier.RequiresReplace()},
+			},
 		},
 	}
 }
@@ -283,6 +354,9 @@ func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.Vali
 			resp.Diagnostics.AddAttributeError(path.Root("metadata"), "Reserved metadata key",
 				fmt.Sprintf("%q is managed by the migration_priority attribute; set it there instead.", migrationPriorityKey))
 		}
+	}
+	if !cfg.SchedulerHints.IsNull() && !cfg.SchedulerHints.IsUnknown() && len(cfg.SchedulerHints.Elements()) > 1 {
+		resp.Diagnostics.AddAttributeError(path.Root("scheduler_hints"), "Too many scheduler_hints blocks", "At most one scheduler_hints block is allowed.")
 	}
 }
 
@@ -390,6 +464,11 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		createOpts = keypairs.CreateOptsExt{CreateOptsBuilder: baseOpts, KeyName: kp}
 	}
 
+	hints := schedulerHintsFromList(ctx, plan.SchedulerHints, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	// block_device_mapping_v2.volume_type is only accepted at compute API
 	// microversion >= 2.67; the provider otherwise speaks 2.1. Negotiate the
 	// higher version for the create call alone (a copy of the client, so read
@@ -400,7 +479,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	if len(blockDevices) > 0 {
 		createClient.Microversion = "2.67"
 	}
-	server, err := servers.Create(ctx, &createClient, createOpts, nil).Extract()
+	server, err := servers.Create(ctx, &createClient, createOpts, hints).Extract()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: creating instance", err.Error())
 		return

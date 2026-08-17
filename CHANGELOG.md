@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- `pcd_compute_instance`: `scheduler_hints` block (`group`, `different_host`, `same_host`,
+  `additional_properties`) — upstream parity; makes `pcd_compute_servergroup` usable for
+  affinity / anti-affinity placement.
 - **`pcd_compute_instance` gains `block_device`** — Nova `block_device_mapping_v2`, mirroring
   `openstack_compute_instance_v2` so configurations port unchanged. This unlocks every boot
   source the PCD UI's Deploy VM wizard offers beyond "Image": boot from a **new volume**

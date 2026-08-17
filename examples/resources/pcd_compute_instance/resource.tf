@@ -133,3 +133,25 @@ resource "pcd_compute_instance" "from_iso" {
     uuid = pcd_networking_network.example.id
   }
 }
+
+# --- Placement: server groups and scheduler hints ---------------------------
+resource "pcd_compute_servergroup" "web" {
+  name     = "web-anti-affinity"
+  policies = ["anti-affinity"]
+}
+
+resource "pcd_compute_instance" "web" {
+  count       = 2
+  name        = "web-${count.index}"
+  image_name  = "cirros-0.6.2"
+  flavor_name = "m1.tiny"
+
+  network {
+    uuid = pcd_networking_network.example.id
+  }
+
+  # Each member lands on a different hypervisor.
+  scheduler_hints {
+    group = pcd_compute_servergroup.web.id
+  }
+}

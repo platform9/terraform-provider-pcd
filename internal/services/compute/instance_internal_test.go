@@ -140,3 +140,50 @@ func TestBlockDevicesFromList(t *testing.T) {
 		}
 	})
 }
+
+// scheduler_hints must reach Nova as the os:scheduler_hints body gophercloud
+// builds; absent block => nil (no hints key at all).
+func TestSchedulerHintsFromList(t *testing.T) {
+	ctx := context.Background()
+	var diags diag.Diagnostics
+
+	if got := schedulerHintsFromList(ctx, types.ListNull(schedulerHintsObjectType()), &diags); got != nil || diags.HasError() {
+		t.Fatalf("null list: got %v diags %v, want nil", got, diags)
+	}
+
+	obj, d := types.ObjectValue(schedulerHintsObjectType().AttrTypes, map[string]attr.Value{
+		"group":                 types.StringValue("2b6f4a3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b"),
+		"different_host":        types.ListValueMust(types.StringType, []attr.Value{types.StringValue("11111111-2222-4333-8444-555555555555")}),
+		"same_host":             types.ListNull(types.StringType),
+		"additional_properties": types.MapValueMust(types.StringType, map[string]attr.Value{"query": types.StringValue("[\"=\",\"$hypervisor_type\",\"QEMU\"]")}),
+	})
+	if d.HasError() {
+		t.Fatal(d)
+	}
+	l := types.ListValueMust(schedulerHintsObjectType(), []attr.Value{obj})
+	got := schedulerHintsFromList(ctx, l, &diags)
+	if diags.HasError() {
+		t.Fatal(diags)
+	}
+	body, err := got.ToSchedulerHintsMap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// gophercloud envelopes the hints under the key Nova expects on the create body.
+	m, ok := body["os:scheduler_hints"].(map[string]any)
+	if !ok {
+		t.Fatalf("hints not enveloped as os:scheduler_hints: %v", body)
+	}
+	if m["group"] != "2b6f4a3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b" {
+		t.Fatalf("group not mapped: %v", m)
+	}
+	if dh, ok := m["different_host"].([]string); !ok || len(dh) != 1 {
+		t.Fatalf("different_host not mapped: %v", m)
+	}
+	if _, has := m["same_host"]; has {
+		t.Fatalf("null same_host must be omitted: %v", m)
+	}
+	if m["query"] != "[\"=\",\"$hypervisor_type\",\"QEMU\"]" {
+		t.Fatalf("additional_properties not merged: %v", m)
+	}
+}
