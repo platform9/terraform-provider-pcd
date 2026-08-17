@@ -34,10 +34,104 @@ import (
 )
 
 var (
-	_ resource.Resource                = (*instanceResource)(nil)
-	_ resource.ResourceWithConfigure   = (*instanceResource)(nil)
-	_ resource.ResourceWithImportState = (*instanceResource)(nil)
+	_ resource.Resource                   = (*instanceResource)(nil)
+	_ resource.ResourceWithConfigure      = (*instanceResource)(nil)
+	_ resource.ResourceWithImportState    = (*instanceResource)(nil)
+	_ resource.ResourceWithValidateConfig = (*instanceResource)(nil)
 )
+
+// migrationPriorityKey is the Nova server-metadata key PCD's Dynamic Resource
+// Rebalancing (DRR) service reads to decide whether — and how eagerly — a VM
+// may be live-migrated. The PCD UI's "Set Migration Priority" dialog writes
+// exactly this key. The provider exposes it as a first-class attribute and
+// keeps it out of the user-facing `metadata` map so the two never conflict.
+const migrationPriorityKey = "migration-priority"
+
+// migrationPriorities are the values the DRR service understands, as the PCD
+// UI offers them: Normal, Low, High, Excluded ("never").
+var migrationPriorities = map[string]bool{"normal": true, "low": true, "high": true, "never": true}
+
+// splitMigrationPriority removes the reserved key from server metadata,
+// returning the remaining user metadata and the priority ("" when unset).
+func splitMigrationPriority(serverMeta map[string]string) (map[string]string, string) {
+	meta := make(map[string]string, len(serverMeta))
+	prio := ""
+	for k, v := range serverMeta {
+		if k == migrationPriorityKey {
+			prio = v
+			continue
+		}
+		meta[k] = v
+	}
+	return meta, prio
+}
+
+// blockDevicesFromList converts the block_device blocks into Nova
+// block_device_mapping_v2 entries and reports whether one of them is the root
+// disk (boot_index 0), in which case image_id/image_name are not required.
+// Defaults follow openstack_compute_instance_v2 and the PCD UI: destination
+// "volume", boot_index -1 (non-bootable), delete_on_termination false.
+func blockDevicesFromList(ctx context.Context, l types.List, diags *diag.Diagnostics) ([]servers.BlockDevice, bool) {
+	if l.IsNull() || l.IsUnknown() || len(l.Elements()) == 0 {
+		return nil, false
+	}
+	var models []instanceBlockDeviceModel
+	diags.Append(l.ElementsAs(ctx, &models, false)...)
+	if diags.HasError() {
+		return nil, false
+	}
+	out := make([]servers.BlockDevice, 0, len(models))
+	hasRoot := false
+	for i, m := range models {
+		bd := servers.BlockDevice{
+			SourceType:      servers.SourceType(m.SourceType.ValueString()),
+			UUID:            m.UUID.ValueString(),
+			BootIndex:       -1,
+			DestinationType: servers.DestinationVolume,
+			VolumeType:      m.VolumeType.ValueString(),
+			GuestFormat:     m.GuestFormat.ValueString(),
+			DeviceType:      m.DeviceType.ValueString(),
+			DiskBus:         m.DiskBus.ValueString(),
+		}
+		if !m.BootIndex.IsNull() && !m.BootIndex.IsUnknown() {
+			bd.BootIndex = int(m.BootIndex.ValueInt64())
+		}
+		if !m.DestinationType.IsNull() && m.DestinationType.ValueString() != "" {
+			bd.DestinationType = servers.DestinationType(m.DestinationType.ValueString())
+		}
+		if !m.VolumeSize.IsNull() && !m.VolumeSize.IsUnknown() {
+			bd.VolumeSize = int(m.VolumeSize.ValueInt64())
+		}
+		if !m.DeleteOnTermination.IsNull() && !m.DeleteOnTermination.IsUnknown() {
+			bd.DeleteOnTermination = m.DeleteOnTermination.ValueBool()
+		}
+		switch bd.SourceType {
+		case servers.SourceImage, servers.SourceVolume, servers.SourceSnapshot, servers.SourceBlank:
+		default:
+			diags.AddAttributeError(path.Root("block_device").AtListIndex(i).AtName("source_type"),
+				"Invalid block_device source_type",
+				fmt.Sprintf("%q is not valid; use image, volume, snapshot, or blank.", m.SourceType.ValueString()))
+			return nil, false
+		}
+		if bd.SourceType != servers.SourceBlank && bd.UUID == "" {
+			diags.AddAttributeError(path.Root("block_device").AtListIndex(i).AtName("uuid"),
+				"block_device uuid is required",
+				fmt.Sprintf("source_type %q needs the uuid of the source %s.", bd.SourceType, bd.SourceType))
+			return nil, false
+		}
+		if bd.SourceType == servers.SourceBlank && bd.VolumeSize == 0 {
+			diags.AddAttributeError(path.Root("block_device").AtListIndex(i).AtName("volume_size"),
+				"block_device volume_size is required",
+				"A blank block device needs a volume_size (GiB).")
+			return nil, false
+		}
+		if bd.BootIndex == 0 {
+			hasRoot = true
+		}
+		out = append(out, bd)
+	}
+	return out, hasRoot
+}
 
 // NewInstanceResource is the factory registered with the provider.
 func NewInstanceResource() resource.Resource {
@@ -49,28 +143,46 @@ type instanceResource struct {
 }
 
 type instanceModel struct {
-	ID               types.String `tfsdk:"id"`
-	Name             types.String `tfsdk:"name"`
-	ImageID          types.String `tfsdk:"image_id"`
-	ImageName        types.String `tfsdk:"image_name"`
-	FlavorID         types.String `tfsdk:"flavor_id"`
-	FlavorName       types.String `tfsdk:"flavor_name"`
-	KeyPair          types.String `tfsdk:"key_pair"`
-	SecurityGroups   types.Set    `tfsdk:"security_groups"`
-	Network          types.List   `tfsdk:"network"`
-	Metadata         types.Map    `tfsdk:"metadata"`
-	UserData         types.String `tfsdk:"user_data"`
-	AvailabilityZone types.String `tfsdk:"availability_zone"`
-	ConfigDrive      types.Bool   `tfsdk:"config_drive"`
-	AccessIPv4       types.String `tfsdk:"access_ip_v4"`
-	Status           types.String `tfsdk:"status"`
-	Region           types.String `tfsdk:"region"`
+	ID                types.String `tfsdk:"id"`
+	Name              types.String `tfsdk:"name"`
+	ImageID           types.String `tfsdk:"image_id"`
+	ImageName         types.String `tfsdk:"image_name"`
+	FlavorID          types.String `tfsdk:"flavor_id"`
+	FlavorName        types.String `tfsdk:"flavor_name"`
+	KeyPair           types.String `tfsdk:"key_pair"`
+	SecurityGroups    types.Set    `tfsdk:"security_groups"`
+	Network           types.List   `tfsdk:"network"`
+	BlockDevice       types.List   `tfsdk:"block_device"`
+	Metadata          types.Map    `tfsdk:"metadata"`
+	MigrationPriority types.String `tfsdk:"migration_priority"`
+	UserData          types.String `tfsdk:"user_data"`
+	AvailabilityZone  types.String `tfsdk:"availability_zone"`
+	ConfigDrive       types.Bool   `tfsdk:"config_drive"`
+	AccessIPv4        types.String `tfsdk:"access_ip_v4"`
+	Status            types.String `tfsdk:"status"`
+	Region            types.String `tfsdk:"region"`
 }
 
 type instanceNetworkModel struct {
 	UUID types.String `tfsdk:"uuid"`
 	Name types.String `tfsdk:"name"`
 	Port types.String `tfsdk:"port"`
+}
+
+// instanceBlockDeviceModel mirrors openstack_compute_instance_v2's block_device
+// block so configurations port across unchanged. Each entry is one
+// block_device_mapping_v2 element on the Nova create request.
+type instanceBlockDeviceModel struct {
+	SourceType          types.String `tfsdk:"source_type"`
+	UUID                types.String `tfsdk:"uuid"`
+	VolumeSize          types.Int64  `tfsdk:"volume_size"`
+	DestinationType     types.String `tfsdk:"destination_type"`
+	BootIndex           types.Int64  `tfsdk:"boot_index"`
+	DeleteOnTermination types.Bool   `tfsdk:"delete_on_termination"`
+	VolumeType          types.String `tfsdk:"volume_type"`
+	GuestFormat         types.String `tfsdk:"guest_format"`
+	DeviceType          types.String `tfsdk:"device_type"`
+	DiskBus             types.String `tfsdk:"disk_bus"`
 }
 
 func (r *instanceResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -86,8 +198,8 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 		Attributes: map[string]schema.Attribute{
 			"id":         schema.StringAttribute{Computed: true, MarkdownDescription: "The instance ID.", PlanModifiers: stable},
 			"name":       schema.StringAttribute{Required: true, MarkdownDescription: "The name of the instance."},
-			"image_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The image ID to boot from (alternative to image_name). Changing this forces a new resource.", PlanModifiers: fnC},
-			"image_name": schema.StringAttribute{Optional: true, MarkdownDescription: "The image name to boot from, resolved via Glance (alternative to image_id). Exactly one of image_id/image_name is required. Changing this forces a new resource.", PlanModifiers: fn},
+			"image_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The image ID to boot from (alternative to image_name). Required unless a `block_device` with `boot_index = 0` supplies the boot disk. Changing this forces a new resource.", PlanModifiers: fnC},
+			"image_name": schema.StringAttribute{Optional: true, MarkdownDescription: "The image name to boot from, resolved via Glance (alternative to image_id). Required unless a `block_device` with `boot_index = 0` supplies the boot disk. Changing this forces a new resource.", PlanModifiers: fn},
 			// No UseStateForUnknown: it would pin the stale flavor_id into the plan
 			// when a resize is driven by flavor_name, causing an "inconsistent result"
 			// error. Update always sets the resolved flavor_id explicitly.
@@ -99,7 +211,13 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				MarkdownDescription: "Names of security groups to associate. Changing this forces a new resource.",
 				PlanModifiers:       []planmodifier.Set{setplanmodifier.RequiresReplace(), setplanmodifier.UseStateForUnknown()},
 			},
-			"metadata":          schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key-value metadata attached to the instance.", PlanModifiers: []planmodifier.Map{mapplanmodifier.UseStateForUnknown()}},
+			"metadata": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key-value metadata attached to the instance. The key `migration-priority` is reserved — set it through `migration_priority` instead.", PlanModifiers: []planmodifier.Map{mapplanmodifier.UseStateForUnknown()}},
+			"migration_priority": schema.StringAttribute{Optional: true, Computed: true,
+				MarkdownDescription: "How PCD's Dynamic Resource Rebalancing (DRR) service treats this VM when balancing hosts: " +
+					"`normal`, `low`, `high`, or `never` (excluded from automatic migration). Unset means DRR's default. " +
+					"Stored as the `migration-priority` server metadata key, exactly as the PCD UI's Set Migration Priority " +
+					"dialog does. Updatable in place; set `\"\"` to clear.",
+				PlanModifiers: stable},
 			"user_data":         schema.StringAttribute{Optional: true, MarkdownDescription: "User data (cloud-init) for the instance. Changing this forces a new resource.", PlanModifiers: fn},
 			"availability_zone": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Availability zone to launch in. Changing this forces a new resource.", PlanModifiers: fnC},
 			"config_drive":      schema.BoolAttribute{Optional: true, MarkdownDescription: "Whether to use a config drive. Changing this forces a new resource.", PlanModifiers: []planmodifier.Bool{}},
@@ -117,12 +235,55 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				}},
 				PlanModifiers: []planmodifier.List{listplanmodifier.RequiresReplace(), listplanmodifier.UseStateForUnknown()},
 			},
+			"block_device": schema.ListNestedBlock{
+				MarkdownDescription: "Block devices to create the instance with (Nova `block_device_mapping_v2`), one block per device. " +
+					"Mirrors `openstack_compute_instance_v2`. Use it to boot from a new volume, an existing volume, or a volume " +
+					"snapshot, to install from an ISO, or to attach extra disks at boot. The device with `boot_index = 0` is the " +
+					"root disk; when one is present `image_id`/`image_name` may be omitted. Create-only: changing this forces a new " +
+					"resource. Attach/detach volumes on a running instance with `pcd_compute_volume_attach` instead.",
+				NestedObject: schema.NestedBlockObject{Attributes: map[string]schema.Attribute{
+					"source_type":           schema.StringAttribute{Required: true, MarkdownDescription: "The source of the device: `image`, `volume`, `snapshot`, or `blank`."},
+					"uuid":                  schema.StringAttribute{Optional: true, MarkdownDescription: "The ID of the source image, volume, or snapshot. Not used with `source_type = \"blank\"`."},
+					"volume_size":           schema.Int64Attribute{Optional: true, MarkdownDescription: "Size in GiB of the volume to create. Required for `blank`; for `image`/`snapshot` sources it must be at least the source size."},
+					"destination_type":      schema.StringAttribute{Optional: true, MarkdownDescription: "Where the device lives: `volume` (Cinder-backed, persistent) or `local` (ephemeral on the hypervisor). Defaults to `volume`."},
+					"boot_index":            schema.Int64Attribute{Optional: true, MarkdownDescription: "Boot order. `0` is the root disk, `1` the next device (e.g. an installer ISO), `-1` for a non-bootable data disk. Defaults to `-1`."},
+					"delete_on_termination": schema.BoolAttribute{Optional: true, MarkdownDescription: "Delete the created volume when the instance is deleted. Defaults to `false`."},
+					"volume_type":           schema.StringAttribute{Optional: true, MarkdownDescription: "The Cinder volume type for a created volume."},
+					"guest_format":          schema.StringAttribute{Optional: true, MarkdownDescription: "Filesystem format for a `blank` device (e.g. `ext4`, `swap`)."},
+					"device_type":           schema.StringAttribute{Optional: true, MarkdownDescription: "The device type: `disk` (default) or `cdrom` (for an installer ISO)."},
+					"disk_bus":              schema.StringAttribute{Optional: true, MarkdownDescription: "The bus to attach the device on (e.g. `virtio`, `scsi`, `ide`)."},
+				}},
+				PlanModifiers: []planmodifier.List{listplanmodifier.RequiresReplace()},
+			},
 		},
 	}
 }
 
 func (r *instanceResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	r.config = configureClient(req.ProviderData, &resp.Diagnostics)
+}
+
+// ValidateConfig surfaces value errors at plan time rather than apply time.
+func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var cfg instanceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if !cfg.MigrationPriority.IsNull() && !cfg.MigrationPriority.IsUnknown() {
+		if p := cfg.MigrationPriority.ValueString(); p != "" && !migrationPriorities[p] {
+			resp.Diagnostics.AddAttributeError(path.Root("migration_priority"), "Invalid migration_priority",
+				fmt.Sprintf("%q is not valid; use normal, low, high, or never (or \"\" to clear).", p))
+		}
+	}
+	if !cfg.Metadata.IsNull() && !cfg.Metadata.IsUnknown() {
+		var meta map[string]string
+		resp.Diagnostics.Append(cfg.Metadata.ElementsAs(ctx, &meta, false)...)
+		if _, reserved := meta[migrationPriorityKey]; reserved {
+			resp.Diagnostics.AddAttributeError(path.Root("metadata"), "Reserved metadata key",
+				fmt.Sprintf("%q is managed by the migration_priority attribute; set it there instead.", migrationPriorityKey))
+		}
+	}
 }
 
 func (r *instanceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -147,14 +308,20 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		}
 	}
 
+	blockDevices, hasRootBlockDevice := blockDevicesFromList(ctx, plan.BlockDevice, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	imageNameSet := !plan.ImageName.IsNull() && plan.ImageName.ValueString() != ""
 	imageIDSet := !plan.ImageID.IsNull() && !plan.ImageID.IsUnknown() && plan.ImageID.ValueString() != ""
 	switch {
 	case imageNameSet && imageIDSet:
 		resp.Diagnostics.AddError("Invalid image", "Set only one of image_id or image_name.")
 		return
-	case !imageNameSet && !imageIDSet:
-		resp.Diagnostics.AddError("Invalid image", "Exactly one of image_id or image_name must be set.")
+	case !imageNameSet && !imageIDSet && !hasRootBlockDevice:
+		resp.Diagnostics.AddError("Invalid image",
+			"Set image_id or image_name, or supply the boot disk with a block_device that has boot_index = 0.")
 		return
 	}
 	imageID := plan.ImageID.ValueString()
@@ -179,6 +346,22 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() {
 		resp.Diagnostics.Append(plan.Metadata.ElementsAs(ctx, &meta, false)...)
 	}
+	if _, reserved := meta[migrationPriorityKey]; reserved {
+		resp.Diagnostics.AddAttributeError(path.Root("metadata"), "Reserved metadata key",
+			fmt.Sprintf("%q is managed by the migration_priority attribute; set it there instead.", migrationPriorityKey))
+		return
+	}
+	if p := plan.MigrationPriority.ValueString(); !plan.MigrationPriority.IsNull() && !plan.MigrationPriority.IsUnknown() && p != "" {
+		if !migrationPriorities[p] {
+			resp.Diagnostics.AddAttributeError(path.Root("migration_priority"), "Invalid migration_priority",
+				fmt.Sprintf("%q is not valid; use normal, low, high, or never.", p))
+			return
+		}
+		if meta == nil {
+			meta = map[string]string{}
+		}
+		meta[migrationPriorityKey] = p
+	}
 	nets := networksFromList(ctx, plan.Network, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
@@ -192,6 +375,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		Metadata:         meta,
 		AvailabilityZone: plan.AvailabilityZone.ValueString(),
 		Networks:         nets,
+		BlockDevice:      blockDevices,
 	}
 	if v := plan.UserData.ValueString(); v != "" {
 		baseOpts.UserData = []byte(v)
@@ -206,7 +390,17 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		createOpts = keypairs.CreateOptsExt{CreateOptsBuilder: baseOpts, KeyName: kp}
 	}
 
-	server, err := servers.Create(ctx, client, createOpts, nil).Extract()
+	// block_device_mapping_v2.volume_type is only accepted at compute API
+	// microversion >= 2.67; the provider otherwise speaks 2.1. Negotiate the
+	// higher version for the create call alone (a copy of the client, so read
+	// paths keep the 2.1 response shapes they were written against — >= 2.47
+	// embeds the full flavor in the server body, for instance). PCD 2026.4
+	// advertises up to 2.100.
+	createClient := *client
+	if len(blockDevices) > 0 {
+		createClient.Microversion = "2.67"
+	}
+	server, err := servers.Create(ctx, &createClient, createOpts, nil).Extract()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: creating instance", err.Error())
 		return
@@ -219,6 +413,8 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	}
 
 	plan.FlavorID = types.StringValue(flavorID)
+	// A boot-from-volume instance has no image; Nova reports image "" and so
+	// does state, which is what an unset image_id must round-trip to.
 	plan.ImageID = types.StringValue(imageID)
 	resp.Diagnostics.Append(r.flatten(ctx, server, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -277,15 +473,58 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 	// Only push metadata when the user actually set it and it changed. A null or
 	// unknown plan value means "unmanaged" — Nova rejects a nil metadata map
 	// (metadata: None) with a 400.
-	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && !plan.Metadata.Equal(state.Metadata) {
+	metaChanged := !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && !plan.Metadata.Equal(state.Metadata)
+	prioChanged := !plan.MigrationPriority.IsUnknown() && !plan.MigrationPriority.Equal(state.MigrationPriority)
+	if metaChanged || prioChanged {
 		meta := map[string]string{}
-		resp.Diagnostics.Append(plan.Metadata.ElementsAs(ctx, &meta, false)...)
-		if resp.Diagnostics.HasError() {
+		if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() {
+			resp.Diagnostics.Append(plan.Metadata.ElementsAs(ctx, &meta, false)...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+		}
+		if _, reserved := meta[migrationPriorityKey]; reserved {
+			resp.Diagnostics.AddAttributeError(path.Root("metadata"), "Reserved metadata key",
+				fmt.Sprintf("%q is managed by the migration_priority attribute; set it there instead.", migrationPriorityKey))
 			return
 		}
-		if _, err := servers.UpdateMetadata(ctx, client, plan.ID.ValueString(), servers.MetadataOpts(meta)).Extract(); err != nil {
-			resp.Diagnostics.AddError("compute: updating instance metadata", err.Error())
-			return
+		prio := ""
+		if !plan.MigrationPriority.IsNull() && !plan.MigrationPriority.IsUnknown() {
+			prio = plan.MigrationPriority.ValueString()
+		}
+		if prio != "" {
+			if !migrationPriorities[prio] {
+				resp.Diagnostics.AddAttributeError(path.Root("migration_priority"), "Invalid migration_priority",
+					fmt.Sprintf("%q is not valid; use normal, low, high, or never.", prio))
+				return
+			}
+			meta[migrationPriorityKey] = prio
+		}
+		// UpdateMetadata merges keys; it never removes one. Clearing the priority
+		// (or a user key that vanished from the map) needs an explicit delete.
+		if len(meta) > 0 {
+			if _, err := servers.UpdateMetadata(ctx, client, plan.ID.ValueString(), servers.MetadataOpts(meta)).Extract(); err != nil {
+				resp.Diagnostics.AddError("compute: updating instance metadata", err.Error())
+				return
+			}
+		}
+		if prio == "" && prioChanged && state.MigrationPriority.ValueString() != "" {
+			if err := servers.DeleteMetadatum(ctx, client, plan.ID.ValueString(), migrationPriorityKey).ExtractErr(); err != nil && !gophercloud.ResponseCodeIs(err, 404) {
+				resp.Diagnostics.AddError("compute: clearing migration_priority", err.Error())
+				return
+			}
+		}
+		if metaChanged && !state.Metadata.IsNull() {
+			var prev map[string]string
+			resp.Diagnostics.Append(state.Metadata.ElementsAs(ctx, &prev, false)...)
+			for k := range prev {
+				if _, still := meta[k]; !still && k != migrationPriorityKey {
+					if err := servers.DeleteMetadatum(ctx, client, plan.ID.ValueString(), k).ExtractErr(); err != nil && !gophercloud.ResponseCodeIs(err, 404) {
+						resp.Diagnostics.AddError("compute: removing instance metadata key "+k, err.Error())
+						return
+					}
+				}
+			}
 		}
 	}
 
@@ -384,13 +623,11 @@ func (r *instanceResource) flatten(ctx context.Context, server *servers.Server, 
 	}
 	m.AccessIPv4 = types.StringValue(ip)
 
-	meta := make(map[string]string, len(server.Metadata))
-	for k, v := range server.Metadata {
-		meta[k] = v
-	}
+	meta, prio := splitMigrationPriority(server.Metadata)
 	metaMap, d := types.MapValueFrom(ctx, types.StringType, meta)
 	diags = append(diags, d...)
 	m.Metadata = metaMap
+	m.MigrationPriority = types.StringValue(prio)
 
 	// availability_zone and security_groups are Optional+Computed: when the user
 	// omits them the server assigns values, which must be read back or they stay

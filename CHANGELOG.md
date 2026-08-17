@@ -6,6 +6,37 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **`pcd_compute_instance` gains `block_device`** — Nova `block_device_mapping_v2`, mirroring
+  `openstack_compute_instance_v2` so configurations port unchanged. This unlocks every boot
+  source the PCD UI's Deploy VM wizard offers beyond "Image": boot from a **new volume**
+  (`source_type = "image"`, `destination_type = "volume"`, `volume_size`, `volume_type`,
+  `delete_on_termination` — the wizard's default), an **existing volume**, a **volume
+  snapshot**, and **install from ISO** (a blank root volume at `boot_index = 0` plus the ISO
+  as a `device_type = "cdrom"` volume at `boot_index = 1`). `image_id`/`image_name` become
+  optional when a `block_device` with `boot_index = 0` supplies the root disk. Extra data disks
+  at boot are `boot_index = -1`. Create-only, like upstream; use `pcd_compute_volume_attach`
+  for day-2 attach/detach. When block devices are present the create call negotiates compute
+  API microversion 2.67 (required for `volume_type` in a block-device mapping; PCD 2026.4
+  serves up to 2.100); every other call keeps the provider's default so read paths are
+  unchanged. Verified live against a 2026.4 CE: all four boot sources reach ACTIVE, the ISO
+  path presents the installer as an IDE `cdrom` device with the blank target on virtio.
+- **`pcd_compute_instance` gains `migration_priority`** — how PCD's Dynamic Resource
+  Rebalancing (DRR) service treats the VM: `normal`, `low`, `high`, or `never` (excluded).
+  Stored as the `migration-priority` server-metadata key, exactly as the PCD UI's "Set
+  Migration Priority" dialog does; updatable in place, `""` clears. The key is reserved and
+  kept out of `metadata` on read, so the two attributes never drift against each other, and
+  configuring it directly in `metadata` is rejected.
+- **`pcd_networking_network` gains `port_security_enabled`** (default `true`), mirroring
+  `openstack_networking_network_v2`. Setting it `false` is what makes a Layer 2 / "Simple"
+  network (the PCD UI's Simple Networking option: no subnet, no DHCP, no security groups —
+  VMs manage their own addressing). Together with `segments` and the `simple_network` tag the
+  UI keys on, an L2 network is now fully expressible in one resource. Note that Nova refuses
+  to boot on a subnet-less network by network id ("requires a subnet in order to boot
+  instances on"): attach the instance through a `pcd_networking_port` on the network instead —
+  the L2 model anyway. The example shows both halves. Also read back by the
+  `pcd_networking_network` data source.
+
 ## [0.1.6] - 2026-08-15
 
 ### Fixed

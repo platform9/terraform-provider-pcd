@@ -34,4 +34,5 @@ data "pcd_networking_network" "example" {
 - `description` (String) The network description.
 - `external` (Boolean) Whether the network is external.
 - `id` (String) The network ID.
+- `port_security_enabled` (Boolean) Whether port security is enforced on ports of this network. `false` on a Layer 2 / "Simple" network.
 - `shared` (Boolean) Whether the network is shared.
