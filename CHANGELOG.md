@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-08-18
+
 ### Fixed
 
 - `pcd_cluster`, `pcd_cluster_blueprint`, `pcd_host_config` and the host reads behind
