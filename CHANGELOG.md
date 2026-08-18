@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-08-18
+
+### Changed
+
+- `pcd_host_config`: destroying one is now refused while any host is still assigned to it, and the
+  check is fail-closed — if resmgr will not answer, the delete does not proceed. PCD accepts that
+  delete, keeps the assignment, and from then on refuses to remove it (404) and refuses every
+  re-assignment (409 `HostToHostconfigConflict`); deleting the host record does not clear it and the
+  id cannot be re-created, so the host can never be assigned a host configuration — never onboarded —
+  again. Remove the `pcd_host_config_assignment` first. The guard will be lifted once resmgr refuses
+  the unsafe delete itself.
+- `pcd_host_config_assignment`: destroying one now confirms the host has actually stopped reporting
+  the host configuration instead of trusting the `204`, which resmgr returns whether or not it
+  unbound anything. A binding Terraform believed was gone is what left a host strandable.
+
 ## [0.1.7] - 2026-08-18
 
 ### Fixed

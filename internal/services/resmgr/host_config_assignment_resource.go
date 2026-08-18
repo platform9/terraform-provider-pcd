@@ -134,12 +134,17 @@ func (r *hostConfigAssignmentResource) Delete(ctx context.Context, req resource.
 		return
 	}
 
-	url := client.ServiceURL("hosts", state.HostID.ValueString(), "hostconfig", state.HostConfigID.ValueString())
-	if _, err := client.Delete(ctx, url, &gophercloud.RequestOpts{OkCodes: []int{200, 202, 204}}); err != nil {
-		if isNotFound(err) {
-			return
-		}
+	hostID, hostConfigID := state.HostID.ValueString(), state.HostConfigID.ValueString()
+	url := client.ServiceURL("hosts", hostID, "hostconfig", hostConfigID)
+	if _, err := client.Delete(ctx, url, &gophercloud.RequestOpts{OkCodes: []int{200, 202, 204}}); err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("resmgr: unassigning host config", err.Error())
+		return
+	}
+	// A 204 here does not mean the binding is gone — resmgr answers the same whether or
+	// not it unbound anything — so confirm against the host list before reporting the
+	// assignment destroyed.
+	if err := waitUnassigned(ctx, client, hostID, hostConfigID); err != nil {
+		resp.Diagnostics.AddError("resmgr: host config still assigned", err.Error())
 	}
 }
 

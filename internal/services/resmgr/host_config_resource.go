@@ -5,6 +5,8 @@ package resmgr
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -72,7 +74,7 @@ func (r *hostConfigResource) Schema(_ context.Context, _ resource.SchemaRequest,
 		return schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: desc, PlanModifiers: useState}
 	}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a PCD host configuration: the mapping of traffic types (management, VM console, " +
+		MarkdownDescription: "Manages a PCD host configuration: the mapping of traffic types (management, VM console,  Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned a host configuration ever again, so remove the `pcd_host_config_assignment` first." +
 			"tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels.",
 		Attributes: map[string]schema.Attribute{
 			"id":                       schema.StringAttribute{Computed: true, MarkdownDescription: "The host configuration ID.", PlanModifiers: useState},
@@ -204,7 +206,46 @@ func (r *hostConfigResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
-	if _, err := client.Delete(ctx, client.ServiceURL("hostconfigs", state.ID.ValueString()), &gophercloud.RequestOpts{OkCodes: []int{200, 202, 204}}); err != nil {
+	// Deleting a host configuration a host is still assigned to cannot be undone, so it is
+	// checked rather than attempted. resmgr accepts the delete, keeps the assignment, and
+	// from then on refuses to remove it (404 — it validates that the target host config
+	// exists before unbinding) and refuses every re-assignment (409
+	// HostToHostconfigConflict). Deleting the host record does not clear it either, and a
+	// host configuration cannot be re-created under the id that was removed: the host can
+	// never be assigned one again, so it can never be onboarded again.
+	//
+	// The guard is deliberately fail-closed. If the check itself cannot be completed the
+	// delete does not proceed — an unverified assumption here costs a hypervisor.
+	id := state.ID.ValueString()
+	assigned, err := hostsAssignedTo(ctx, client, id)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"resmgr: cannot confirm the host configuration is unused",
+			fmt.Sprintf("Host configuration %s was not deleted because the check for hosts still "+
+				"assigned to it could not be completed: %s\n\nDeleting one while a host is still "+
+				"assigned to it strands that host permanently, so Terraform will not do it on an "+
+				"unverified answer. Retry when resmgr is reachable.", id, err),
+		)
+		return
+	}
+	if len(assigned) > 0 {
+		resp.Diagnostics.AddError(
+			"Host configuration is still assigned to a host",
+			fmt.Sprintf("Host configuration %s is still assigned to %s, and deleting it now would "+
+				"leave that host unable to be assigned any host configuration ever again: resmgr "+
+				"would refuse both the unassign (404) and every re-assignment (409), with no way "+
+				"back.\n\nRemove the assignment first, then delete the host configuration:\n"+
+				"  - destroy the pcd_host_config_assignment resource that binds them, or\n"+
+				"  - DELETE /resmgr/v2/hosts/<host_id>/hostconfig/%s if the assignment was made "+
+				"outside Terraform, then confirm hostconfig_id has cleared in GET /resmgr/v2/hosts.\n\n"+
+				"This guard is here because of a defect in PCD, not in your configuration, and will "+
+				"be lifted once resmgr refuses the unsafe delete itself.",
+				id, strings.Join(assigned, ", "), id),
+		)
+		return
+	}
+
+	if _, err := client.Delete(ctx, client.ServiceURL("hostconfigs", id), &gophercloud.RequestOpts{OkCodes: []int{200, 202, 204}}); err != nil {
 		if isNotFound(err) {
 			return
 		}
