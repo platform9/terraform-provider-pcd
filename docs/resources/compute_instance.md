@@ -17,7 +17,8 @@ resource "pcd_networking_network" "example" {
   name = "tf-example-network"
 }
 
-resource "pcd_compute_instance" "example" {
+# Boot from an image (ephemeral root disk on the hypervisor).
+resource "pcd_compute_instance" "from_image" {
   name        = "tf-example-instance"
   image_name  = "Ubuntu-22.04"
   flavor_name = "m1.small"
@@ -25,12 +26,148 @@ resource "pcd_compute_instance" "example" {
 
   security_groups = ["default"]
 
+  # How PCD's Dynamic Resource Rebalancing (DRR) treats this VM when balancing
+  # hosts: normal | low | high | never (excluded). Same as the UI's
+  # "Set Migration Priority" action. Updatable in place.
+  migration_priority = "high"
+
   metadata = {
     environment = "dev"
   }
 
   network {
     uuid = pcd_networking_network.example.id
+  }
+}
+
+# A VM on a Layer 2 / "Simple" network. A subnet-less network cannot be booted
+# on by network uuid (Nova requires a subnet for that), so the VM attaches
+# through a port on it — which is the L2 model anyway: a port on the segment,
+# and the guest owns its IP. No DHCP, so addressing comes from cloud-init via
+# config drive; no security groups apply (port security is off on the network).
+resource "pcd_networking_port" "l2" {
+  name       = "tf-example-l2-port"
+  network_id = "L2-NETWORK-UUID" # e.g. pcd_networking_network.l2.id
+}
+
+resource "pcd_compute_instance" "on_l2" {
+  name         = "tf-example-l2"
+  image_name   = "Ubuntu-22.04"
+  flavor_name  = "m1.small"
+  config_drive = true
+  user_data    = file("cloud-init-static-ip.yaml")
+
+  network {
+    port = pcd_networking_port.l2.id
+  }
+}
+
+# Boot from a NEW volume created from an image (persistent root disk) — the
+# PCD UI's default "New Volume" option. No image_name needed: the block_device
+# with boot_index = 0 is the root disk.
+resource "pcd_compute_instance" "from_new_volume" {
+  name        = "tf-example-bfv"
+  flavor_name = "m1.small"
+
+  block_device {
+    source_type           = "image"
+    uuid                  = "IMAGE-UUID"
+    destination_type      = "volume"
+    volume_size           = 20
+    volume_type           = "ssd"
+    boot_index            = 0
+    delete_on_termination = true
+  }
+
+  network {
+    uuid = pcd_networking_network.example.id
+  }
+}
+
+# Boot from an EXISTING volume (e.g. one restored from a backup).
+resource "pcd_compute_instance" "from_existing_volume" {
+  name        = "tf-example-existing"
+  flavor_name = "m1.small"
+
+  block_device {
+    source_type      = "volume"
+    uuid             = "VOLUME-UUID"
+    destination_type = "volume"
+    boot_index       = 0
+  }
+
+  network {
+    uuid = pcd_networking_network.example.id
+  }
+}
+
+# Boot from a VOLUME SNAPSHOT (a new volume is cloned from it).
+resource "pcd_compute_instance" "from_volume_snapshot" {
+  name        = "tf-example-snap"
+  flavor_name = "m1.small"
+
+  block_device {
+    source_type           = "snapshot"
+    uuid                  = "SNAPSHOT-UUID"
+    destination_type      = "volume"
+    boot_index            = 0
+    delete_on_termination = true
+  }
+
+  network {
+    uuid = pcd_networking_network.example.id
+  }
+}
+
+# Install from an ISO: a blank target volume to install onto (boot_index 0)
+# plus the installer ISO attached as a CD-ROM (boot_index 1) — the PCD UI's
+# "Install from ISO" option.
+resource "pcd_compute_instance" "from_iso" {
+  name        = "tf-example-iso"
+  flavor_name = "m1.small"
+
+  block_device {
+    source_type           = "blank"
+    destination_type      = "volume"
+    volume_size           = 40
+    boot_index            = 0
+    delete_on_termination = false
+  }
+
+  block_device {
+    source_type           = "image"
+    uuid                  = "ISO-IMAGE-UUID"
+    destination_type      = "volume"
+    volume_size           = 1
+    boot_index            = 1
+    device_type           = "cdrom"
+    delete_on_termination = true
+  }
+
+  network {
+    uuid = pcd_networking_network.example.id
+  }
+}
+
+# --- Placement: server groups and scheduler hints ---------------------------
+resource "pcd_compute_servergroup" "web" {
+  name     = "web-anti-affinity"
+  policies = ["anti-affinity"]
+}
+
+resource "pcd_compute_instance" "web" {
+  count       = 2
+  name        = "web-${count.index}"
+  image_name  = "cirros-0.6.2"
+  flavor_name = "m1.tiny"
+
+  network {
+    uuid = pcd_networking_network.example.id
+  }
+
+  # Each member lands on a different hypervisor.
+  scheduler_hints {
+    group = pcd_compute_servergroup.web.id
   }
 }
 ```
@@ -44,16 +181,19 @@ resource "pcd_compute_instance" "example" {
 
 ### Optional
 
-- `availability_zone` (String) Availability zone to launch in. Changing this forces a new resource.
+- `availability_zone` (String) Availability zone to launch in. Admins may pin a host with `<az>:<host>` (e.g. `nova:hyp2`); the pin is preserved on refresh (Nova only reports the zone); `terraform import` recovers only the zone, so re-set the pin in state before applying. Changing this forces a new resource.
+- `block_device` (Block List) Block devices to create the instance with (Nova `block_device_mapping_v2`), one block per device. Mirrors `openstack_compute_instance_v2`. Use it to boot from a new volume, an existing volume, or a volume snapshot, to install from an ISO, or to attach extra disks at boot. The device with `boot_index = 0` is the root disk; when one is present `image_id`/`image_name` may be omitted. Create-only: changing this forces a new resource. Attach/detach volumes on a running instance with `pcd_compute_volume_attach` instead. (see [below for nested schema](#nestedblock--block_device))
 - `config_drive` (Boolean) Whether to use a config drive. Changing this forces a new resource.
 - `flavor_id` (String) The flavor ID (alternative to flavor_name). Changing this triggers an in-place resize.
 - `flavor_name` (String) The flavor name (alternative to flavor_id). Changing this triggers an in-place resize.
-- `image_id` (String) The image ID to boot from (alternative to image_name). Changing this forces a new resource.
-- `image_name` (String) The image name to boot from, resolved via Glance (alternative to image_id). Exactly one of image_id/image_name is required. Changing this forces a new resource.
+- `image_id` (String) The image ID to boot from (alternative to image_name). Required unless a `block_device` with `boot_index = 0` supplies the boot disk. Changing this forces a new resource.
+- `image_name` (String) The image name to boot from, resolved via Glance (alternative to image_id). Required unless a `block_device` with `boot_index = 0` supplies the boot disk. Changing this forces a new resource.
 - `key_pair` (String) The name of a keypair to inject. Changing this forces a new resource.
-- `metadata` (Map of String) Key-value metadata attached to the instance.
+- `metadata` (Map of String) Key-value metadata attached to the instance. The key `migration-priority` is reserved — set it through `migration_priority` instead.
+- `migration_priority` (String) How PCD's Dynamic Resource Rebalancing (DRR) service treats this VM when balancing hosts: `normal`, `low`, `high`, or `never` (excluded from automatic migration). Unset means DRR's default. Stored as the `migration-priority` server metadata key, exactly as the PCD UI's Set Migration Priority dialog does. Updatable in place; set `""` to clear.
 - `network` (Block List) Networks to attach. Changing this forces a new resource. (see [below for nested schema](#nestedblock--network))
 - `region` (String) The region. Defaults to the provider's region.
+- `scheduler_hints` (Block List) Scheduler hints passed to Nova at boot (`os:scheduler_hints`). Mirrors `openstack_compute_instance_v2`. Use `group` with a `pcd_compute_servergroup` for affinity / anti-affinity placement, `different_host` / `same_host` to place relative to existing instances. At most one block. Create-only: changing this forces a new resource. Nova does not report hints back, so the block round-trips from configuration. (see [below for nested schema](#nestedblock--scheduler_hints))
 - `security_groups` (Set of String) Names of security groups to associate. Changing this forces a new resource.
 - `user_data` (String) User data (cloud-init) for the instance. Changing this forces a new resource.
 
@@ -63,6 +203,26 @@ resource "pcd_compute_instance" "example" {
 - `id` (String) The instance ID.
 - `status` (String) The Nova status (e.g. ACTIVE).
 
+<a id="nestedblock--block_device"></a>
+### Nested Schema for `block_device`
+
+Required:
+
+- `source_type` (String) The source of the device: `image`, `volume`, `snapshot`, or `blank`.
+
+Optional:
+
+- `boot_index` (Number) Boot order. `0` is the root disk, `1` the next device (e.g. an installer ISO), `-1` for a non-bootable data disk. Defaults to `-1`.
+- `delete_on_termination` (Boolean) Delete the created volume when the instance is deleted. Defaults to `false`.
+- `destination_type` (String) Where the device lives: `volume` (Cinder-backed, persistent) or `local` (ephemeral on the hypervisor). Defaults to `volume`.
+- `device_type` (String) The device type: `disk` (default) or `cdrom` (for an installer ISO).
+- `disk_bus` (String) The bus to attach the device on (e.g. `virtio`, `scsi`, `ide`).
+- `guest_format` (String) Filesystem format for a `blank` device (e.g. `ext4`, `swap`).
+- `uuid` (String) The ID of the source image, volume, or snapshot. Not used with `source_type = "blank"`.
+- `volume_size` (Number) Size in GiB of the volume to create. Required for `blank`; for `image`/`snapshot` sources it must be at least the source size.
+- `volume_type` (String) The Cinder volume type for a created volume.
+
+
 <a id="nestedblock--network"></a>
 ### Nested Schema for `network`
 
@@ -71,6 +231,17 @@ Optional:
 - `name` (String) Network name (informational).
 - `port` (String) Existing port to attach (required unless uuid is set).
 - `uuid` (String) Network UUID to attach to (required unless port is set).
+
+
+<a id="nestedblock--scheduler_hints"></a>
+### Nested Schema for `scheduler_hints`
+
+Optional:
+
+- `additional_properties` (Map of String) Arbitrary extra hints (key → value) passed through unvalidated, e.g. `query`. Merged last, so a key here overrides the typed attributes (`group`, `different_host`, `same_host`); `query` must be a JSON-encoded string.
+- `different_host` (List of String) Instance IDs whose hosts this instance must NOT be scheduled on.
+- `group` (String) A server group ID to place the instance in (see `pcd_compute_servergroup`).
+- `same_host` (List of String) Instance IDs whose host this instance MUST be scheduled on.
 
 ## Import
 

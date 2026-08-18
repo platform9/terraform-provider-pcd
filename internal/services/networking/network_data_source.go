@@ -41,6 +41,7 @@ type networkDataSourceModel struct {
 	AdminStateUp types.Bool   `tfsdk:"admin_state_up"`
 	Shared       types.Bool   `tfsdk:"shared"`
 	External     types.Bool   `tfsdk:"external"`
+	PortSecurity types.Bool   `tfsdk:"port_security_enabled"`
 	TenantID     types.String `tfsdk:"tenant_id"`
 	Region       types.String `tfsdk:"region"`
 }
@@ -53,15 +54,16 @@ func (d *networkDataSource) Schema(_ context.Context, _ datasource.SchemaRequest
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Look up a Neutron network by name or ID.",
 		Attributes: map[string]schema.Attribute{
-			"id":             schema.StringAttribute{Computed: true, MarkdownDescription: "The network ID."},
-			"network_id":     schema.StringAttribute{Optional: true, MarkdownDescription: "Look up by network ID (takes precedence over name)."},
-			"name":           schema.StringAttribute{Optional: true, MarkdownDescription: "Look up by name."},
-			"description":    schema.StringAttribute{Computed: true, MarkdownDescription: "The network description."},
-			"admin_state_up": schema.BoolAttribute{Computed: true, MarkdownDescription: "The administrative state."},
-			"shared":         schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether the network is shared."},
-			"external":       schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether the network is external."},
-			"tenant_id":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Filter by (and report) the owning project."},
-			"region":         schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region."},
+			"id":                    schema.StringAttribute{Computed: true, MarkdownDescription: "The network ID."},
+			"network_id":            schema.StringAttribute{Optional: true, MarkdownDescription: "Look up by network ID (takes precedence over name)."},
+			"name":                  schema.StringAttribute{Optional: true, MarkdownDescription: "Look up by name."},
+			"description":           schema.StringAttribute{Computed: true, MarkdownDescription: "The network description."},
+			"admin_state_up":        schema.BoolAttribute{Computed: true, MarkdownDescription: "The administrative state."},
+			"shared":                schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether the network is shared."},
+			"external":              schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether the network is external."},
+			"port_security_enabled": schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether port security is enforced on ports of this network. `false` on a Layer 2 / \"Simple\" network."},
+			"tenant_id":             schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Filter by (and report) the owning project."},
+			"region":                schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region."},
 		},
 	}
 }
@@ -124,6 +126,7 @@ func (d *networkDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	data.AdminStateUp = types.BoolValue(n.AdminStateUp)
 	data.Shared = types.BoolValue(n.Shared)
 	data.External = types.BoolValue(n.External)
+	data.PortSecurity = types.BoolValue(n.PortSecurityEnabled)
 	data.TenantID = types.StringValue(n.TenantID)
 	if data.Region.IsNull() || data.Region.IsUnknown() {
 		data.Region = types.StringValue(d.config.Region)

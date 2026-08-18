@@ -14,6 +14,7 @@ import (
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/external"
+	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/portsecurity"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/provider"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/networks"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -56,6 +57,7 @@ type networkModel struct {
 	Tags         types.Set    `tfsdk:"tags"`
 	Region       types.String `tfsdk:"region"`
 	Segments     types.List   `tfsdk:"segments"`
+	PortSecurity types.Bool   `tfsdk:"port_security_enabled"`
 }
 
 type segmentModel struct {
@@ -69,6 +71,7 @@ type segmentModel struct {
 type networkExtended struct {
 	networks.Network
 	external.NetworkExternalExt
+	portsecurity.PortSecurityExt
 }
 
 func (r *networkResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -94,6 +97,12 @@ func (r *networkResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			},
 			"tags":   schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the network.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
 			"region": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"port_security_enabled": schema.BoolAttribute{
+				Optional: true, Computed: true,
+				MarkdownDescription: "Whether port security (security groups and anti-spoofing) is enforced on ports of this network. " +
+					"Defaults to `true`. Set `false` for a Layer 2 / \"Simple\" network, where the VM manages its own addressing and " +
+					"security groups do not apply — mirrors the PCD UI's Simple Network option.",
+			},
 			"segments": schema.ListNestedAttribute{
 				Optional: true,
 				MarkdownDescription: "Provider-network segments (admin only). One segment creates a physical network " +
@@ -183,6 +192,10 @@ func (r *networkResource) Create(ctx context.Context, req resource.CreateRequest
 	if !plan.External.IsNull() && !plan.External.IsUnknown() {
 		ext := plan.External.ValueBool()
 		createOpts = external.CreateOptsExt{CreateOptsBuilder: createOpts, External: &ext}
+	}
+	if !plan.PortSecurity.IsNull() && !plan.PortSecurity.IsUnknown() {
+		ps := plan.PortSecurity.ValueBool()
+		createOpts = portsecurity.NetworkCreateOptsExt{CreateOptsBuilder: createOpts, PortSecurityEnabled: &ps}
 	}
 	if !plan.Segments.IsNull() && !plan.Segments.IsUnknown() {
 		var segs []segmentModel
@@ -277,7 +290,11 @@ func (r *networkResource) Update(ctx context.Context, req resource.UpdateRequest
 	var updateOpts networks.UpdateOptsBuilder = base
 	if !plan.External.Equal(state.External) && !plan.External.IsNull() && !plan.External.IsUnknown() {
 		ext := plan.External.ValueBool()
-		updateOpts = external.UpdateOptsExt{UpdateOptsBuilder: base, External: &ext}
+		updateOpts = external.UpdateOptsExt{UpdateOptsBuilder: updateOpts, External: &ext}
+	}
+	if !plan.PortSecurity.Equal(state.PortSecurity) && !plan.PortSecurity.IsNull() && !plan.PortSecurity.IsUnknown() {
+		ps := plan.PortSecurity.ValueBool()
+		updateOpts = portsecurity.NetworkUpdateOptsExt{UpdateOptsBuilder: updateOpts, PortSecurityEnabled: &ps}
 	}
 
 	if _, err := networks.Update(ctx, client, plan.ID.ValueString(), updateOpts).Extract(); err != nil {
@@ -347,6 +364,7 @@ func (r *networkResource) readInto(ctx context.Context, client *gophercloud.Serv
 	m.AdminStateUp = types.BoolValue(n.AdminStateUp)
 	m.Shared = types.BoolValue(n.Shared)
 	m.External = types.BoolValue(n.External)
+	m.PortSecurity = types.BoolValue(n.PortSecurityEnabled)
 	m.TenantID = types.StringValue(n.TenantID)
 
 	tagVals := n.Tags
