@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Fixed
+
+- `pcd_cluster`, `pcd_cluster_blueprint`, `pcd_host_config` and the host reads behind
+  `pcd_host_config_assignment` / `pcd_host_role`: an object resmgr no longer has is now removed from
+  state. resmgr answers `GET` for a deleted cluster with `200` and a body of `null` rather than a
+  `404`; that decoded into a zero-value struct with no error, so Read reported the resource as
+  present-but-blank and never called `RemoveResource` — leaving Terraform convinced a destroyed
+  region still existed and unable to rebuild it. A 200 that describes no object is now absence.
 - `pcd_compute_instance`: `availability_zone = "<az>:<host>"` (admin host pin) no longer fails with "inconsistent result after apply" — the pin is preserved on read, as upstream does.
 
 ### Added

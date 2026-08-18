@@ -16,9 +16,12 @@
 package resmgr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -43,10 +46,42 @@ func configureClient(providerData any, diags *diag.Diagnostics) *clients.Config 
 	return config
 }
 
+// errAbsent reports a resource resmgr answered for without describing: 200 with a
+// body of literal null. isNotFound treats it exactly like a 404.
+var errAbsent = errors.New("resmgr: 200 with a null body — the object does not exist")
+
+// isNullJSON reports whether a response body carries no object at all.
+func isNullJSON(raw []byte) bool {
+	t := bytes.TrimSpace(raw)
+	return len(t) == 0 || bytes.Equal(t, []byte("null"))
+}
+
 // getJSON issues an authenticated GET and decodes the JSON response into out.
+//
+// resmgr does not 404 for an object that is gone: `GET /resmgr/v2/clusters/<name>`
+// answers 200 with a body of `null` for a cluster that never existed or has been
+// deleted (observed on 2026.4). Decoded straight into a struct that is a nil
+// unmarshal — no error, every field left at its zero value — so a Read would
+// report the resource as present-but-blank, never call RemoveResource, and leave
+// Terraform believing a destroyed object still exists. A region could then never
+// be rebuilt: the next apply plans no create for something the API says is gone.
+//
+// The body is therefore read first and an empty one reported as absence. Every
+// caller fetches a single object by name or id, so no list response reaches here.
 func getJSON(ctx context.Context, client *gophercloud.ServiceClient, url string, out any) error {
-	_, err := client.Get(ctx, url, out, &gophercloud.RequestOpts{OkCodes: []int{200}})
-	return err
+	var raw json.RawMessage
+	if _, err := client.Get(ctx, url, &raw, &gophercloud.RequestOpts{OkCodes: []int{200}}); err != nil {
+		// A 200 carrying no body at all describes no object either, and the decoder
+		// reports that as io.EOF before the body ever reaches isNullJSON.
+		if errors.Is(err, io.EOF) {
+			return errAbsent
+		}
+		return err
+	}
+	if isNullJSON(raw) {
+		return errAbsent
+	}
+	return json.Unmarshal(raw, out)
 }
 
 // postJSON issues an authenticated POST with a JSON body, optionally decoding
@@ -63,9 +98,10 @@ func putJSON(ctx context.Context, client *gophercloud.ServiceClient, url string,
 	return err
 }
 
-// isNotFound reports whether err is an HTTP 404.
+// isNotFound reports whether err says the object is not there — either an HTTP 404
+// or resmgr's 200-with-a-null-body way of saying the same thing.
 func isNotFound(err error) bool {
-	return gophercloud.ResponseCodeIs(err, http.StatusNotFound)
+	return errors.Is(err, errAbsent) || gophercloud.ResponseCodeIs(err, http.StatusNotFound)
 }
 
 // canonicalJSON re-marshals raw JSON into Go's canonical encoding: compact,
