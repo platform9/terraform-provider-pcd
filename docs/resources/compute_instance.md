@@ -181,7 +181,7 @@ resource "pcd_compute_instance" "web" {
 
 ### Optional
 
-- `availability_zone` (String) Availability zone to launch in. Changing this forces a new resource.
+- `availability_zone` (String) Availability zone to launch in. Admins may pin a host with `<az>:<host>` (e.g. `nova:hyp2`); the pin is kept in state even though Nova only reports the zone. Changing this forces a new resource.
 - `block_device` (Block List) Block devices to create the instance with (Nova `block_device_mapping_v2`), one block per device. Mirrors `openstack_compute_instance_v2`. Use it to boot from a new volume, an existing volume, or a volume snapshot, to install from an ISO, or to attach extra disks at boot. The device with `boot_index = 0` is the root disk; when one is present `image_id`/`image_name` may be omitted. Create-only: changing this forces a new resource. Attach/detach volumes on a running instance with `pcd_compute_volume_attach` instead. (see [below for nested schema](#nestedblock--block_device))
 - `config_drive` (Boolean) Whether to use a config drive. Changing this forces a new resource.
 - `flavor_id` (String) The flavor ID (alternative to flavor_name). Changing this triggers an in-place resize.

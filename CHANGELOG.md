@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- `pcd_compute_instance`: `availability_zone = "<az>:<host>"` (admin host pin) no longer fails with "inconsistent result after apply" — the pin is preserved on read, as upstream does.
+
 ### Added
 - `pcd_compute_instance`: `scheduler_hints` block (`group`, `different_host`, `same_host`,
   `additional_properties`) — upstream parity; makes `pcd_compute_servergroup` usable for

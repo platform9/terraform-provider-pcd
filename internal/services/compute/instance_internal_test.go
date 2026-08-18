@@ -49,6 +49,24 @@ func TestMigrationPriorityValues(t *testing.T) {
 	}
 }
 
+// An admin can pin the host with "<az>:<host>[:<node>]"; Nova only reports the
+// zone, so the pin must survive read-back or every plan replaces the instance.
+func TestReconcileAvailabilityZone(t *testing.T) {
+	cases := []struct{ configured, reported, want string }{
+		{"", "nova", "nova"},     // unset: take the server's zone
+		{"nova", "nova", "nova"}, // plain zone
+		{"nova:pcd-ce-lab-ubuntu-hyp2", "nova", "nova:pcd-ce-lab-ubuntu-hyp2"}, // host pin preserved
+		{"nova:hyp2:hyp2", "nova", "nova:hyp2:hyp2"},                           // az:host:node preserved
+		{"nova:hyp2", "zone-b", "zone-b"},                                      // zone actually differs → drift shows
+		{"zone-b", "nova", "nova"},                                             // plain mismatch → drift shows
+	}
+	for _, c := range cases {
+		if got := reconcileAvailabilityZone(c.configured, c.reported); got != c.want {
+			t.Errorf("reconcile(%q,%q) = %q, want %q", c.configured, c.reported, got, c.want)
+		}
+	}
+}
+
 // block_device conversion: defaults, validation, and root detection.
 func TestBlockDevicesFromList(t *testing.T) {
 	ctx := context.Background()

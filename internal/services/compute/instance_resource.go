@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -65,6 +66,16 @@ func splitMigrationPriority(serverMeta map[string]string) (map[string]string, st
 		meta[k] = v
 	}
 	return meta, prio
+}
+
+// reconcileAvailabilityZone keeps an admin's "<az>:<host>[:<node>]" pin when
+// Nova reports the same zone (Nova never echoes the host part), so the pin does
+// not read back as a diff. Any real zone mismatch still surfaces as drift.
+func reconcileAvailabilityZone(configured, reported string) string {
+	if i := strings.IndexByte(configured, ':'); i > 0 && configured[:i] == reported {
+		return configured
+	}
+	return reported
 }
 
 // blockDevicesFromList converts the block_device blocks into Nova
@@ -276,7 +287,7 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 					"dialog does. Updatable in place; set `\"\"` to clear.",
 				PlanModifiers: stable},
 			"user_data":         schema.StringAttribute{Optional: true, MarkdownDescription: "User data (cloud-init) for the instance. Changing this forces a new resource.", PlanModifiers: fn},
-			"availability_zone": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Availability zone to launch in. Changing this forces a new resource.", PlanModifiers: fnC},
+			"availability_zone": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Availability zone to launch in. Admins may pin a host with `<az>:<host>` (e.g. `nova:hyp2`); the pin is kept in state even though Nova only reports the zone. Changing this forces a new resource.", PlanModifiers: fnC},
 			"config_drive":      schema.BoolAttribute{Optional: true, MarkdownDescription: "Whether to use a config drive. Changing this forces a new resource.", PlanModifiers: []planmodifier.Bool{}},
 			"access_ip_v4":      schema.StringAttribute{Computed: true, MarkdownDescription: "The first IPv4 address of the instance.", PlanModifiers: stable},
 			"status":            schema.StringAttribute{Computed: true, MarkdownDescription: "The Nova status (e.g. ACTIVE)."},
@@ -711,7 +722,7 @@ func (r *instanceResource) flatten(ctx context.Context, server *servers.Server, 
 	// availability_zone and security_groups are Optional+Computed: when the user
 	// omits them the server assigns values, which must be read back or they stay
 	// unknown after apply ("invalid result object").
-	m.AvailabilityZone = types.StringValue(server.AvailabilityZone)
+	m.AvailabilityZone = types.StringValue(reconcileAvailabilityZone(m.AvailabilityZone.ValueString(), server.AvailabilityZone))
 
 	seenSG := make(map[string]bool, len(server.SecurityGroups))
 	sgs := make([]string, 0, len(server.SecurityGroups))
