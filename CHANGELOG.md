@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-08-18
+
 ### Changed
 
 - `pcd_host_config`: destroying one is now refused while any host is still assigned to it, and the
