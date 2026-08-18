@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcd_host_config_assignment`, `pcd_host_cluster_role` and `pcd_host_role` no longer disappear from
+  state while a host is being deauthorised. resmgr answers the per-host endpoints with `404` for
+  minutes after a host's last role is removed, while `GET /resmgr/v2/hosts` keeps reporting the host,
+  its roles and its `hostconfig_id` throughout; the reads believed the `404` and removed resources
+  that still existed, and the next apply then failed against the reality they never left — `409
+  HostToHostconfigConflict` re-creating an assignment, `403 HostInAuthState` re-adding a role. A
+  `404` is now checked against the host list before anything leaves state, and an unreadable list is
+  an error rather than an absence. An ordinary read still costs one request.
+
+### Security
+
+- Bumped the indirect `google.golang.org/grpc` dependency to 1.82.1 (GHSA: gRPC-Go xDS RBAC and
+  HTTP/2 vulnerabilities). The provider's gRPC server only ever serves the local Terraform CLI over
+  a private channel and does not use xDS, so exposure was minimal.
+
 ## [0.1.8] - 2026-08-18
 
 ### Changed

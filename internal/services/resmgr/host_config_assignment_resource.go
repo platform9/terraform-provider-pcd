@@ -98,16 +98,12 @@ func (r *hostConfigAssignmentResource) Read(ctx context.Context, req resource.Re
 		return
 	}
 
-	var host hostAPI
-	if err := getJSON(ctx, client, client.ServiceURL("hosts", state.HostID.ValueString()), &host); err != nil {
-		if isNotFound(err) {
-			resp.State.RemoveResource(ctx)
-			return
-		}
+	host, known, err := hostRecord(ctx, client, state.HostID.ValueString())
+	if err != nil {
 		resp.Diagnostics.AddError("resmgr: reading host", err.Error())
 		return
 	}
-	if host.HostConfigID != state.HostConfigID.ValueString() {
+	if !known || host.HostConfigID != state.HostConfigID.ValueString() {
 		resp.State.RemoveResource(ctx)
 		return
 	}
