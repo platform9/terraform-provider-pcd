@@ -181,7 +181,7 @@ resource "pcd_compute_instance" "web" {
 
 ### Optional
 
-- `availability_zone` (String) Availability zone to launch in. Admins may pin a host with `<az>:<host>` (e.g. `nova:hyp2`); the pin is kept in state even though Nova only reports the zone. Changing this forces a new resource.
+- `availability_zone` (String) Availability zone to launch in. Admins may pin a host with `<az>:<host>` (e.g. `nova:hyp2`); the pin is preserved on refresh (Nova only reports the zone); `terraform import` recovers only the zone, so re-set the pin in state before applying. Changing this forces a new resource.
 - `block_device` (Block List) Block devices to create the instance with (Nova `block_device_mapping_v2`), one block per device. Mirrors `openstack_compute_instance_v2`. Use it to boot from a new volume, an existing volume, or a volume snapshot, to install from an ISO, or to attach extra disks at boot. The device with `boot_index = 0` is the root disk; when one is present `image_id`/`image_name` may be omitted. Create-only: changing this forces a new resource. Attach/detach volumes on a running instance with `pcd_compute_volume_attach` instead. (see [below for nested schema](#nestedblock--block_device))
 - `config_drive` (Boolean) Whether to use a config drive. Changing this forces a new resource.
 - `flavor_id` (String) The flavor ID (alternative to flavor_name). Changing this triggers an in-place resize.
@@ -238,7 +238,7 @@ Optional:
 
 Optional:
 
-- `additional_properties` (Map of String) Arbitrary extra hints (key → value) passed through unvalidated, e.g. `query`.
+- `additional_properties` (Map of String) Arbitrary extra hints (key → value) passed through unvalidated, e.g. `query`. Merged last, so a key here overrides the typed attributes (`group`, `different_host`, `same_host`); `query` must be a JSON-encoded string.
 - `different_host` (List of String) Instance IDs whose hosts this instance must NOT be scheduled on.
 - `group` (String) A server group ID to place the instance in (see `pcd_compute_servergroup`).
 - `same_host` (List of String) Instance IDs whose host this instance MUST be scheduled on.

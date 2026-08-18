@@ -59,6 +59,7 @@ func TestReconcileAvailabilityZone(t *testing.T) {
 		{"nova:hyp2:hyp2", "nova", "nova:hyp2:hyp2"},                           // az:host:node preserved
 		{"nova:hyp2", "zone-b", "zone-b"},                                      // zone actually differs → drift shows
 		{"zone-b", "nova", "nova"},                                             // plain mismatch → drift shows
+		{"nova:hyp2", "", "nova:hyp2"},                                         // empty report never wipes a configured value
 	}
 	for _, c := range cases {
 		if got := reconcileAvailabilityZone(c.configured, c.reported); got != c.want {

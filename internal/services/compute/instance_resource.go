@@ -70,8 +70,13 @@ func splitMigrationPriority(serverMeta map[string]string) (map[string]string, st
 
 // reconcileAvailabilityZone keeps an admin's "<az>:<host>[:<node>]" pin when
 // Nova reports the same zone (Nova never echoes the host part), so the pin does
-// not read back as a diff. Any real zone mismatch still surfaces as drift.
+// not read back as a diff. Any real zone mismatch still surfaces as drift. An
+// empty report (no zone in the server body) leaves the configured value alone
+// rather than wiping it.
 func reconcileAvailabilityZone(configured, reported string) string {
+	if reported == "" {
+		return configured
+	}
 	if i := strings.IndexByte(configured, ':'); i > 0 && configured[:i] == reported {
 		return configured
 	}
@@ -287,7 +292,7 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 					"dialog does. Updatable in place; set `\"\"` to clear.",
 				PlanModifiers: stable},
 			"user_data":         schema.StringAttribute{Optional: true, MarkdownDescription: "User data (cloud-init) for the instance. Changing this forces a new resource.", PlanModifiers: fn},
-			"availability_zone": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Availability zone to launch in. Admins may pin a host with `<az>:<host>` (e.g. `nova:hyp2`); the pin is kept in state even though Nova only reports the zone. Changing this forces a new resource.", PlanModifiers: fnC},
+			"availability_zone": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Availability zone to launch in. Admins may pin a host with `<az>:<host>` (e.g. `nova:hyp2`); the pin is preserved on refresh (Nova only reports the zone); `terraform import` recovers only the zone, so re-set the pin in state before applying. Changing this forces a new resource.", PlanModifiers: fnC},
 			"config_drive":      schema.BoolAttribute{Optional: true, MarkdownDescription: "Whether to use a config drive. Changing this forces a new resource.", PlanModifiers: []planmodifier.Bool{}},
 			"access_ip_v4":      schema.StringAttribute{Computed: true, MarkdownDescription: "The first IPv4 address of the instance.", PlanModifiers: stable},
 			"status":            schema.StringAttribute{Computed: true, MarkdownDescription: "The Nova status (e.g. ACTIVE)."},
@@ -333,7 +338,7 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 					"group":                 schema.StringAttribute{Optional: true, MarkdownDescription: "A server group ID to place the instance in (see `pcd_compute_servergroup`)."},
 					"different_host":        schema.ListAttribute{Optional: true, ElementType: types.StringType, MarkdownDescription: "Instance IDs whose hosts this instance must NOT be scheduled on."},
 					"same_host":             schema.ListAttribute{Optional: true, ElementType: types.StringType, MarkdownDescription: "Instance IDs whose host this instance MUST be scheduled on."},
-					"additional_properties": schema.MapAttribute{Optional: true, ElementType: types.StringType, MarkdownDescription: "Arbitrary extra hints (key → value) passed through unvalidated, e.g. `query`."},
+					"additional_properties": schema.MapAttribute{Optional: true, ElementType: types.StringType, MarkdownDescription: "Arbitrary extra hints (key → value) passed through unvalidated, e.g. `query`. Merged last, so a key here overrides the typed attributes (`group`, `different_host`, `same_host`); `query` must be a JSON-encoded string."},
 				}},
 				PlanModifiers: []planmodifier.List{listplanmodifier.RequiresReplace()},
 			},
