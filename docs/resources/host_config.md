@@ -3,12 +3,12 @@
 page_title: "pcd_host_config Resource - PCD"
 subcategory: "Cluster Blueprint"
 description: |-
-  Manages a PCD host configuration: the mapping of traffic types (management, VM console, tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels.
+  Manages a PCD host configuration: the mapping of traffic types (management, VM console,  Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned a host configuration ever again, so remove the pcd_host_config_assignment first.tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels.
 ---
 
 # pcd_host_config (Resource)
 
-Manages a PCD host configuration: the mapping of traffic types (management, VM console, tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels.
+Manages a PCD host configuration: the mapping of traffic types (management, VM console,  Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned a host configuration ever again, so remove the `pcd_host_config_assignment` first.tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels.
 
 ## Example Usage
 

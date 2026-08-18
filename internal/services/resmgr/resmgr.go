@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -82,6 +83,86 @@ func getJSON(ctx context.Context, client *gophercloud.ServiceClient, url string,
 		return errAbsent
 	}
 	return json.Unmarshal(raw, out)
+}
+
+// getJSONList issues an authenticated GET for a collection. Unlike getJSON, a null or
+// empty body is an empty collection rather than an absence: the distinction getJSON
+// draws only makes sense for a request naming one object.
+func getJSONList(ctx context.Context, client *gophercloud.ServiceClient, url string, out any) error {
+	var raw json.RawMessage
+	if _, err := client.Get(ctx, url, &raw, &gophercloud.RequestOpts{OkCodes: []int{200}}); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	if isNullJSON(raw) {
+		return nil
+	}
+	return json.Unmarshal(raw, out)
+}
+
+// hostsAssignedTo returns the ids of the hosts resmgr still reports as carrying the
+// given host configuration. The host *list* is the authority: the per-host endpoints
+// answer 404 for minutes after a host is deauthorised, while the list keeps reporting
+// the host and its hostconfig_id throughout.
+func hostsAssignedTo(ctx context.Context, client *gophercloud.ServiceClient, hostConfigID string) ([]string, error) {
+	var hosts []hostAPI
+	if err := getJSONList(ctx, client, client.ServiceURL("hosts"), &hosts); err != nil {
+		return nil, err
+	}
+	var assigned []string
+	for _, h := range hosts {
+		if h.HostConfigID == hostConfigID {
+			assigned = append(assigned, h.ID)
+		}
+	}
+	return assigned, nil
+}
+
+// unassignPollInterval / unassignPollTimeout bound the wait for an unassign to show up
+// in the host list. Short: this confirms a write resmgr has already accepted.
+// var, not const, so a test can drive the clock instead of sleeping through it.
+var (
+	unassignPollInterval = 5 * time.Second
+	unassignPollTimeout  = 60 * time.Second
+)
+
+// waitUnassigned blocks until the host stops reporting the host configuration.
+//
+// resmgr answers the unassign 204 whether or not it unbound anything, and 404 while a
+// freshly deauthorised host is not describable, so the status code proves nothing. A
+// binding Terraform believes is gone while resmgr still holds it is what later strands
+// the host: the next apply cannot re-create the assignment (409) and deleting the host
+// configuration in that state makes it permanent.
+func waitUnassigned(ctx context.Context, client *gophercloud.ServiceClient, hostID, hostConfigID string) error {
+	deadline := time.Now().Add(unassignPollTimeout)
+	for {
+		assigned, err := hostsAssignedTo(ctx, client, hostConfigID)
+		if err != nil {
+			return fmt.Errorf("checking whether host %s still carries host config %s: %w", hostID, hostConfigID, err)
+		}
+		still := false
+		for _, h := range assigned {
+			if h == hostID {
+				still = true
+				break
+			}
+		}
+		if !still {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("host %s still reports host config %s %s after the unassign was accepted; "+
+				"resmgr did not apply it, and deleting the host config while this stands would leave the "+
+				"host unable to be assigned one again", hostID, hostConfigID, unassignPollTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(unassignPollInterval):
+		}
+	}
 }
 
 // postJSON issues an authenticated POST with a JSON body, optionally decoding
