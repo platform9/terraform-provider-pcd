@@ -120,6 +120,41 @@ func hostsAssignedTo(ctx context.Context, client *gophercloud.ServiceClient, hos
 	return assigned, nil
 }
 
+// hostRecord returns the host as resmgr reports it, and whether resmgr knows it at all.
+//
+// The per-host endpoints answer 404 for minutes after a host's last role is removed, while
+// GET /resmgr/v2/hosts keeps reporting the host, its roles and its hostconfig_id throughout
+// (observed on 2026.4). A Read that believes that 404 removes from state a resource that
+// still exists, and the next apply then fails against the reality it never left: 409
+// HostToHostconfigConflict re-creating an assignment, 403 HostInAuthState re-adding a role.
+//
+// So a 404 is not taken at face value: only the list can say the host is really gone. The
+// extra call happens on the 404 path alone, leaving an ordinary read at one request. If
+// resmgr ever stops 404ing a host it still lists, this degrades to that fast path and can
+// be retired.
+func hostRecord(ctx context.Context, client *gophercloud.ServiceClient, hostID string) (hostAPI, bool, error) {
+	var host hostAPI
+	err := getJSON(ctx, client, client.ServiceURL("hosts", hostID), &host)
+	if err == nil {
+		return host, true, nil
+	}
+	if !isNotFound(err) {
+		return host, false, err
+	}
+	var hosts []hostAPI
+	if err := getJSONList(ctx, client, client.ServiceURL("hosts"), &hosts); err != nil {
+		// Fail closed: dropping a live resource from state on an unverified 404 is what
+		// this exists to prevent.
+		return host, false, err
+	}
+	for _, h := range hosts {
+		if h.ID == hostID {
+			return h, true, nil
+		}
+	}
+	return host, false, nil
+}
+
 // unassignPollInterval / unassignPollTimeout bound the wait for an unassign to show up
 // in the host list. Short: this confirms a write resmgr has already accepted.
 // var, not const, so a test can drive the clock instead of sleeping through it.

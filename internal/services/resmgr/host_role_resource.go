@@ -105,16 +105,12 @@ func (r *hostRoleResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
-	has, err := hostHasRole(ctx, client, state.HostID.ValueString(), state.RoleName.ValueString())
+	has, known, err := hostHasRole(ctx, client, state.HostID.ValueString(), state.RoleName.ValueString())
 	if err != nil {
-		if isNotFound(err) {
-			resp.State.RemoveResource(ctx)
-			return
-		}
 		resp.Diagnostics.AddError("resmgr: reading host roles", err.Error())
 		return
 	}
-	if !has {
+	if !known || !has {
 		resp.State.RemoveResource(ctx)
 		return
 	}
@@ -168,15 +164,17 @@ type hostAPI struct {
 	HostConfigID string   `json:"hostconfig_id"`
 }
 
-func hostHasRole(ctx context.Context, client *gophercloud.ServiceClient, hostID, roleName string) (bool, error) {
-	var host hostAPI
-	if err := getJSON(ctx, client, client.ServiceURL("hosts", hostID), &host); err != nil {
-		return false, err
+// hostHasRole reports whether the host carries the role, and whether resmgr knows the host
+// at all — a host in the post-deauth window is not gone, however its per-host endpoint answers.
+func hostHasRole(ctx context.Context, client *gophercloud.ServiceClient, hostID, roleName string) (has, known bool, err error) {
+	host, known, err := hostRecord(ctx, client, hostID)
+	if err != nil || !known {
+		return false, known, err
 	}
 	for _, r := range host.Roles {
 		if r == roleName {
-			return true, nil
+			return true, true, nil
 		}
 	}
-	return false, nil
+	return false, true, nil
 }

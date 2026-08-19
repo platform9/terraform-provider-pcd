@@ -176,3 +176,120 @@ func TestWaitUnassigned(t *testing.T) {
 		}
 	})
 }
+
+// windowed serves resmgr's post-deauth behaviour: the per-host endpoint 404s while the
+// list keeps reporting whatever `list` says.
+func windowed(t *testing.T, perHostStatus int, perHost, list string) *gophercloud.ServiceClient {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.TrimSuffix(r.URL.Path, "/") == "/hosts" {
+			_, _ = w.Write([]byte(list))
+			return
+		}
+		w.WriteHeader(perHostStatus)
+		_, _ = w.Write([]byte(perHost))
+	}))
+	t.Cleanup(srv.Close)
+	return &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{}, Endpoint: srv.URL + "/"}
+}
+
+// A host being deauthorised 404s on its per-host endpoint for minutes while the list still
+// reports it. Believing that 404 drops a live assignment or role out of state, and the next
+// apply then fails against a reality it never left.
+func TestHostRecordDoesNotBelieveThePostDeauthWindow(t *testing.T) {
+	const listed = `[{"id":"host-a","roles":["hypervisor"],"hostconfig_id":"hc-1"}]`
+
+	t.Run("404 while the list still has it is not gone", func(t *testing.T) {
+		host, known, err := hostRecord(context.Background(),
+			windowed(t, 404, `{"message":"HostNotFound"}`, listed), "host-a")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !known {
+			t.Fatal("reported the host as gone; a Read would drop a live resource from state")
+		}
+		if host.HostConfigID != "hc-1" || len(host.Roles) != 1 {
+			t.Fatalf("the list record did not come back: %+v", host)
+		}
+	})
+
+	t.Run("404 and absent from the list is gone", func(t *testing.T) {
+		_, known, err := hostRecord(context.Background(),
+			windowed(t, 404, `{"message":"HostNotFound"}`, `[{"id":"host-b"}]`), "host-a")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if known {
+			t.Fatal("a host resmgr does not list anywhere is gone and must leave state")
+		}
+	})
+
+	t.Run("an unreadable list fails closed", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.TrimSuffix(r.URL.Path, "/") == "/hosts" {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+		client := &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{}, Endpoint: srv.URL + "/"}
+		if _, known, err := hostRecord(context.Background(), client, "host-a"); err == nil || known {
+			t.Fatal("an unverified 404 must surface as an error, not as an absence")
+		}
+	})
+
+	// A per-host failure that is not a 404 says nothing about whether the host exists, so it
+	// has to reach the caller as an error. All three Read paths check err before known, which
+	// makes this guard the thing standing between a transient 500 or an expired token and a
+	// live assignment or role being dropped from state — the outcome this whole fix exists to
+	// prevent. Without this case the guard can be deleted and the suite stays green.
+	t.Run("a per-host failure that is not a 404 is not an absence", func(t *testing.T) {
+		for _, status := range []int{
+			http.StatusInternalServerError,
+			http.StatusUnauthorized,
+			http.StatusForbidden,
+			http.StatusServiceUnavailable,
+		} {
+			_, known, err := hostRecord(context.Background(),
+				windowed(t, status, `{"message":"boom"}`, listed), "host-a")
+			if err == nil {
+				t.Errorf("status %d: got no error; a failed read would be reported as a deleted host", status)
+			}
+			if known {
+				t.Errorf("status %d: reported the host as known off a read that never answered", status)
+			}
+		}
+	})
+
+	t.Run("the ordinary path is one request", func(t *testing.T) {
+		var n int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			n++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"host-a","roles":["hypervisor"],"hostconfig_id":"hc-1"}`))
+		}))
+		defer srv.Close()
+		client := &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{}, Endpoint: srv.URL + "/"}
+		if _, known, err := hostRecord(context.Background(), client, "host-a"); err != nil || !known {
+			t.Fatalf("known=%v err=%v", known, err)
+		}
+		if n != 1 {
+			t.Fatalf("a host resmgr describes cost %d requests, want 1", n)
+		}
+	})
+}
+
+func TestHostHasRoleThroughTheWindow(t *testing.T) {
+	const listed = `[{"id":"host-a","roles":["hypervisor","image-library"]}]`
+	client := windowed(t, 404, `{"message":"HostNotFound"}`, listed)
+
+	has, known, err := hostHasRole(context.Background(), client, "host-a", "hypervisor")
+	if err != nil || !known || !has {
+		t.Fatalf("has=%v known=%v err=%v; the role is still on the host", has, known, err)
+	}
+	if has, known, _ = hostHasRole(context.Background(), client, "host-a", "persistent-storage"); has || !known {
+		t.Fatalf("has=%v known=%v; the host is known, the role is not on it", has, known)
+	}
+}

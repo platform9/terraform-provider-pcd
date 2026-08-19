@@ -281,15 +281,13 @@ func (r *hostClusterRoleResource) Read(ctx context.Context, req resource.ReadReq
 
 	// The v2 host view reports cluster roles under their uber-role names, so
 	// membership is checked directly against the configured role.
-	var host struct {
-		Roles []string `json:"roles"`
-	}
-	if err := getJSON(ctx, client, client.ServiceURL("hosts", state.HostID.ValueString()), &host); err != nil {
-		if isNotFound(err) {
-			resp.State.RemoveResource(ctx)
-			return
-		}
+	host, known, err := hostRecord(ctx, client, state.HostID.ValueString())
+	if err != nil {
 		resp.Diagnostics.AddError("resmgr: reading host", err.Error())
+		return
+	}
+	if !known {
+		resp.State.RemoveResource(ctx)
 		return
 	}
 	found := false
