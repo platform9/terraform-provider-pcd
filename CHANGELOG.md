@@ -16,6 +16,13 @@ All notable changes to this project are documented here. The format is based on
   (a `pcd_host_config` referencing it through `cluster_name`, and the clusters and host roles built
   on it). To stop managing an imported blueprint without deleting it, use `terraform state rm`.
 
+### Security
+
+- Bumped the indirect `google.golang.org/grpc` dependency to 1.83.1 (GHSA-vp52-pcj8-j9qc: heap
+  memory exhaustion via HTTP/2 DATA frame fragmentation). As with the previous gRPC advisory, the
+  provider's gRPC server only ever serves the local Terraform CLI over a private channel, so
+  exposure was minimal.
+
 ## [0.1.9] - 2026-08-18
 
 ### Fixed
