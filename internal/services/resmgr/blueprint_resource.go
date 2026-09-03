@@ -64,8 +64,10 @@ func (r *blueprintResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 		MarkdownDescription: "Manages a PCD cluster blueprint — the shared, declarative configuration that virtualized " +
 			"clusters inherit (networking, image library, VM storage, and Cinder backends). PCD supports a single " +
 			"blueprint per region, so the common workflow is to `terraform import` the existing blueprint and then " +
-			"manage it. Changing `name` forces a new resource. Destroying this resource only removes it from " +
-			"Terraform state — it does not delete the region's blueprint (use the PCD UI for that).",
+			"manage it. Changing `name` forces a new resource. Destroying this resource deletes the blueprint from " +
+			"PCD, so destroy whatever depends on it first (a `pcd_host_config` referencing it through `cluster_name`, " +
+			"and the clusters and host roles built on it). To stop managing an imported blueprint without deleting " +
+			"it, remove it from state with `terraform state rm` instead.",
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{Required: true, MarkdownDescription: "The blueprint (cluster) name. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
 			// networking_type and enable_distributed_routing are not user-configurable
@@ -266,12 +268,38 @@ func knownStr(v types.String) bool { return !v.IsNull() && !v.IsUnknown() }
 func knownBool(v types.Bool) bool  { return !v.IsNull() && !v.IsUnknown() }
 func knownObj(v types.Object) bool { return !v.IsNull() && !v.IsUnknown() }
 
-// Delete removes the blueprint from Terraform state WITHOUT calling the API. PCD
-// supports a single blueprint per region and it is normally imported, so a
-// `terraform destroy` should stop managing it rather than physically delete the
-// region's cluster-defining blueprint (which every host and cluster depends on).
-// Remove it from the PCD UI if you truly need to delete it.
-func (r *blueprintResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
+// Delete removes the blueprint from PCD. It used to be a no-op that only dropped
+// the resource from state, so a `terraform destroy` reported success while the
+// blueprint lived on (PCD-9783). A blueprint that is already gone is the outcome
+// destroy wants, so a 404 is success; anything else leaves it standing and is
+// surfaced. To stop managing an imported blueprint without deleting it, use
+// `terraform state rm` rather than destroy.
+func (r *blueprintResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state blueprintResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	client, err := r.config.ResmgrV2Client()
+	if err != nil {
+		resp.Diagnostics.AddError("resmgr: building client", err.Error())
+		return
+	}
+
+	if err := deleteBlueprint(ctx, client, state.Name.ValueString()); err != nil {
+		resp.Diagnostics.AddError("resmgr: deleting blueprint", err.Error())
+	}
+}
+
+// deleteBlueprint issues DELETE /resmgr/v2/blueprint/<name>. A 404 means the
+// blueprint is already gone and is reported as success.
+func deleteBlueprint(ctx context.Context, client *gophercloud.ServiceClient, name string) error {
+	_, err := client.Delete(ctx, client.ServiceURL("blueprint", name), &gophercloud.RequestOpts{OkCodes: []int{200, 202, 204}})
+	if err != nil && isNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func (r *blueprintResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

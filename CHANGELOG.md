@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`pcd_cluster_blueprint`: `terraform destroy` now deletes the blueprint from PCD** (PCD-9783).
+  Destroy used to be a no-op that only dropped the resource from state, so Terraform reported the
+  blueprint destroyed while it lived on in the region. It now issues
+  `DELETE /resmgr/v2/blueprint/<name>`; a blueprint that is already gone is success, and any other
+  refusal fails the destroy instead of being hidden. Destroy whatever depends on the blueprint first
+  (a `pcd_host_config` referencing it through `cluster_name`, and the clusters and host roles built
+  on it). To stop managing an imported blueprint without deleting it, use `terraform state rm`.
+
 ## [0.1.9] - 2026-08-18
 
 ### Fixed

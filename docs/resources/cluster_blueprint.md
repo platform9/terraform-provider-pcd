@@ -3,12 +3,12 @@
 page_title: "pcd_cluster_blueprint Resource - PCD"
 subcategory: "Cluster Blueprint"
 description: |-
-  Manages a PCD cluster blueprint — the shared, declarative configuration that virtualized clusters inherit (networking, image library, VM storage, and Cinder backends). PCD supports a single blueprint per region, so the common workflow is to terraform import the existing blueprint and then manage it. Changing name forces a new resource. Destroying this resource only removes it from Terraform state — it does not delete the region's blueprint (use the PCD UI for that).
+  Manages a PCD cluster blueprint — the shared, declarative configuration that virtualized clusters inherit (networking, image library, VM storage, and Cinder backends). PCD supports a single blueprint per region, so the common workflow is to terraform import the existing blueprint and then manage it. Changing name forces a new resource. Destroying this resource deletes the blueprint from PCD, so destroy whatever depends on it first (a pcd_host_config referencing it through cluster_name, and the clusters and host roles built on it). To stop managing an imported blueprint without deleting it, remove it from state with terraform state rm instead.
 ---
 
 # pcd_cluster_blueprint (Resource)
 
-Manages a PCD cluster blueprint — the shared, declarative configuration that virtualized clusters inherit (networking, image library, VM storage, and Cinder backends). PCD supports a single blueprint per region, so the common workflow is to `terraform import` the existing blueprint and then manage it. Changing `name` forces a new resource. Destroying this resource only removes it from Terraform state — it does not delete the region's blueprint (use the PCD UI for that).
+Manages a PCD cluster blueprint — the shared, declarative configuration that virtualized clusters inherit (networking, image library, VM storage, and Cinder backends). PCD supports a single blueprint per region, so the common workflow is to `terraform import` the existing blueprint and then manage it. Changing `name` forces a new resource. Destroying this resource deletes the blueprint from PCD, so destroy whatever depends on it first (a `pcd_host_config` referencing it through `cluster_name`, and the clusters and host roles built on it). To stop managing an imported blueprint without deleting it, remove it from state with `terraform state rm` instead.
 
 ## Example Usage
 
