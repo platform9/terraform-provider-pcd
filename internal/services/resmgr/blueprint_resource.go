@@ -104,8 +104,9 @@ func (r *blueprintResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			// change the Cinder backends. Required to CREATE a new blueprint.
 			"storage_backends_json": schema.StringAttribute{Optional: true, Computed: true, Sensitive: true, MarkdownDescription: "The Cinder storage backends as a JSON string (contains credentials). Read back from the server; " +
 				"set it only to change backends, and leave it unset on an imported blueprint to keep what PCD has. Required to create a blueprint. " +
-				"Shape: `{\"<backend>\": {\"<config>\": {\"driver\": \"NFS\", \"config\": {...}}}}`. `<backend>` is the name `pcd_host_cluster_role.backends` " +
-				"lists and a volume type's `volume_backend_name` selects; `<config>` names one driver configuration under it; `driver` is one of PCD's " +
+				"Shape: `{\"<backend>\": {\"<config>\": {\"driver\": \"NFS\", \"config\": {...}}}}`. `<backend>` becomes `volume_backend_name` on the host, " +
+				"so it is what a volume type's `extra_specs.volume_backend_name` must equal; `<config>` names one driver configuration under it and is what " +
+				"`pcd_host_cluster_role.backends` lists (it becomes the Cinder backend section on the host); `driver` is one of PCD's " +
 				"built-in driver identifiers (`NFS`, `LVM`, `HitachiISCSI`, ...) or a full driver class path for a custom driver; `config` carries that " +
 				"driver's own keys. The Community Edition guide has a complete NFS example, and docs.platform9.com's storage backend configuration " +
 				"examples cover other drivers.", PlanModifiers: useState},

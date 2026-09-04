@@ -2,8 +2,9 @@
 # the order matters: each resource names one created before it.
 
 # 1. A volume type: what tenants ask for when they create a volume. Its
-#    volume_backend_name must match a backend declared in the blueprint below,
-#    and the blueprint's image_library_storage names this type, so it comes first.
+#    volume_backend_name must equal the top-level key of a backend declared in
+#    the blueprint below, and the blueprint's image_library_storage names this
+#    type, so it comes first.
 resource "pcd_blockstorage_volume_type" "nfs" {
   name        = "nfs"
   description = "NFS-backed persistent storage"
@@ -15,9 +16,14 @@ resource "pcd_blockstorage_volume_type" "nfs" {
 }
 
 # 2. The region's single cluster blueprint. storage_backends_json declares the
-#    Persistent Storage backends: the top-level key is the backend name, the
-#    key under it names one driver configuration, and the keys inside config
-#    are the ones the PCD UI offers under Add Volume Backend Configuration.
+#    Persistent Storage backends. The top-level key ("nfs") is the backend name
+#    and becomes volume_backend_name on the host; the key under it
+#    ("nfs-primary") names one driver configuration, which the persistent-storage
+#    role's backends list selects; the keys inside config are the ones the PCD
+#    UI offers under Add Volume Backend Configuration for that driver. Write
+#    boolean options as booleans (true/false), never as quoted strings: the
+#    host reads them back as booleans, and a quoted "true" never matches, so
+#    the host would never finish converging.
 resource "pcd_cluster_blueprint" "region" {
   name            = var.blueprint_name
   dns_domain_name = var.dns_domain_name
@@ -35,15 +41,15 @@ resource "pcd_cluster_blueprint" "region" {
 
   storage_backends_json = jsonencode({
     nfs = {
-      nfs = {
+      "nfs-primary" = {
         driver = "NFS"
         config = {
           nfs_shares_config           = "/opt/pf9/etc/pf9-cindervolume-base/conf.d/nfs_shares"
           nfs_mount_points            = var.nfs_export
           nfs_mount_point_base        = "/opt/pf9/etc/pf9-cindervolume-base/volumes/"
-          nfs_snapshot_support        = "true"
-          nas_secure_file_permissions = "false"
-          nas_secure_file_operations  = "false"
+          nfs_snapshot_support        = true
+          nas_secure_file_permissions = false
+          nas_secure_file_operations  = false
         }
       }
     }
@@ -113,12 +119,13 @@ resource "pcd_host_cluster_role" "image_library" {
   depends_on = [pcd_host_config_assignment.host1]
 }
 
-# backends names a top-level key of the blueprint's storage_backends_json;
-# assigning the role is what turns that definition into a running service.
+# backends names a driver configuration (a second-level key) of the blueprint's
+# storage_backends_json; assigning the role is what turns that definition into
+# a running service on the host.
 resource "pcd_host_cluster_role" "storage" {
   host_id              = var.host_id
   role                 = "persistent-storage"
-  backends             = ["nfs"]
+  backends             = ["nfs-primary"]
   wait_until_converged = true
 
   depends_on = [pcd_host_config_assignment.host1]

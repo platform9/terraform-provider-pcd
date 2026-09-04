@@ -31,8 +31,13 @@ written.
   works; the Community Edition beginner's guide on docs.platform9.com shows
   how to export a directory from an Ubuntu machine.
 - **Network reachability.** The machine running Terraform must reach the PCD URL
-  and the host's IP address: once the image-library role converges, image uploads
-  go to the image-library host directly.
+  and the host's IP address on port 9494. Once the image-library role converges,
+  the Image Library Service on that host is published at `https://<host-ip>:9494`
+  and the provider uploads images there, as the UI does; an image uploaded through
+  the control plane's public endpoint lands where no hypervisor can boot it. If
+  the host is not routable from where Terraform runs (a jump host, a tunnel), set
+  `endpoint_overrides = { image = "https://<reachable-address>:9494/v2/" }` in
+  the provider block.
 - **Terraform 1.5 or later** and the `pcdctl RC` file from **Settings > API
   Access** in the PCD UI. Source it, and because Community Edition ships a
   self-signed certificate, set `OS_INSECURE=true` as well:
@@ -124,8 +129,9 @@ roles that consume it.
 # the order matters: each resource names one created before it.
 
 # 1. A volume type: what tenants ask for when they create a volume. Its
-#    volume_backend_name must match a backend declared in the blueprint below,
-#    and the blueprint's image_library_storage names this type, so it comes first.
+#    volume_backend_name must equal the top-level key of a backend declared in
+#    the blueprint below, and the blueprint's image_library_storage names this
+#    type, so it comes first.
 resource "pcd_blockstorage_volume_type" "nfs" {
   name        = "nfs"
   description = "NFS-backed persistent storage"
@@ -137,9 +143,14 @@ resource "pcd_blockstorage_volume_type" "nfs" {
 }
 
 # 2. The region's single cluster blueprint. storage_backends_json declares the
-#    Persistent Storage backends: the top-level key is the backend name, the
-#    key under it names one driver configuration, and the keys inside config
-#    are the ones the PCD UI offers under Add Volume Backend Configuration.
+#    Persistent Storage backends. The top-level key ("nfs") is the backend name
+#    and becomes volume_backend_name on the host; the key under it
+#    ("nfs-primary") names one driver configuration, which the persistent-storage
+#    role's backends list selects; the keys inside config are the ones the PCD
+#    UI offers under Add Volume Backend Configuration for that driver. Write
+#    boolean options as booleans (true/false), never as quoted strings: the
+#    host reads them back as booleans, and a quoted "true" never matches, so
+#    the host would never finish converging.
 resource "pcd_cluster_blueprint" "region" {
   name            = var.blueprint_name
   dns_domain_name = var.dns_domain_name
@@ -157,15 +168,15 @@ resource "pcd_cluster_blueprint" "region" {
 
   storage_backends_json = jsonencode({
     nfs = {
-      nfs = {
+      "nfs-primary" = {
         driver = "NFS"
         config = {
           nfs_shares_config           = "/opt/pf9/etc/pf9-cindervolume-base/conf.d/nfs_shares"
           nfs_mount_points            = var.nfs_export
           nfs_mount_point_base        = "/opt/pf9/etc/pf9-cindervolume-base/volumes/"
-          nfs_snapshot_support        = "true"
-          nas_secure_file_permissions = "false"
-          nas_secure_file_operations  = "false"
+          nfs_snapshot_support        = true
+          nas_secure_file_permissions = false
+          nas_secure_file_operations  = false
         }
       }
     }
@@ -235,12 +246,13 @@ resource "pcd_host_cluster_role" "image_library" {
   depends_on = [pcd_host_config_assignment.host1]
 }
 
-# backends names a top-level key of the blueprint's storage_backends_json;
-# assigning the role is what turns that definition into a running service.
+# backends names a driver configuration (a second-level key) of the blueprint's
+# storage_backends_json; assigning the role is what turns that definition into
+# a running service on the host.
 resource "pcd_host_cluster_role" "storage" {
   host_id              = var.host_id
   role                 = "persistent-storage"
-  backends             = ["nfs"]
+  backends             = ["nfs-primary"]
   wait_until_converged = true
 
   depends_on = [pcd_host_config_assignment.host1]
@@ -249,22 +261,29 @@ resource "pcd_host_cluster_role" "storage" {
 
 Three things in this file are worth understanding before you change it.
 
-**The volume type and the backend are one thing seen from two sides.** The
-blueprint's `storage_backends_json` declares a backend named `nfs` (its top-level
-key) with one driver configuration under it. The `persistent-storage` role's
-`backends = ["nfs"]` turns that declaration into a running service on the host.
-The volume type's `volume_backend_name = "nfs"` is how a volume created with
-`volume_type = "nfs"` is routed to it, and `image_library_storage` names the same
-type so the image library stores images there. Rename one and rename them all.
+**Three names, and what each becomes.** `storage_backends_json` has two levels
+of keys. The top-level key (`nfs`) is the backend name: on the host it becomes
+`volume_backend_name` in the storage service's configuration, which is exactly
+what the volume type's `extra_specs.volume_backend_name` must equal for volumes
+of that type to land there. The key under it (`nfs-primary`) names one driver
+configuration for that backend: it is what the `persistent-storage` role's
+`backends` list selects, and it becomes the backend section on the host, so the
+storage service reports itself as `<host-uuid>@nfs-primary`. `image_library_storage`
+names the volume type, so the image library stores images on the same backend.
+The names are yours to choose; keep the three references consistent.
 
 **The driver keys are the UI's keys.** `driver = "NFS"` is one of PCD's built-in
 driver identifiers, and the keys inside `config` are exactly the ones the UI
 offers under **Cluster Blueprint > Persistent Storage Connectivity > Add Volume
 Backend Configuration** for that driver. For another driver, use its identifier
 and keys; docs.platform9.com's storage backend configuration examples list them.
-A custom driver takes its full class path as `driver`. This attribute is
-sensitive because backend credentials live in it, and it is stored in Terraform
-state as plain text: use a remote backend with encryption at rest.
+A custom driver takes its full class path as `driver`. Write boolean options as
+booleans (`nfs_snapshot_support = true`), never as the quoted strings the UI's
+form shows: the host reads them back as booleans, a quoted `"true"` never
+matches what it wrote, and the host keeps converging forever with no error
+anywhere. This attribute is sensitive because backend credentials live in it,
+and it is stored in Terraform state as plain text: use a remote backend with
+encryption at rest.
 
 **Explicit dependencies.** Nothing in a `pcd_host_cluster_role` references the
 host configuration assignment by attribute, so each role lists it in
@@ -437,7 +456,7 @@ three `wait_until_converged` roles. When it finishes, the outputs show the
 instance's address, and `pcdctl` shows the region:
 
 ```shell
-pcdctl volume service list          # cinder-volume <host-uuid>@nfs enabled/up
+pcdctl volume service list          # cinder-volume <host-uuid>@nfs-primary enabled/up
 pcdctl hypervisor list              # the host, state up
 pcdctl server list                  # workload-vm ACTIVE
 pcdctl volume list                  # workload-data in-use, attached to workload-vm
@@ -447,19 +466,44 @@ terraform plan                      # No changes.
 
 ## Destroy
 
-`terraform destroy` takes the region down in reverse order: the instance and
-volume, the network, the roles, the host configuration and cluster, and finally
-the blueprint and volume type. Two behaviors of PCD show up here:
+`terraform destroy` takes the region down in reverse order: the volume
+attachment, instance, and volume; the image; the network and security group;
+the roles; the cluster and host configuration; and finally the blueprint and
+volume type. PCD acknowledges a role removal before the deauthorization it
+starts on the host has finished, and until it has, it refuses anything that
+still depends on that role. On the lab a full teardown took three runs of
+`terraform destroy`, a few minutes apart:
 
-- Removing a role starts a deauthorization on the host that PCD acknowledges
-  before it completes. Until it lands, PCD refuses the host-configuration
-  unassignment with `403 HostInAuthState: Host ... is authorized with roles
-  assigned`, so the first destroy can stop there with the blueprint, cluster,
-  and host configuration still standing. Wait a few minutes and run
-  `terraform destroy` again; it finishes.
-- The blueprint is deleted from PCD on destroy (since provider v0.1.10). The host
-  stays authorized, with no roles, and can be onboarded again with the same
-  configuration.
+1. The first run removed the workload, the image, the network, and the
+   `hypervisor` and `image-library` roles, then stopped twice: the
+   `persistent-storage` role was refused with `422 ValidationError: Cannot
+   remove persistent-storage role: Volume ... (image-<id>) is present on host`,
+   and the cluster with `500 HostClusterDeleteFailed: hostlist is not empty`,
+   because the hypervisor deauthorization had not landed yet.
+
+   The volume the first error names is the image library's backing volume for
+   the image just deleted. PCD does not remove it with the image, and the
+   storage role cannot go while any volume is on the backend. List it and
+   delete it:
+
+   ```shell
+   pcdctl volume list --all-projects      # image-<id>, in the service project
+   pcdctl volume delete <volume-id>
+   ```
+
+2. The second run, once the host's role list in the resource manager
+   (`GET /resmgr/v2/hosts/<host-uuid>`, see the Importing guide) no longer
+   showed the two removed roles, deleted the cluster and the storage role, then
+   stopped at the host-configuration unassignment with `403 HostInAuthState:
+   Host ... is authorized with roles assigned, please remove the roles first`,
+   because the storage deauthorization was still landing.
+
+3. The third run, a couple of minutes after the role list emptied, removed the
+   host-configuration assignment, the host configuration, the blueprint
+   (deleted from PCD since provider v0.1.10), and the volume type.
+
+The host stays authorized, with no roles, and can be onboarded again with the
+same configuration.
 
 ## Already have a region?
 

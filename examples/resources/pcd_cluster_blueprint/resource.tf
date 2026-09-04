@@ -31,16 +31,16 @@ resource "pcd_cluster_blueprint" "example" {
   # credentials (sensitive). The shape, with the NFS driver as the example:
   #
   # storage_backends_json = jsonencode({
-  #   nfs = {            # backend name: what pcd_host_cluster_role.backends and
-  #     nfs = {          #   a volume type's volume_backend_name refer to
+  #   nfs = {            # backend name: what a volume type's volume_backend_name must equal
+  #     nfs-primary = {  # configuration name: what pcd_host_cluster_role.backends lists
   #       driver = "NFS" # a built-in driver identifier, or a full driver class path
   #       config = {
   #         nfs_shares_config           = "/opt/pf9/etc/pf9-cindervolume-base/conf.d/nfs_shares"
   #         nfs_mount_points            = "192.0.2.10:/srv/nfs/pcd"
   #         nfs_mount_point_base        = "/opt/pf9/etc/pf9-cindervolume-base/volumes/"
-  #         nfs_snapshot_support        = "true"
-  #         nas_secure_file_permissions = "false"
-  #         nas_secure_file_operations  = "false"
+  #         nfs_snapshot_support        = true  # booleans as booleans, never "true"
+  #         nas_secure_file_permissions = false
+  #         nas_secure_file_operations  = false
   #       }
   #     }
   #   }

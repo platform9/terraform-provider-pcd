@@ -46,16 +46,16 @@ resource "pcd_cluster_blueprint" "example" {
   # credentials (sensitive). The shape, with the NFS driver as the example:
   #
   # storage_backends_json = jsonencode({
-  #   nfs = {            # backend name: what pcd_host_cluster_role.backends and
-  #     nfs = {          #   a volume type's volume_backend_name refer to
+  #   nfs = {            # backend name: what a volume type's volume_backend_name must equal
+  #     nfs-primary = {  # configuration name: what pcd_host_cluster_role.backends lists
   #       driver = "NFS" # a built-in driver identifier, or a full driver class path
   #       config = {
   #         nfs_shares_config           = "/opt/pf9/etc/pf9-cindervolume-base/conf.d/nfs_shares"
   #         nfs_mount_points            = "192.0.2.10:/srv/nfs/pcd"
   #         nfs_mount_point_base        = "/opt/pf9/etc/pf9-cindervolume-base/volumes/"
-  #         nfs_snapshot_support        = "true"
-  #         nas_secure_file_permissions = "false"
-  #         nas_secure_file_operations  = "false"
+  #         nfs_snapshot_support        = true  # booleans as booleans, never "true"
+  #         nas_secure_file_permissions = false
+  #         nas_secure_file_operations  = false
   #       }
   #     }
   #   }
@@ -79,7 +79,7 @@ resource "pcd_cluster_blueprint" "example" {
 - `image_library_shared_storage` (Boolean) Whether the image library uses shared storage.
 - `image_library_storage` (String) The name of the volume type the image library stores images on. Create it with `pcd_blockstorage_volume_type` first.
 - `instance_shared_storage` (Boolean) Set `true` when `vm_storage` is mounted as shared storage (e.g. NFS) across all hosts, so PCD can treat instance disks as shared. Matches the UI's "Enable if this path is mounted as shared storage across all hosts" toggle. Defaults to `false` (local disk).
-- `storage_backends_json` (String, Sensitive) The Cinder storage backends as a JSON string (contains credentials). Read back from the server; set it only to change backends, and leave it unset on an imported blueprint to keep what PCD has. Required to create a blueprint. Shape: `{"<backend>": {"<config>": {"driver": "NFS", "config": {...}}}}`. `<backend>` is the name `pcd_host_cluster_role.backends` lists and a volume type's `volume_backend_name` selects; `<config>` names one driver configuration under it; `driver` is one of PCD's built-in driver identifiers (`NFS`, `LVM`, `HitachiISCSI`, ...) or a full driver class path for a custom driver; `config` carries that driver's own keys. The Community Edition guide has a complete NFS example, and docs.platform9.com's storage backend configuration examples cover other drivers.
+- `storage_backends_json` (String, Sensitive) The Cinder storage backends as a JSON string (contains credentials). Read back from the server; set it only to change backends, and leave it unset on an imported blueprint to keep what PCD has. Required to create a blueprint. Shape: `{"<backend>": {"<config>": {"driver": "NFS", "config": {...}}}}`. `<backend>` becomes `volume_backend_name` on the host, so it is what a volume type's `extra_specs.volume_backend_name` must equal; `<config>` names one driver configuration under it and is what `pcd_host_cluster_role.backends` lists (it becomes the Cinder backend section on the host); `driver` is one of PCD's built-in driver identifiers (`NFS`, `LVM`, `HitachiISCSI`, ...) or a full driver class path for a custom driver; `config` carries that driver's own keys. The Community Edition guide has a complete NFS example, and docs.platform9.com's storage backend configuration examples cover other drivers.
 - `virtual_networking` (Attributes) Virtual (tenant) networking settings. (see [below for nested schema](#nestedatt--virtual_networking))
 - `vm_storage` (String) The path on each hypervisor where instance (ephemeral) storage lives, e.g. `/opt/data/instances`.
 - `vnc_floating_ip` (String) A floating IP through which VM VNC consoles are reached. Leave unset for none.

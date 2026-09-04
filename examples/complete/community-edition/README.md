@@ -26,7 +26,11 @@ twenty minutes on a small host.
 
 ## Take it down
 
-`terraform destroy` removes everything, including the blueprint. PCD refuses the
-host-configuration unassignment while the host's deauthorization is still
-landing (`HostInAuthState`); wait a few minutes and run `terraform destroy`
-again. The host stays authorized and can be onboarded again.
+`terraform destroy` removes everything, including the blueprint, but expect to
+run it three times a few minutes apart: PCD refuses the storage role while the
+deleted image's backing volume (`image-<id>`, in the service project) still
+exists, so delete that volume with `pcdctl volume delete` between runs; and it
+refuses the cluster and the host-configuration unassignment while a role's
+deauthorization is still landing (`HostClusterDeleteFailed`,
+`HostInAuthState`). The guide's Destroy section walks through it. The host
+stays authorized and can be onboarded again.
