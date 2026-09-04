@@ -92,12 +92,12 @@ func (d *blueprintDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 					"vnid_range":    schema.StringAttribute{Computed: true},
 				},
 			},
-			"image_library_storage":        schema.StringAttribute{Computed: true, MarkdownDescription: "The image library storage location."},
+			"image_library_storage":        schema.StringAttribute{Computed: true, MarkdownDescription: "The name of the volume type the image library stores images on."},
 			"image_library_shared_storage": schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether the image library uses shared storage."},
 			"vm_storage":                   schema.StringAttribute{Computed: true, MarkdownDescription: "The path on each hypervisor where instance (ephemeral) storage lives."},
 			"instance_shared_storage":      schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether `vm_storage` is mounted as shared storage (e.g. NFS) across all hosts."},
 			"vnc_floating_ip":              schema.StringAttribute{Computed: true, MarkdownDescription: "The floating IP through which VM VNC consoles are reached, if any."},
-			"storage_backends_json":        schema.StringAttribute{Computed: true, Sensitive: true, MarkdownDescription: "The Cinder storage backends as a JSON string (contains credentials)."},
+			"storage_backends_json":        schema.StringAttribute{Computed: true, Sensitive: true, MarkdownDescription: "The Cinder storage backends as a JSON string (contains credentials), shaped `{\"<backend>\": {\"<config>\": {\"driver\": ..., \"config\": {...}}}}`; the `pcd_cluster_blueprint` resource documents the shape."},
 		},
 	}
 }

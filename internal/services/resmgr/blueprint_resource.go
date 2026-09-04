@@ -91,7 +91,7 @@ func (r *blueprintResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 					"vnid_range":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The VLAN/VNI segmentation ID range (e.g. `1000:2000`)."},
 				},
 			},
-			"image_library_storage":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The image library storage location.", PlanModifiers: useState},
+			"image_library_storage":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The name of the volume type the image library stores images on. Create it with `pcd_blockstorage_volume_type` first.", PlanModifiers: useState},
 			"image_library_shared_storage": schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Whether the image library uses shared storage.", PlanModifiers: boolUseState},
 			"vm_storage":                   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The path on each hypervisor where instance (ephemeral) storage lives, e.g. `/opt/data/instances`.", PlanModifiers: useState},
 			"instance_shared_storage": schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Set `true` when `vm_storage` is mounted as shared storage (e.g. NFS) across all hosts, so PCD can treat instance disks as shared. " +
@@ -102,7 +102,13 @@ func (r *blueprintResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			// is read back from the server and re-sent in the required complete-object
 			// PUT); set it — using the server's canonical nested JSON shape — only to
 			// change the Cinder backends. Required to CREATE a new blueprint.
-			"storage_backends_json": schema.StringAttribute{Optional: true, Computed: true, Sensitive: true, MarkdownDescription: "The Cinder storage backends as a JSON string (contains credentials). Read back from the server; set it only to change backends.", PlanModifiers: useState},
+			"storage_backends_json": schema.StringAttribute{Optional: true, Computed: true, Sensitive: true, MarkdownDescription: "The Cinder storage backends as a JSON string (contains credentials). Read back from the server; " +
+				"set it only to change backends, and leave it unset on an imported blueprint to keep what PCD has. Required to create a blueprint. " +
+				"Shape: `{\"<backend>\": {\"<config>\": {\"driver\": \"NFS\", \"config\": {...}}}}`. `<backend>` is the name `pcd_host_cluster_role.backends` " +
+				"lists and a volume type's `volume_backend_name` selects; `<config>` names one driver configuration under it; `driver` is one of PCD's " +
+				"built-in driver identifiers (`NFS`, `LVM`, `HitachiISCSI`, ...) or a full driver class path for a custom driver; `config` carries that " +
+				"driver's own keys. The Community Edition guide has a complete NFS example, and docs.platform9.com's storage backend configuration " +
+				"examples cover other drivers.", PlanModifiers: useState},
 		},
 	}
 }

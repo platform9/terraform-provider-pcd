@@ -3,23 +3,28 @@
 page_title: "pcd_blockstorage_volume_type Resource - PCD"
 subcategory: "Block Storage"
 description: |-
-  Manages a Cinder volume type in PCD. Volume types describe a storage tier and carry backend-selection extra_specs.
+  Manages a Cinder volume type in PCD. A volume type is the name tenants pick when they create a volume; its extra_specs.volume_backend_name routes those volumes to a storage backend declared in the cluster blueprint's storage_backends_json, so create the type and the blueprint together (see the Community Edition guide). The blueprint's image_library_storage also names a volume type. The import ID is the type's UUID, not its name: pcdctl volume type list prints it.
 ---
 
 # pcd_blockstorage_volume_type (Resource)
 
-Manages a Cinder volume type in PCD. Volume types describe a storage tier and carry backend-selection `extra_specs`.
+Manages a Cinder volume type in PCD. A volume type is the name tenants pick when they create a volume; its `extra_specs.volume_backend_name` routes those volumes to a storage backend declared in the cluster blueprint's `storage_backends_json`, so create the type and the blueprint together (see the Community Edition guide). The blueprint's `image_library_storage` also names a volume type. The import ID is the type's UUID, not its name: `pcdctl volume type list` prints it.
 
 ## Example Usage
 
 ```terraform
-resource "pcd_blockstorage_volume_type" "example" {
-  name        = "tf-example-ssd"
-  description = "SSD-backed storage tier"
+# A volume type is what tenants pick when they create a volume. Its
+# volume_backend_name must match a backend declared in the cluster blueprint's
+# storage_backends_json (the "nfs" below pairs with the pcd_cluster_blueprint
+# example). The blueprint's image_library_storage names a volume type too, so
+# create the type before the blueprint.
+resource "pcd_blockstorage_volume_type" "nfs" {
+  name        = "nfs"
+  description = "NFS-backed persistent storage"
   is_public   = true
 
   extra_specs = {
-    volume_backend_name = "synology-iscsi"
+    volume_backend_name = "nfs"
   }
 }
 ```
@@ -34,7 +39,7 @@ resource "pcd_blockstorage_volume_type" "example" {
 ### Optional
 
 - `description` (String) A description of the volume type.
-- `extra_specs` (Map of String) Key-value backend specs (e.g. `volume_backend_name`).
+- `extra_specs` (Map of String) Key-value backend specs. `volume_backend_name` selects the blueprint storage backend this type provisions on.
 - `is_public` (Boolean) Whether the volume type is visible to all projects.
 - `region` (String) The region. Defaults to the provider's region.
 
