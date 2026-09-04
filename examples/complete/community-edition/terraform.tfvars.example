@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars and fill in your values.
+
+# On the host: cat /etc/pf9/host_id.conf
+host_id = "00000000-0000-0000-0000-000000000000"
+
+# The host's NIC (ip -br link on the host).
+host_interface = "enp1s0"
+
+# An NFS export the host can mount.
+nfs_export = "192.168.1.50:/srv/nfs/pcd"
+
+# The network the host's NIC is on. Instances get addresses from the pool;
+# keep it clear of addresses your router or other devices hand out.
+network_cidr          = "192.168.1.0/24"
+network_gateway       = "192.168.1.1"
+allocation_pool_start = "192.168.1.200"
+allocation_pool_end   = "192.168.1.220"
