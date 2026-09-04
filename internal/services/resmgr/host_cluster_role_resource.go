@@ -337,12 +337,21 @@ func (r *hostClusterRoleResource) Read(ctx context.Context, req resource.ReadReq
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-// Update re-PUTs the assignment: backends and host_cluster are options on the
-// same role, and wait_until_converged is client-side only.
+// Update re-PUTs the assignment when a server-side option changed: backends and
+// host_cluster are options on the same role. wait_until_converged is client-
+// side only, and when it is the only thing that changed there is nothing to
+// send — a repeated PUT is a real write resmgr acts on, not a no-op.
 func (r *hostClusterRoleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan hostClusterRoleModel
+	var plan, state hostClusterRoleModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if !roleOptionsChanged(&plan, &state) {
+		plan.ID = types.StringValue(plan.HostID.ValueString() + "/" + plan.Role.ValueString())
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 		return
 	}
 

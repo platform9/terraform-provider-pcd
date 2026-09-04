@@ -4,10 +4,15 @@
 package resmgr
 
 import (
+	"context"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
 func backendsList(names ...string) types.List {
@@ -62,5 +67,62 @@ func TestRoleOptionsChanged(t *testing.T) {
 				t.Fatalf("roleOptionsChanged = true; Update would PUT the role for a change resmgr never sees")
 			}
 		})
+	}
+}
+
+// roleSchema is the resource's real schema, so the framework request types used
+// below carry exactly what Terraform would send.
+func roleSchema(t *testing.T) schema.Schema {
+	t.Helper()
+	var resp resource.SchemaResponse
+	(&hostClusterRoleResource{}).Schema(context.Background(), resource.SchemaRequest{}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("schema: %v", resp.Diagnostics)
+	}
+	return resp.Schema
+}
+
+// roleState builds a tfsdk.State holding m. Starting from a null root is what
+// the framework itself does before Create/ImportState write into it.
+func roleState(t *testing.T, m *hostClusterRoleModel) tfsdk.State {
+	t.Helper()
+	ctx := context.Background()
+	s := roleSchema(t)
+	st := tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+	if diags := st.Set(ctx, m); diags.HasError() {
+		t.Fatalf("state: %v", diags)
+	}
+	return st
+}
+
+// A change that touches only wait_until_converged must not reach resmgr. The
+// resource is built with no client at all: if Update tries to build one the
+// test fails, which is the point.
+func TestUpdateSkipsResmgrForClientSideChanges(t *testing.T) {
+	ctx := context.Background()
+	prior := roleModel(types.StringValue("c1"), types.ListNull(types.StringType))
+	prior.WaitUntilConverged = types.BoolValue(false)
+	want := roleModel(types.StringValue("c1"), types.ListNull(types.StringType))
+	want.WaitUntilConverged = types.BoolValue(true)
+
+	state := roleState(t, prior)
+	plan := tfsdk.Plan{Schema: state.Schema, Raw: roleState(t, want).Raw}
+	resp := resource.UpdateResponse{State: roleState(t, prior)}
+
+	r := &hostClusterRoleResource{} // config nil: any client build panics or errors
+	r.Update(ctx, resource.UpdateRequest{Plan: plan, State: state}, &resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("Update errored on a client-side-only change: %v", resp.Diagnostics)
+	}
+	var got hostClusterRoleModel
+	if diags := resp.State.Get(ctx, &got); diags.HasError() {
+		t.Fatalf("state: %v", diags)
+	}
+	if !got.WaitUntilConverged.ValueBool() {
+		t.Fatal("wait_until_converged = false after apply; the plan's value was not stored")
+	}
+	if got.ID.ValueString() != "host-a/hypervisor" {
+		t.Fatalf("id = %q, want host-a/hypervisor", got.ID.ValueString())
 	}
 }
