@@ -151,6 +151,45 @@ func (r *hostClusterRoleResource) assignBody(ctx context.Context, m *hostCluster
 	return body
 }
 
+// roleOptionsChanged reports whether the PUT body assignBody would build from
+// plan differs from what the server already holds according to state: the
+// hypervisor's host_cluster or persistent-storage's backends. Everything else
+// on the resource is client-side (wait_until_converged) or ForceNew, so a false
+// here means resmgr has nothing to receive — and a repeated PUT is a real write
+// resmgr acts on, not a no-op. A new server-side option must be added here too,
+// or changes to it would be skipped.
+//
+// The comparison is deliberately role-agnostic: it weighs both host_cluster
+// and backends no matter which role is in play, even though assignBody only
+// ever sends the one that matches. role is ForceNew and ValidateConfig pins
+// each option to its role, so the option-to-role pairing can never drift
+// within one plan/state pair — any mismatch this misses can only err toward
+// sending the PUT, never toward silently skipping one.
+func roleOptionsChanged(plan, state *hostClusterRoleModel) bool {
+	if hostClusterOption(plan) != hostClusterOption(state) {
+		return true
+	}
+	return !backendsOption(plan).Equal(backendsOption(state))
+}
+
+// hostClusterOption is host_cluster as assignBody sends it: null, unknown and
+// "" are all "omitted".
+func hostClusterOption(m *hostClusterRoleModel) string {
+	if m.HostCluster.IsNull() || m.HostCluster.IsUnknown() {
+		return ""
+	}
+	return m.HostCluster.ValueString()
+}
+
+// backendsOption is backends as assignBody sends it: null and unknown are both
+// "omitted"; an empty list is sent as [] and so is a value in its own right.
+func backendsOption(m *hostClusterRoleModel) types.List {
+	if m.Backends.IsNull() || m.Backends.IsUnknown() {
+		return types.ListNull(types.StringType)
+	}
+	return m.Backends
+}
+
 // putRole PUTs the role assignment, retrying while resmgr answers 409
 // RoleUpdateConflict. resmgr rejects role changes while the host is mid-
 // convergence, and assigning several cluster roles to one host in a single
@@ -307,12 +346,21 @@ func (r *hostClusterRoleResource) Read(ctx context.Context, req resource.ReadReq
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-// Update re-PUTs the assignment: backends and host_cluster are options on the
-// same role, and wait_until_converged is client-side only.
+// Update re-PUTs the assignment when a server-side option changed: backends and
+// host_cluster are options on the same role. wait_until_converged is client-
+// side only, and when it is the only thing that changed there is nothing to
+// send — a repeated PUT is a real write resmgr acts on, not a no-op.
 func (r *hostClusterRoleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan hostClusterRoleModel
+	var plan, state hostClusterRoleModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if !roleOptionsChanged(&plan, &state) {
+		plan.ID = types.StringValue(plan.HostID.ValueString() + "/" + plan.Role.ValueString())
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 		return
 	}
 
@@ -399,4 +447,9 @@ func (r *hostClusterRoleResource) ImportState(ctx context.Context, req resource.
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host_id"), parts[0])...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("role"), parts[1])...)
+	// wait_until_converged is client-side only and has no server value to read
+	// back. Left null, the schema default plans `null -> false` on every
+	// imported role and applying that re-PUTs the role. Write the default now so
+	// the imported state already matches what the plan will hold.
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("wait_until_converged"), false)...)
 }

@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcd_host_cluster_role`: importing a role no longer leaves a permanent `wait_until_converged`
+  diff. Import set only `id`, `host_id` and `role`, so the flag stayed null and the schema
+  default planned `null -> false` on every imported role; applying that re-PUT the role
+  assignment to resmgr for a change resmgr never sees. Import now writes the default, and an
+  update whose only change is `wait_until_converged` stores the value without calling resmgr and
+  does not wait for convergence — including a `false -> true` flip on an already-assigned role,
+  which previously PUT the role again and then waited. To block on an already-assigned role,
+  taint it or run `terraform apply -replace`. `host_cluster` and `backends` are still not read
+  back, so a configuration that sets them on an imported role plans the update it always did.
+
 ### Documentation
 
 - **Every import now says where its ID comes from** (PCD-9784). Each resource's Import section
