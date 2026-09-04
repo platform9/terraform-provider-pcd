@@ -43,8 +43,11 @@ resource "pcd_networking_qos_minimum_bandwidth_rule" "example" {
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# qos_policy_id: pcdctl network qos policy list. rule_id: pcdctl network qos rule list <qos_policy_id>
 terraform import pcd_networking_qos_minimum_bandwidth_rule.example <qos_policy_id>/<rule_id>
 ```

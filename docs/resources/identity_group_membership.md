@@ -42,8 +42,11 @@ resource "pcd_identity_group_membership" "example" {
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# group_id: pcdctl group list. user_id: pcdctl user list --group <group_id>
 terraform import pcd_identity_group_membership.example <group_id>/<user_id>
 ```

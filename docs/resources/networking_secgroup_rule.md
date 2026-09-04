@@ -55,8 +55,11 @@ resource "pcd_networking_secgroup_rule" "example" {
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# Find the rule ID with: pcdctl security group rule list <security_group>
 terraform import pcd_networking_secgroup_rule.example <id>
 ```

@@ -34,12 +34,15 @@ resource "pcd_host_cluster_role" "image_library" {
   role    = "image-library"
 }
 
-# Block storage: `backends` names entries from the blueprint's
-# storage_backends_json (its top-level keys).
+# Block storage: `backends` names driver configurations from the blueprint's
+# storage_backends_json, i.e. its second-level keys (for a blueprint declaring
+# { "synology": { "synology-iscsi": { driver = ..., config = {...} } } } that is
+# "synology-iscsi"). The top-level key is what a volume type's
+# volume_backend_name refers to.
 resource "pcd_host_cluster_role" "storage" {
   host_id  = "04575315-80ce-4617-9b96-6611d00c9942"
   role     = "persistent-storage"
-  backends = ["synology"]
+  backends = ["synology-iscsi"]
 }
 ```
 
@@ -53,7 +56,7 @@ resource "pcd_host_cluster_role" "storage" {
 
 ### Optional
 
-- `backends` (List of String) For `persistent-storage` only: the storage backend names to enable on this host, as named in the cluster blueprint's `storage_backends_json` (its top-level keys).
+- `backends` (List of String) For `persistent-storage` only: the storage backend configurations to enable on this host, named by the second-level keys of the cluster blueprint's `storage_backends_json` (the configuration names under each backend, not the top-level backend names). Each becomes a Cinder backend section on the host; the top-level backend name is what a volume type's `volume_backend_name` refers to.
 - `host_cluster` (String) For `hypervisor` only: the host cluster (host aggregate) to join.
 - `wait_until_converged` (Boolean) Wait until the host reports `role_status = ok` before completing. Role convergence installs and configures services on the host and typically takes several minutes. Enable this when later resources in the same configuration need the host operational (e.g. booting an instance on a freshly onboarded hypervisor).
 
@@ -63,8 +66,13 @@ resource "pcd_host_cluster_role" "storage" {
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# host_id is the resmgr host UUID: pcdctl hypervisor show <hypervisor-id> -c service_host
+#   (or /etc/pf9/host_id.conf on the host; see the Importing guide for a host without roles).
+# The role is one of hypervisor, image-library, persistent-storage, dns.
 terraform import pcd_host_cluster_role.hypervisor <host_id>/hypervisor
 ```

@@ -56,14 +56,17 @@ func (r *volumeTypeResource) Metadata(_ context.Context, req resource.MetadataRe
 func (r *volumeTypeResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	useState := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a Cinder volume type in PCD. Volume types describe a storage tier and carry " +
-			"backend-selection `extra_specs`.",
+		MarkdownDescription: "Manages a Cinder volume type in PCD. A volume type is the name tenants pick when they " +
+			"create a volume; its `extra_specs.volume_backend_name` routes those volumes to a storage backend declared " +
+			"in the cluster blueprint's `storage_backends_json`, so create the type and the blueprint together (see the " +
+			"Community Edition guide). The blueprint's `image_library_storage` also names a volume type. The import ID " +
+			"is the type's UUID, not its name: `pcdctl volume type list` prints it.",
 		Attributes: map[string]schema.Attribute{
 			"id":          schema.StringAttribute{Computed: true, MarkdownDescription: "The volume type ID.", PlanModifiers: useState},
 			"name":        schema.StringAttribute{Required: true, MarkdownDescription: "The name of the volume type."},
 			"description": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "A description of the volume type.", PlanModifiers: useState},
 			"is_public":   schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Whether the volume type is visible to all projects."},
-			"extra_specs": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key-value backend specs (e.g. `volume_backend_name`)."},
+			"extra_specs": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key-value backend specs. `volume_backend_name` selects the blueprint storage backend this type provisions on."},
 			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
 		},
 	}

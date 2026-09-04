@@ -37,8 +37,13 @@ resource "pcd_host_role" "example" {
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# host_id is the resmgr host UUID: pcdctl hypervisor show <hypervisor-id> -c service_host
+#   (or /etc/pf9/host_id.conf on the host; see the Importing guide for a host without roles).
+# role_name: a granular pf9-* role, as listed under roles by GET /resmgr/v1/hosts/<host_id>.
 terraform import pcd_host_role.example <host_id>/<role_name>
 ```

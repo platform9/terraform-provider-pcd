@@ -47,8 +47,11 @@ resource "pcd_blockstorage_snapshot" "example" {
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# Find the snapshot ID with: pcdctl volume snapshot list
 terraform import pcd_blockstorage_snapshot.example <snapshot_id>
 ```
