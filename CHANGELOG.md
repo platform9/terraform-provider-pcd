@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `pcd_host_cluster_role`: importing a role no longer leaves a permanent `wait_until_converged`
+  diff. Import set only `id`, `host_id` and `role`, so the flag stayed null and the schema
+  default planned `null -> false` on every imported role; applying that re-PUT the role
+  assignment to resmgr for a change resmgr never sees. Import now writes the default, and an
+  update whose only change is `wait_until_converged` stores the value without calling resmgr.
+  `host_cluster` and `backends` are still not read back, so a configuration that sets them on
+  an imported role plans the update it always did.
+
 ## [0.1.10] - 2026-09-03
 
 ### Changed
