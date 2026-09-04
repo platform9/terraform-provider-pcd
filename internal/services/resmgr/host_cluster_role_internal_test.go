@@ -107,6 +107,11 @@ func TestUpdateSkipsResmgrForClientSideChanges(t *testing.T) {
 
 	state := roleState(t, prior)
 	plan := tfsdk.Plan{Schema: state.Schema, Raw: roleState(t, want).Raw}
+	// Seed the response state from prior, not a null root, on purpose: the
+	// framework itself starts Update with a null root, but a regression that
+	// returns without calling State.Set would leave that null root in place and
+	// the assertions below would fail loudly instead of silently passing on an
+	// all-null response.
 	resp := resource.UpdateResponse{State: roleState(t, prior)}
 
 	r := &hostClusterRoleResource{} // config nil: any client build panics or errors
@@ -124,6 +129,9 @@ func TestUpdateSkipsResmgrForClientSideChanges(t *testing.T) {
 	}
 	if got.ID.ValueString() != "host-a/hypervisor" {
 		t.Fatalf("id = %q, want host-a/hypervisor", got.ID.ValueString())
+	}
+	if got.HostCluster.ValueString() != "c1" {
+		t.Fatalf("host_cluster = %q after apply, want c1; the short-circuit dropped a planned value", got.HostCluster.ValueString())
 	}
 }
 

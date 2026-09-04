@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -114,5 +115,101 @@ func testAccCheckHostConfigDestroy(t *testing.T) resource.TestCheckFunc {
 			}
 		}
 		return nil
+	}
+}
+
+// TestAccResmgrHostClusterRoleImport assigns a cluster role, imports it, and
+// checks the plan is clean afterwards — the import used to leave
+// wait_until_converged null and plan a spurious update that re-PUT the role.
+// Mutates the control plane, so it is opt-in: PCD_ACC_RESMGR=1 and
+// PCD_ACC_HOST_ID=<host uuid> (an onboarded host that has a host configuration
+// assigned). PCD_ACC_CLUSTER_ROLE picks the role (default image-library); the
+// test adds it and removes it again.
+func TestAccResmgrHostClusterRoleImport(t *testing.T) {
+	if os.Getenv("PCD_ACC_RESMGR") == "" {
+		t.Skip("PCD_ACC_RESMGR not set; skipping resmgr mutation test")
+	}
+	hostID := os.Getenv("PCD_ACC_HOST_ID")
+	if hostID == "" {
+		t.Skip("PCD_ACC_HOST_ID not set; skipping cluster role import test")
+	}
+	role := os.Getenv("PCD_ACC_CLUSTER_ROLE")
+	if role == "" {
+		role = "image-library"
+	}
+	const rn = "pcd_host_cluster_role.test"
+	cfg := fmt.Sprintf(`
+resource "pcd_host_cluster_role" "test" {
+  host_id = %q
+  role    = %q
+}
+`, hostID, role)
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckHostClusterRoleDestroy(t, hostID, role),
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(rn, "id", hostID+"/"+role),
+					resource.TestCheckResourceAttr(rn, "wait_until_converged", "false"),
+				),
+			},
+			// Import into the working state (ImportStatePersist) so the plan-only
+			// step below runs against the *imported* state — that is the plan that
+			// used to show `+ wait_until_converged = false`.
+			{ResourceName: rn, ImportState: true, ImportStateId: hostID + "/" + role, ImportStateVerify: true, ImportStatePersist: true},
+			{Config: cfg, PlanOnly: true},
+		},
+	})
+}
+
+// testAccCheckHostClusterRoleDestroy polls the host record until role is no
+// longer among its roles, or the host itself is gone. Deauthorising a role is
+// asynchronous, so a single check right after destroy can observe the role
+// still present; this polls instead of asserting once.
+func testAccCheckHostClusterRoleDestroy(t *testing.T, hostID, role string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := acctest.LabConfig(t).ResmgrV2Client()
+		if err != nil {
+			return err
+		}
+		const (
+			interval = 10 * time.Second
+			timeout  = 5 * time.Minute
+		)
+		ctx := context.Background()
+		deadline := time.Now().Add(timeout)
+		for {
+			var host struct {
+				Roles []string `json:"roles"`
+			}
+			_, err := client.Get(ctx, client.ServiceURL("hosts", hostID), &host, &gophercloud.RequestOpts{OkCodes: []int{200}})
+			switch {
+			case gophercloud.ResponseCodeIs(err, 404):
+				return nil // the host itself is gone, so the role is certainly gone
+			case err != nil:
+				return fmt.Errorf("checking host %s for role %s: %w", hostID, role, err)
+			}
+			cleared := true
+			for _, r := range host.Roles {
+				if r == role {
+					cleared = false
+					break
+				}
+			}
+			if cleared {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("role %s still assigned to host %s after %s", role, hostID, timeout)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(interval):
+			}
+		}
 	}
 }

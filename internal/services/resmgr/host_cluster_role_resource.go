@@ -156,6 +156,13 @@ func (r *hostClusterRoleResource) assignBody(ctx context.Context, m *hostCluster
 // here means resmgr has nothing to receive — and a repeated PUT is a real write
 // resmgr acts on, not a no-op. A new server-side option must be added here too,
 // or changes to it would be skipped.
+//
+// The comparison is deliberately role-agnostic: it weighs both host_cluster
+// and backends no matter which role is in play, even though assignBody only
+// ever sends the one that matches. role is ForceNew and ValidateConfig pins
+// each option to its role, so the option-to-role pairing can never drift
+// within one plan/state pair — any mismatch this misses can only err toward
+// sending the PUT, never toward silently skipping one.
 func roleOptionsChanged(plan, state *hostClusterRoleModel) bool {
 	if hostClusterOption(plan) != hostClusterOption(state) {
 		return true
