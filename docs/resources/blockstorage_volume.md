@@ -54,8 +54,11 @@ resource "pcd_blockstorage_volume" "example" {
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# Find the volume ID with: pcdctl volume list
 terraform import pcd_blockstorage_volume.example <id>
 ```

@@ -18,10 +18,19 @@ can do.
 
 | Resource | What it manages |
 |---|---|
-| `pcd_cluster_blueprint` | The region's **cluster blueprint** — the shared config every virtualized cluster inherits: networking type (OVN/OVS), virtual-network segmentation range, image-library and VM storage, Cinder backends, VM HA, and auto-rebalancing. PCD keeps one per region, so the usual flow is `terraform import` then manage in place. Also available read-only as the `pcd_cluster_blueprint` data source. |
+| `pcd_cluster_blueprint` | The region's **cluster blueprint** — the shared config every virtualized cluster inherits: virtual-network segmentation range, DNS domain, image-library and VM storage, and the Cinder storage backends. PCD keeps one per region, so the usual flow is `terraform import` then manage in place. Also available read-only as the `pcd_cluster_blueprint` data source. |
+| `pcd_cluster` | A **cluster** (host cluster) — the unit hypervisors join, carrying VM high availability, auto-rebalancing, GPU, and CPU-model settings. |
 | `pcd_host_config` | A **host configuration** — the mapping of each traffic type (management, VM console, tunneling, image library, live migration) to a network interface, plus physical-network labels. |
-| `pcd_host_role` | Assigns a **PCD role** (e.g. `pf9-ostackhost-neutron`) to an onboarded host. |
 | `pcd_host_config_assignment` | Attaches a host configuration to a host. |
+| `pcd_host_cluster_role` | Onboards a host by assigning it a **cluster role** (`hypervisor`, `image-library`, `persistent-storage`, `dns`); PCD computes the granular role settings from the blueprint and host configuration. |
+| `pcd_host_role` | Assigns one granular **PCD role** (e.g. `pf9-ostackhost-neutron`) directly; the low-level API under `pcd_host_cluster_role`. |
+
+Two guides on the registry tie these together: the
+[Community Edition guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/community-edition)
+builds a region from an empty host to a running VM (the source is
+[`examples/complete/community-edition/`](examples/complete/community-edition/)), and the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+says where every import ID comes from.
 
 Everything else mirrors `terraform-provider-openstack` closely (attribute names, import IDs,
 `OS_*` env), so migrating an existing OpenStack configuration is largely mechanical.

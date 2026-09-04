@@ -71,8 +71,11 @@ resource "pcd_lb_member" "example" {
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# pool_id: pcdctl loadbalancer pool list. member_id: pcdctl loadbalancer member list <pool_id>
 terraform import pcd_lb_member.example <pool_id>/<member_id>
 ```

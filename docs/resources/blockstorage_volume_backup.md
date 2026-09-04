@@ -48,8 +48,11 @@ resource "pcd_blockstorage_volume_backup" "example" {
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# Find the backup ID with: pcdctl volume backup list
 terraform import pcd_blockstorage_volume_backup.example <backup_id>
 ```

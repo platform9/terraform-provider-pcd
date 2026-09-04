@@ -56,8 +56,11 @@ resource "pcd_compute_interface_attach" "example" {
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# instance_id: pcdctl server list. port_id: pcdctl port list --server <instance_id>
 terraform import pcd_compute_interface_attach.example <instance_id>/<port_id>
 ```

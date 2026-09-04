@@ -77,8 +77,12 @@ Optional:
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# PCD keeps one blueprint per region; its name is listed by GET /resmgr/v2/blueprint
+#   (see the Importing guide). The import ID is the name, not a UUID.
 terraform import pcd_cluster_blueprint.example <blueprint_name>
 ```
