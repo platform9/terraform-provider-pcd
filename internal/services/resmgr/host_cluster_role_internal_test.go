@@ -126,3 +126,44 @@ func TestUpdateSkipsResmgrForClientSideChanges(t *testing.T) {
 		t.Fatalf("id = %q, want host-a/hypervisor", got.ID.ValueString())
 	}
 }
+
+// Import used to set only id/host_id/role, leaving wait_until_converged null;
+// the schema default then planned `null -> false` on every imported role, and
+// applying it PUT the role to resmgr. Import must write the default itself.
+func TestImportStateWritesTheDefault(t *testing.T) {
+	ctx := context.Background()
+	s := roleSchema(t)
+	resp := resource.ImportStateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+
+	(&hostClusterRoleResource{}).ImportState(ctx, resource.ImportStateRequest{ID: "host-a/persistent-storage"}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("import: %v", resp.Diagnostics)
+	}
+	var got hostClusterRoleModel
+	if diags := resp.State.Get(ctx, &got); diags.HasError() {
+		t.Fatalf("state: %v", diags)
+	}
+	if got.ID.ValueString() != "host-a/persistent-storage" || got.HostID.ValueString() != "host-a" || got.Role.ValueString() != "persistent-storage" {
+		t.Fatalf("id/host_id/role = %q/%q/%q", got.ID.ValueString(), got.HostID.ValueString(), got.Role.ValueString())
+	}
+	if got.WaitUntilConverged.IsNull() || got.WaitUntilConverged.ValueBool() {
+		t.Fatalf("wait_until_converged = %v after import, want false; null plans a spurious update", got.WaitUntilConverged)
+	}
+	// The server-side options are not known at import and must stay null so a
+	// configuration that sets them plans the update it should.
+	if !got.HostCluster.IsNull() || !got.Backends.IsNull() {
+		t.Fatalf("host_cluster/backends = %v/%v after import, want null", got.HostCluster, got.Backends)
+	}
+}
+
+func TestImportStateRejectsABadID(t *testing.T) {
+	ctx := context.Background()
+	s := roleSchema(t)
+	for _, id := range []string{"", "host-a", "/hypervisor", "host-a/"} {
+		resp := resource.ImportStateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+		(&hostClusterRoleResource{}).ImportState(ctx, resource.ImportStateRequest{ID: id}, &resp)
+		if !resp.Diagnostics.HasError() {
+			t.Errorf("import id %q: no error, want <host_id>/<role> to be enforced", id)
+		}
+	}
+}

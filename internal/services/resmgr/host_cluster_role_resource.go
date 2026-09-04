@@ -438,4 +438,9 @@ func (r *hostClusterRoleResource) ImportState(ctx context.Context, req resource.
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host_id"), parts[0])...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("role"), parts[1])...)
+	// wait_until_converged is client-side only and has no server value to read
+	// back. Left null, the schema default plans `null -> false` on every
+	// imported role and applying that re-PUTs the role. Write the default now so
+	// the imported state already matches what the plan will hold.
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("wait_until_converged"), false)...)
 }
