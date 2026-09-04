@@ -118,9 +118,12 @@ func testAccCheckHostConfigDestroy(t *testing.T) resource.TestCheckFunc {
 	}
 }
 
-// TestAccResmgrHostClusterRoleImport assigns a cluster role, imports it, and
-// checks the plan is clean afterwards — the import used to leave
-// wait_until_converged null and plan a spurious update that re-PUT the role.
+// TestAccResmgrHostClusterRoleImport assigns a cluster role, then imports it
+// into a fresh working directory and lets ImportStateVerify compare every
+// imported attribute against the state created in the first step. Before the
+// fix, the imported state left wait_until_converged null while the created
+// state held false, so ImportStateVerify failed on the pre-fix code and
+// passes on the fixed code.
 // Mutates the control plane, so it is opt-in: PCD_ACC_RESMGR=1 and
 // PCD_ACC_HOST_ID=<host uuid> (an onboarded host that has a host configuration
 // assigned). PCD_ACC_CLUSTER_ROLE picks the role (default image-library); the
@@ -156,11 +159,12 @@ resource "pcd_host_cluster_role" "test" {
 					resource.TestCheckResourceAttr(rn, "wait_until_converged", "false"),
 				),
 			},
-			// Import into the working state (ImportStatePersist) so the plan-only
-			// step below runs against the *imported* state — that is the plan that
-			// used to show `+ wait_until_converged = false`.
-			{ResourceName: rn, ImportState: true, ImportStateId: hostID + "/" + role, ImportStateVerify: true, ImportStatePersist: true},
-			{Config: cfg, PlanOnly: true},
+			// ImportState runs in its own, fresh working directory; ImportStateVerify
+			// then diffs every attribute of that imported state against the state
+			// created above. That diff is the regression guard: before the fix, the
+			// imported state left wait_until_converged null while the created state
+			// held false, so this comparison failed.
+			{ResourceName: rn, ImportState: true, ImportStateId: hostID + "/" + role, ImportStateVerify: true},
 		},
 	})
 }
