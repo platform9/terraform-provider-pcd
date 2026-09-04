@@ -44,10 +44,17 @@ docs below.
   `storage_backends_json` is written as `null # sensitive`, so generated HCL never carries
   backend credentials, and leaving it unset on an imported blueprint preserves the
   backends.
-- In the live blueprint, `imageLibraryStorage` holds the volume type's *name*, and
-  `pcd_host_cluster_role.backends` lists the top-level keys of `storage_backends_json`.
-  The lab's Synology backend uses the full driver class path
+- In the live blueprint, `imageLibraryStorage` holds the volume type's *name*. The lab's
+  Synology backend uses the full driver class path
   `cinder.volume.drivers.synology.synology_iscsi.SynoISCSIDriver`.
+- Corrected during execution (the lab run used differing key names): the top-level key of
+  `storage_backends_json` becomes `volume_backend_name` on the host, so it is what a
+  volume type's `volume_backend_name` must equal; the second-level key is the driver
+  configuration name, which `pcd_host_cluster_role.backends` lists and which becomes the
+  Cinder backend section (`<host-uuid>@<config>`). The provider's `backends` description
+  said "top-level keys"; it was wrong and is fixed in this change. Boolean driver options
+  must be JSON booleans: a quoted `"true"` never validates on the host, which then
+  converges forever while resmgr refuses every role change.
 
 ## Decisions
 
