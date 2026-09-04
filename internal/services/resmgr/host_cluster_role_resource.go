@@ -93,8 +93,10 @@ func (r *hostClusterRoleResource) Schema(_ context.Context, _ resource.SchemaReq
 			"role": schema.StringAttribute{Required: true, MarkdownDescription: "The cluster role: `hypervisor`, `image-library`, `persistent-storage`, or `dns`. " +
 				"Changing this forces a new resource.", PlanModifiers: forceNew},
 			"backends": schema.ListAttribute{Optional: true, ElementType: types.StringType,
-				MarkdownDescription: "For `persistent-storage` only: the storage backend names to enable on this host, " +
-					"as named in the cluster blueprint's `storage_backends_json` (its top-level keys)."},
+				MarkdownDescription: "For `persistent-storage` only: the storage backend configurations to enable on this host, " +
+					"named by the second-level keys of the cluster blueprint's `storage_backends_json` (the configuration names " +
+					"under each backend, not the top-level backend names). Each becomes a Cinder backend section on the host; " +
+					"the top-level backend name is what a volume type's `volume_backend_name` refers to."},
 			"host_cluster": schema.StringAttribute{Optional: true,
 				MarkdownDescription: "For `hypervisor` only: the host cluster (host aggregate) to join."},
 			"wait_until_converged": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false),

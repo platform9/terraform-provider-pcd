@@ -18,6 +18,27 @@ All notable changes to this project are documented here. The format is based on
   taint it or run `terraform apply -replace`. `host_cluster` and `backends` are still not read
   back, so a configuration that sets them on an imported role plans the update it always did.
 
+### Documentation
+
+- **Every import now says where its ID comes from** (PCD-9784). Each resource's Import section
+  names the `pcdctl` command (or resource-manager call) that prints the ID it needs, and a new
+  [Importing guide](docs/guides/importing.md) covers CLI setup, `terraform import` versus
+  `import` blocks with generated configuration, a per-resource lookup table, the resmgr host
+  UUID, and a worked blueprint import.
+- **A runnable Community Edition example** at `examples/complete/community-edition/`, rendered
+  by the new [Community Edition guide](docs/guides/community-edition.md): from one prepared
+  host to a running instance with an NFS-backed volume attached, in one apply. Validated end to
+  end on a Community Edition 2026.4 lab.
+- `pcd_blockstorage_volume_type` and `pcd_cluster_blueprint` explain how `volume_backend_name`,
+  `storage_backends_json`, `image_library_storage`, and `pcd_host_cluster_role.backends` fit
+  together; the README's PCD-native table adds `pcd_cluster` and `pcd_host_cluster_role`.
+- **Corrected `pcd_host_cluster_role.backends`:** it lists the *second-level* keys of
+  `storage_backends_json` (the driver configuration names), not the top-level backend names as
+  the description said. The top-level key is what becomes `volume_backend_name` on the host.
+  Naming a top-level key in `backends` yields an empty backend set, `cinder-volume` cannot
+  start, and the host is stuck converging while resmgr refuses every role change (409). The
+  mistake was invisible while every example used the same name at both levels.
+
 ## [0.1.10] - 2026-09-03
 
 ### Changed

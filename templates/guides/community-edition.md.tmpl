@@ -1,0 +1,212 @@
+---
+page_title: "Community Edition: from an empty host to a running VM - PCD Provider"
+subcategory: ""
+description: |-
+  A complete, runnable configuration that turns a fresh PCD Community Edition and one prepared host into a working region with an instance and a persistent volume.
+---
+
+# Community Edition: from an empty host to a running VM
+
+This guide walks through a configuration that builds a working PCD region from
+nothing: a volume type and cluster blueprint with an NFS storage backend, host
+networking, a cluster, the roles that turn a host into a hypervisor, image
+library, and storage node, and then a network, an image, a flavor, and an
+instance with a volume attached. One `terraform apply` does all of it.
+
+The files are in the provider repository under
+[`examples/complete/community-edition/`](https://github.com/platform9/terraform-provider-pcd/tree/main/examples/complete/community-edition)
+and are rendered below exactly as they are there. The configuration was applied
+and destroyed end to end on a Community Edition 2026.4 lab while this guide was
+written.
+
+## Prerequisites
+
+- **A PCD Community Edition** you can log in to.
+- **One host, prepared and authorized, with no roles.** Install `pcdctl` on the
+  host and run `pcdctl prep-node` and `pcdctl authorize-node` (see
+  [PCD CLI](https://docs.platform9.com/private-cloud-director/automation-and-cli/pcdctl-command-line)).
+  The host must appear under **Infrastructure > Cluster Hosts** with no roles
+  assigned. Terraform assigns them.
+- **An NFS export the host can mount.** Any NFS server on the host's network
+  works; the Community Edition beginner's guide on docs.platform9.com shows
+  how to export a directory from an Ubuntu machine.
+- **Network reachability.** The machine running Terraform must reach the PCD URL
+  and the host's IP address on port 9494. Once the image-library role converges,
+  the Image Library Service on that host is published at `https://<host-ip>:9494`
+  and the provider uploads images there, as the UI does; an image uploaded through
+  the control plane's public endpoint lands where no hypervisor can boot it. If
+  the host is not routable from where Terraform runs (a jump host, a tunnel), set
+  `endpoint_overrides = { image = "https://<reachable-address>:9494/v2/" }` in
+  the provider block.
+- **Terraform 1.5 or later** and the `pcdctl RC` file from **Settings > API
+  Access** in the PCD UI. Source it, and because Community Edition ships a
+  self-signed certificate, set `OS_INSECURE=true` as well:
+
+  ```shell
+  source pcdctlrc
+  export OS_INSECURE=true
+  ```
+
+## Find the host UUID
+
+Every host-scoped resource takes the host's resource-manager UUID. It is not the
+ID that `pcdctl hypervisor list` prints, and before the host has roles there is no
+hypervisor to list anyway. Read it on the host:
+
+```shell
+cat /etc/pf9/host_id.conf
+# [hostagent]
+# host_id = 136fc11a-ec5a-4699-b097-f75796134f8d
+```
+
+Or list every authorized host through the resource manager:
+
+```shell
+TOKEN=$(pcdctl token issue -f value -c id)
+curl -sk -H "X-Auth-Token: $TOKEN" https://pcd.example.com/resmgr/v1/hosts | python3 -m json.tool
+```
+
+Put the UUID into `terraform.tfvars` as `host_id`, with the rest of the inputs:
+
+{{ codefile "hcl" "examples/complete/community-edition/terraform.tfvars.example" }}
+
+## The provider
+
+Credentials come from the sourced RC file. The two domain arguments are set
+explicitly so the configuration works whether or not the RC file exports them.
+
+{{ tffile "examples/complete/community-edition/provider.tf" }}
+
+## Day 1: the region
+
+`region.tf` configures PCD's own control plane. The order is the order the
+resources reference each other in, and it is the order the UI expects too: the
+volume type before the blueprint that names it, the blueprint before the host
+configuration that belongs to it, the host configuration assigned before the
+roles that consume it.
+
+{{ tffile "examples/complete/community-edition/region.tf" }}
+
+Three things in this file are worth understanding before you change it.
+
+**Three names, and what each becomes.** `storage_backends_json` has two levels
+of keys. The top-level key (`nfs`) is the backend name: on the host it becomes
+`volume_backend_name` in the storage service's configuration, which is exactly
+what the volume type's `extra_specs.volume_backend_name` must equal for volumes
+of that type to land there. The key under it (`nfs-primary`) names one driver
+configuration for that backend: it is what the `persistent-storage` role's
+`backends` list selects, and it becomes the backend section on the host, so the
+storage service reports itself as `<host-uuid>@nfs-primary`. `image_library_storage`
+names the volume type, so the image library stores images on the same backend.
+The names are yours to choose; keep the three references consistent.
+
+**The driver keys are the UI's keys.** `driver = "NFS"` is one of PCD's built-in
+driver identifiers, and the keys inside `config` are exactly the ones the UI
+offers under **Cluster Blueprint > Persistent Storage Connectivity > Add Volume
+Backend Configuration** for that driver. For another driver, use its identifier
+and keys; docs.platform9.com's storage backend configuration examples list them.
+A custom driver takes its full class path as `driver`. Write boolean options as
+booleans (`nfs_snapshot_support = true`), never as the quoted strings the UI's
+form shows: the host reads them back as booleans, a quoted `"true"` never
+matches what it wrote, and the host keeps converging forever with no error
+anywhere. This attribute is sensitive because backend credentials live in it,
+and it is stored in Terraform state as plain text: use a remote backend with
+encryption at rest.
+
+**Explicit dependencies.** Nothing in a `pcd_host_cluster_role` references the
+host configuration assignment by attribute, so each role lists it in
+`depends_on`; assigning a role before the host has its network configuration
+produces an inconsistent host. `wait_until_converged = true` makes each role's
+apply block until the host reports the role healthy, which takes a few minutes
+per role.
+
+## Day 2: the platform
+
+`platform.tf` adds what a workload runs on. The provider network is a flat
+network on the `physnet1` label from the host configuration, so instances get
+addresses on the same network as the host.
+
+{{ tffile "examples/complete/community-edition/platform.tf" }}
+
+The network depends on the hypervisor role because the `physnet1` label only
+exists on the host once that role has converged, and the image depends on the
+image-library role because the upload goes to the image-library host. Neither
+dependency is visible in the resources' own attributes, so both are explicit.
+
+## Day 2: the workload
+
+`app.tf` boots the instance and attaches a volume to it.
+
+{{ tffile "examples/complete/community-edition/app.tf" }}
+
+{{ tffile "examples/complete/community-edition/outputs.tf" }}
+
+## Apply and verify
+
+```shell
+terraform init
+terraform apply
+```
+
+The apply takes about twenty minutes on a small host, most of it spent in the
+three `wait_until_converged` roles. When it finishes, the outputs show the
+instance's address, and `pcdctl` shows the region:
+
+```shell
+pcdctl volume service list          # cinder-volume <host-uuid>@nfs-primary enabled/up
+pcdctl hypervisor list              # the host, state up
+pcdctl server list                  # workload-vm ACTIVE
+pcdctl volume list                  # workload-data in-use, attached to workload-vm
+ping "$(terraform output -raw instance_ip)"
+terraform plan                      # No changes.
+```
+
+## Destroy
+
+`terraform destroy` takes the region down in reverse order: the volume
+attachment, instance, and volume; the image; the network and security group;
+the roles; the cluster and host configuration; and finally the blueprint and
+volume type. PCD acknowledges a role removal before the deauthorization it
+starts on the host has finished, and until it has, it refuses anything that
+still depends on that role. On the lab a full teardown took three runs of
+`terraform destroy`, a few minutes apart:
+
+1. The first run removed the workload, the image, the network, and the
+   `hypervisor` and `image-library` roles, then stopped twice: the
+   `persistent-storage` role was refused with `422 ValidationError: Cannot
+   remove persistent-storage role: Volume ... (image-<id>) is present on host`,
+   and the cluster with `500 HostClusterDeleteFailed: hostlist is not empty`,
+   because the hypervisor deauthorization had not landed yet.
+
+   The volume the first error names is the image library's backing volume for
+   the image just deleted. PCD does not remove it with the image, and the
+   storage role cannot go while any volume is on the backend. List it and
+   delete it:
+
+   ```shell
+   pcdctl volume list --all-projects      # image-<id>, in the service project
+   pcdctl volume delete <volume-id>
+   ```
+
+2. The second run, once the host's role list in the resource manager
+   (`GET /resmgr/v2/hosts/<host-uuid>`, see the Importing guide) no longer
+   showed the two removed roles, deleted the cluster and the storage role, then
+   stopped at the host-configuration unassignment with `403 HostInAuthState:
+   Host ... is authorized with roles assigned, please remove the roles first`,
+   because the storage deauthorization was still landing.
+
+3. The third run, a couple of minutes after the role list emptied, removed the
+   host-configuration assignment, the host configuration, the blueprint
+   (deleted from PCD since provider v0.1.10), and the volume type.
+
+The host stays authorized, with no roles, and can be onboarded again with the
+same configuration.
+
+## Already have a region?
+
+If the region already has a blueprint, do not create a second one: PCD keeps one
+per region. Import it, and any volume types, networks, or images you already
+have, following the [Importing guide](importing.md). An `import` block plus
+`terraform plan -generate-config-out=generated.tf` writes the blueprint's block
+for you, with `storage_backends_json` left unset so the backends PCD has are
+kept.

@@ -30,10 +30,10 @@ data "pcd_cluster_blueprint" "example" {
 - `dns_domain_name` (String) The internal DNS domain name for VMs.
 - `enable_distributed_routing` (Boolean) Whether distributed routing is enabled for the region. PCD-set; not user-configurable.
 - `image_library_shared_storage` (Boolean) Whether the image library uses shared storage.
-- `image_library_storage` (String) The image library storage location.
+- `image_library_storage` (String) The name of the volume type the image library stores images on.
 - `instance_shared_storage` (Boolean) Whether `vm_storage` is mounted as shared storage (e.g. NFS) across all hosts.
 - `networking_type` (String) The networking type PCD selected for the region (`ovn`). PCD-set; not user-configurable.
-- `storage_backends_json` (String, Sensitive) The Cinder storage backends as a JSON string (contains credentials).
+- `storage_backends_json` (String, Sensitive) The Cinder storage backends as a JSON string (contains credentials), shaped `{"<backend>": {"<config>": {"driver": ..., "config": {...}}}}`; the `pcd_cluster_blueprint` resource documents the shape.
 - `virtual_networking` (Attributes) Virtual (tenant) networking settings. (see [below for nested schema](#nestedatt--virtual_networking))
 - `vm_storage` (String) The path on each hypervisor where instance (ephemeral) storage lives.
 - `vnc_floating_ip` (String) The floating IP through which VM VNC consoles are reached, if any.

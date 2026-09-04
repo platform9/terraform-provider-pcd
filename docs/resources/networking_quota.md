@@ -54,8 +54,11 @@ resource "pcd_networking_quota" "example" {
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# project_id: pcdctl project list. region: pcdctl region list (or the provider's region).
 terraform import pcd_networking_quota.example <project_id>/<region>
 ```

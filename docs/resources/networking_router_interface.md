@@ -52,8 +52,11 @@ resource "pcd_networking_router_interface" "example" {
 
 ## Import
 
-Import is supported using the following syntax:
+Import is supported using the following syntax. The IDs are assigned by PCD; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+explains how to look them up.
 
 ```shell
+# The import ID is the interface port's ID: pcdctl port list --router <router_id>
 terraform import pcd_networking_router_interface.example <id>
 ```

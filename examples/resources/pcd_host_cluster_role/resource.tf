@@ -19,10 +19,13 @@ resource "pcd_host_cluster_role" "image_library" {
   role    = "image-library"
 }
 
-# Block storage: `backends` names entries from the blueprint's
-# storage_backends_json (its top-level keys).
+# Block storage: `backends` names driver configurations from the blueprint's
+# storage_backends_json, i.e. its second-level keys (for a blueprint declaring
+# { "synology": { "synology-iscsi": { driver = ..., config = {...} } } } that is
+# "synology-iscsi"). The top-level key is what a volume type's
+# volume_backend_name refers to.
 resource "pcd_host_cluster_role" "storage" {
   host_id  = "04575315-80ce-4617-9b96-6611d00c9942"
   role     = "persistent-storage"
-  backends = ["synology"]
+  backends = ["synology-iscsi"]
 }
