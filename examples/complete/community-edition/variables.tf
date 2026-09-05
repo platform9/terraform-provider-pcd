@@ -1,6 +1,6 @@
-variable "host_id" {
+variable "host_name" {
   type        = string
-  description = "The resmgr UUID of the host to onboard. On the host: cat /etc/pf9/host_id.conf"
+  description = "The hostname the host to onboard reports to PCD (hostname -f on the host, or the Hosts page in the UI). pcd_host resolves its UUID."
 }
 
 variable "host_interface" {

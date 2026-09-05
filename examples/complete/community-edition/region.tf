@@ -75,8 +75,15 @@ resource "pcd_host_config" "single_nic" {
   }
 }
 
+# The host is named, not identified by UUID: pcd_host resolves the
+# resource-manager UUID from the hostname the host agent reports, once the host
+# has been authorized (pcdctl authorize-node) and has reported in.
+data "pcd_host" "hyp1" {
+  name = var.host_name
+}
+
 resource "pcd_host_config_assignment" "host1" {
-  host_id        = var.host_id
+  host_id        = data.pcd_host.hyp1.id
   host_config_id = pcd_host_config.single_nic.id
 }
 
@@ -103,7 +110,7 @@ resource "pcd_cluster" "main" {
 #    library, and storage backend. Nothing here references the assignment by
 #    attribute, so the dependency is explicit.
 resource "pcd_host_cluster_role" "hypervisor" {
-  host_id              = var.host_id
+  host_id              = data.pcd_host.hyp1.id
   role                 = "hypervisor"
   host_cluster         = pcd_cluster.main.name
   wait_until_converged = true
@@ -112,7 +119,7 @@ resource "pcd_host_cluster_role" "hypervisor" {
 }
 
 resource "pcd_host_cluster_role" "image_library" {
-  host_id              = var.host_id
+  host_id              = data.pcd_host.hyp1.id
   role                 = "image-library"
   wait_until_converged = true
 
@@ -123,7 +130,7 @@ resource "pcd_host_cluster_role" "image_library" {
 # storage_backends_json; assigning the role is what turns that definition into
 # a running service on the host.
 resource "pcd_host_cluster_role" "storage" {
-  host_id              = var.host_id
+  host_id              = data.pcd_host.hyp1.id
   role                 = "persistent-storage"
   backends             = ["nfs-primary"]
   wait_until_converged = true

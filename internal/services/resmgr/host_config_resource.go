@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -74,20 +75,41 @@ func (r *hostConfigResource) Schema(_ context.Context, _ resource.SchemaRequest,
 		return schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: desc, PlanModifiers: useState}
 	}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a PCD host configuration: the mapping of traffic types (management, VM console,  Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned a host configuration ever again, so remove the `pcd_host_config_assignment` first." +
-			"tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels.",
+		MarkdownDescription: "Manages a PCD host configuration: the mapping of traffic types (management, VM console, " +
+			"tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels. " +
+			"Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned " +
+			"a host configuration ever again, so remove the `pcd_host_config_assignment` first.",
 		Attributes: map[string]schema.Attribute{
-			"id":                       schema.StringAttribute{Computed: true, MarkdownDescription: "The host configuration ID.", PlanModifiers: useState},
-			"name":                     schema.StringAttribute{Required: true, MarkdownDescription: "The host configuration name."},
+			"id": schema.StringAttribute{Computed: true, MarkdownDescription: "The host configuration ID.", PlanModifiers: useState},
+			"name": schema.StringAttribute{Required: true, MarkdownDescription: "The host configuration name. Changing this forces a new resource: " +
+				"resmgr does not allow renaming an existing configuration.",
+				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
 			"mgmt_interface":           iface("The management-traffic interface."),
 			"vm_console_interface":     iface("The VM-console interface."),
 			"host_liveness_interface":  iface("The host-liveness interface."),
 			"tunneling_interface":      iface("The virtual-network tunnels interface."),
 			"imagelib_interface":       iface("The image-library interface."),
 			"live_migration_interface": iface("The live-migration interface."),
-			"network_labels":           schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Physical-network label → interface (e.g. `physnet1 = enp1s0`)."},
-			"cluster_name":             schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The cluster blueprint this config belongs to.", PlanModifiers: useState},
-			"gpu_pci":                  schema.ListAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "PCI addresses of GPUs to pass through."},
+			"network_labels": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType,
+				MarkdownDescription: "Physical-network label → interface (e.g. `physnet1 = enp1s0`). Labels can be added and removed in place, " +
+					"but changing the interface an existing label maps to forces a new resource: resmgr refuses that change (400), so " +
+					"Terraform destroys and recreates the configuration, replacing any `pcd_host_config_assignment` that references it " +
+					"(unassign, delete, create, assign). Remove an assignment made outside Terraform first.",
+				// UseStateForUnknown must run first. The attribute is Optional+Computed, so a
+				// configuration that never sets it plans it unknown whenever anything else on
+				// the resource changes; the replacement check treats unknown as a change, and
+				// an unknown value is left out of the PUT, which resmgr answers with 500.
+				PlanModifiers: []planmodifier.Map{
+					mapplanmodifier.UseStateForUnknown(),
+					mapplanmodifier.RequiresReplaceIf(networkLabelsRequireReplace,
+						"Changing the interface an existing label maps to forces a new resource; adding or removing labels does not.",
+						"Changing the interface an existing label maps to forces a new resource; adding or removing labels does not."),
+				}},
+			"cluster_name": schema.StringAttribute{Optional: true, Computed: true,
+				MarkdownDescription: "The cluster blueprint this config belongs to. Changing this forces a new resource: resmgr does not " +
+					"allow moving an existing configuration to another blueprint.",
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown(), stringplanmodifier.RequiresReplace()}},
+			"gpu_pci": schema.ListAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "PCI addresses of GPUs to pass through."},
 		},
 	}
 }
@@ -255,6 +277,37 @@ func (r *hostConfigResource) Delete(ctx context.Context, req resource.DeleteRequ
 
 func (r *hostConfigResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+// networkLabelsRequireReplace is the RequiresReplaceIf rule for network_labels.
+// resmgr accepts adding and removing labels on an existing host configuration
+// but refuses to change the interface an existing label maps to (400
+// HostconfUpdateFail "Changing Network Label <label> is not allowed", observed
+// on 2026.4), so only a changed value forces a new resource. The name and the
+// cluster name are refused outright and carry a plain RequiresReplace.
+func networkLabelsRequireReplace(ctx context.Context, req planmodifier.MapRequest, resp *mapplanmodifier.RequiresReplaceIfFuncResponse) {
+	if req.StateValue.IsNull() || req.StateValue.IsUnknown() || req.PlanValue.IsNull() || req.PlanValue.IsUnknown() {
+		return
+	}
+	var state, plan map[string]string
+	resp.Diagnostics.Append(req.StateValue.ElementsAs(ctx, &state, false)...)
+	resp.Diagnostics.Append(req.PlanValue.ElementsAs(ctx, &plan, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.RequiresReplace = labelValuesChanged(state, plan)
+}
+
+// labelValuesChanged reports whether a label present in both maps points at a
+// different interface. A key in only one of them is an addition or a removal,
+// which resmgr applies in place.
+func labelValuesChanged(state, plan map[string]string) bool {
+	for label, iface := range state {
+		if planned, ok := plan[label]; ok && planned != iface {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *hostConfigResource) readInto(ctx context.Context, client *gophercloud.ServiceClient, id string, m *hostConfigModel) diag.Diagnostics {
