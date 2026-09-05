@@ -3,19 +3,29 @@
 page_title: "pcd_host_config Resource - PCD"
 subcategory: "Cluster Blueprint"
 description: |-
-  Manages a PCD host configuration: the mapping of traffic types (management, VM console,  Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned a host configuration ever again, so remove the pcd_host_config_assignment first.tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels.
+  Manages a PCD host configuration: the mapping of traffic types (management, VM console, tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels. Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned a host configuration ever again, so remove the pcd_host_config_assignment first.
 ---
 
 # pcd_host_config (Resource)
 
-Manages a PCD host configuration: the mapping of traffic types (management, VM console,  Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned a host configuration ever again, so remove the `pcd_host_config_assignment` first.tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels.
+Manages a PCD host configuration: the mapping of traffic types (management, VM console, tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels. Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned a host configuration ever again, so remove the `pcd_host_config_assignment` first.
 
 ## Example Usage
 
 ```terraform
+# Every traffic type on one interface, with the physical-network label the
+# provider network binds to. resmgr requires the cluster blueprint and every
+# interface to be set when the configuration is created.
 resource "pcd_host_config" "example" {
-  name           = "hc-single-nic"
-  mgmt_interface = "enp1s0"
+  name         = "hc-single-nic"
+  cluster_name = pcd_cluster_blueprint.region.name
+
+  mgmt_interface           = "enp1s0"
+  vm_console_interface     = "enp1s0"
+  host_liveness_interface  = "enp1s0"
+  tunneling_interface      = "enp1s0"
+  imagelib_interface       = "enp1s0"
+  live_migration_interface = "enp1s0"
 
   network_labels = {
     physnet1 = "enp1s0"
@@ -28,17 +38,17 @@ resource "pcd_host_config" "example" {
 
 ### Required
 
-- `name` (String) The host configuration name.
+- `name` (String) The host configuration name. Changing this forces a new resource: resmgr does not allow renaming an existing configuration.
 
 ### Optional
 
-- `cluster_name` (String) The cluster blueprint this config belongs to.
+- `cluster_name` (String) The cluster blueprint this config belongs to. Changing this forces a new resource: resmgr does not allow moving an existing configuration to another blueprint.
 - `gpu_pci` (List of String) PCI addresses of GPUs to pass through.
 - `host_liveness_interface` (String) The host-liveness interface.
 - `imagelib_interface` (String) The image-library interface.
 - `live_migration_interface` (String) The live-migration interface.
 - `mgmt_interface` (String) The management-traffic interface.
-- `network_labels` (Map of String) Physical-network label → interface (e.g. `physnet1 = enp1s0`).
+- `network_labels` (Map of String) Physical-network label → interface (e.g. `physnet1 = enp1s0`). Labels can be added and removed in place, but changing the interface an existing label maps to forces a new resource: resmgr refuses that change (400), so Terraform destroys and recreates the configuration, replacing any `pcd_host_config_assignment` that references it (unassign, delete, create, assign). Remove an assignment made outside Terraform first.
 - `tunneling_interface` (String) The virtual-network tunnels interface.
 - `vm_console_interface` (String) The VM-console interface.
 
