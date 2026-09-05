@@ -42,6 +42,36 @@ func TestAccResmgrBlueprintDataSource(t *testing.T) {
 	})
 }
 
+// TestAccResmgrHostDataSource resolves an onboarded host by the hostname it
+// reports (read-only). Set PCD_ACC_HOST_NAME to the hostname as resmgr reports
+// it (usually the FQDN); PCD_ACC_HOST_ID, when set, is asserted as the result.
+func TestAccResmgrHostDataSource(t *testing.T) {
+	name := os.Getenv("PCD_ACC_HOST_NAME")
+	if name == "" {
+		t.Skip("PCD_ACC_HOST_NAME not set; skipping host data source test")
+	}
+	const dn = "data.pcd_host.test"
+	checks := []resource.TestCheckFunc{
+		resource.TestCheckResourceAttr(dn, "name", name),
+		resource.TestCheckResourceAttrSet(dn, "id"),
+		resource.TestCheckResourceAttrSet(dn, "responding"),
+		resource.TestCheckResourceAttrSet(dn, "roles.#"),
+	}
+	if id := os.Getenv("PCD_ACC_HOST_ID"); id != "" {
+		checks = append(checks, resource.TestCheckResourceAttr(dn, "id", id))
+	}
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`data "pcd_host" "test" { name = %q }`, name),
+				Check:  resource.ComposeAggregateTestCheckFunc(checks...),
+			},
+		},
+	})
+}
+
 // TestAccResmgrHostConfig creates a host configuration, adds a network label
 // (an in-place update), moves it to another interface (a replacement: resmgr
 // refuses to change the interface an existing label maps to, PCD-9803), and

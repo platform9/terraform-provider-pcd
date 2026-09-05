@@ -157,11 +157,20 @@ func (r *hostRoleResource) ImportState(ctx context.Context, req resource.ImportS
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("role_name"), parts[1])...)
 }
 
-// hostAPI is the subset of GET /hosts/{id} we consume.
+// hostAPI is the subset of a resmgr host record we consume. Both /v1/hosts and
+// /v2/hosts serve this shape (v2 roles are the cluster roles).
 type hostAPI struct {
 	ID           string   `json:"id"`
 	Roles        []string `json:"roles"`
 	HostConfigID string   `json:"hostconfig_id"`
+	// Info is what the host agent reports about itself; absent for a host that
+	// has been authorized but has not reported in yet.
+	Info *hostInfoAPI `json:"info"`
+}
+
+type hostInfoAPI struct {
+	Hostname   string `json:"hostname"`
+	Responding bool   `json:"responding"`
 }
 
 // hostHasRole reports whether the host carries the role, and whether resmgr knows the host

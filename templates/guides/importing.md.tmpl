@@ -205,9 +205,11 @@ resource manager rather than in an OpenStack service, so `pcdctl` has no list
 command for most of them. Two lookups cover them all.
 
 **The host UUID.** `pcd_host_config_assignment`, `pcd_host_cluster_role`, and
-`pcd_host_role` take the host's resource-manager UUID. It is not the ID that
-`pcdctl hypervisor list` prints (that is the Compute service's own hypervisor ID).
-Three ways to find it:
+`pcd_host_role` take the host's resource-manager UUID. In a configuration, the
+`pcd_host` data source resolves it from the hostname the host reports
+(`data.pcd_host.hyp1.id`), so it never has to be typed; an import ID, however, is
+literal. It is not the ID that `pcdctl hypervisor list` prints (that is the Compute
+service's own hypervisor ID). Three ways to find it:
 
 - On a host that already has the `hypervisor` role, the `service_host` field is the
   UUID, and the Compute service lists every hypervisor by it:
