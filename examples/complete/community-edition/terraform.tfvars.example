@@ -1,7 +1,7 @@
 # Copy to terraform.tfvars and fill in your values.
 
-# On the host: cat /etc/pf9/host_id.conf
-host_id = "00000000-0000-0000-0000-000000000000"
+# The hostname the host reports to PCD: hostname -f on the host, or the Hosts page.
+host_name = "hyp1.example.com"
 
 # The host's NIC (ip -br link on the host).
 host_interface = "enp1s0"
