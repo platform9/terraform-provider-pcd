@@ -1,6 +1,7 @@
 # Every traffic type on one interface, with the physical-network label the
-# provider network binds to. resmgr requires the cluster blueprint and every
-# interface to be set when the configuration is created.
+# provider network binds to. resmgr requires the cluster blueprint, every
+# interface except live migration, and a label on the tunneling interface when
+# the configuration is created.
 resource "pcd_host_config" "example" {
   name         = "hc-single-nic"
   cluster_name = pcd_cluster_blueprint.region.name

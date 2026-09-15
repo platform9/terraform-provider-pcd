@@ -15,6 +15,20 @@ All notable changes to this project are documented here. The format is based on
   the resource manager knows. The data source also exposes the host's cluster `roles`, its
   `host_config_id`, and whether it is `responding`.
 
+### Changed
+
+- `pcd_host_config`: a create or update that resmgr refuses for a reason the provider recognizes
+  now reports the attribute to fix, with the resmgr message, instead of the raw HTTP body. Probed
+  on Community Edition 2026.4,
+  resmgr requires `cluster_name` (404 `ClusterBlueprintNotFound` for a missing or unknown
+  blueprint), the management, VM console, host liveness, tunneling, and image library interfaces
+  (400 `HostconfBadConfigInput`; the live-migration interface is optional), at least one
+  `network_labels` entry with one of them on the tunneling interface, and at most one label per
+  interface within a configuration (409 `HostIntfConflict`), and it enforces the tunneling-label
+  and one-label-per-interface rules on updates as well. The schema is unchanged, so the server
+  keeps the last word on a release that relaxes a rule; the resource and attribute descriptions
+  state the rules.
+
 ### Fixed
 
 - `pcd_host_config`: the changes resmgr refuses on an existing host configuration now plan a
@@ -30,15 +44,18 @@ All notable changes to this project are documented here. The format is based on
   delete, with the existing guard's instructions. A configuration that never sets `network_labels`
   or `cluster_name` now keeps the server's values across unrelated changes; before, an unrelated
   change planned them unknown and left the labels out of the update request, which resmgr answers
-  with 500.
+  with 500. That carries the values through in-place updates only: a replacement recreates the
+  host configuration from the Terraform configuration alone, so set every attribute resmgr
+  requires even after an import.
 
 ### Documentation
 
 - The `pcd_host_config_assignment`, `pcd_host_cluster_role`, and `pcd_host_role` examples resolve
   the host with `pcd_host` instead of a pasted UUID, the Importing guide points configurations at
   the data source, and the Community Edition example and guide take `host_name` instead of
-  `host_id`. The `pcd_host_config` example sets `cluster_name` and every interface, which resmgr
-  requires when a configuration is created.
+  `host_id`. The `pcd_host_config` example sets `cluster_name`, every interface (live migration is
+  optional), and a label on the tunneling interface, which resmgr requires when a configuration
+  is created.
 
 ## [0.1.11] - 2026-09-04
 

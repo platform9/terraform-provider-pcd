@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -79,7 +80,8 @@ func TestAccResmgrHostDataSource(t *testing.T) {
 // plane, so it is opt-in: set PCD_ACC_RESMGR=1 to run, and PCD_ACC_BLUEPRINT_NAME
 // to the region's cluster blueprint: resmgr refuses to create a host
 // configuration that does not name one (404 ClusterBlueprintNotFound) or that
-// leaves any traffic interface unset (400 HostconfBadConfigInput), so the
+// leaves a traffic interface other than live migration unset (400
+// HostconfBadConfigInput), so the
 // configuration under test names the blueprint and puts every traffic type on
 // the one interface.
 func TestAccResmgrHostConfig(t *testing.T) {
@@ -139,6 +141,64 @@ func TestAccResmgrHostConfig(t *testing.T) {
 				),
 			},
 			{ResourceName: rn, ImportState: true, ImportStateVerify: true},
+		},
+	})
+}
+
+// TestAccResmgrHostConfigRefusals applies one configuration per rule resmgr
+// enforces at creation and expects the provider to name the attribute to fix.
+// Each step leaves nothing behind (the create is refused), so there is no
+// CheckDestroy. Opt-in like TestAccResmgrHostConfig: PCD_ACC_RESMGR=1 and
+// PCD_ACC_BLUEPRINT_NAME.
+func TestAccResmgrHostConfigRefusals(t *testing.T) {
+	if os.Getenv("PCD_ACC_RESMGR") == "" {
+		t.Skip("PCD_ACC_RESMGR not set; skipping resmgr mutation test")
+	}
+	blueprint := os.Getenv("PCD_ACC_BLUEPRINT_NAME")
+	if blueprint == "" {
+		t.Skip("PCD_ACC_BLUEPRINT_NAME not set; resmgr needs a cluster blueprint to create a host config")
+	}
+	config := func(blueprint, vmConsole string, labels map[string]string) string {
+		keys := make([]string, 0, len(labels))
+		for k := range labels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var b strings.Builder
+		for _, k := range keys {
+			fmt.Fprintf(&b, "    %s = %q\n", k, labels[k])
+		}
+		vm := ""
+		if vmConsole != "" {
+			vm = fmt.Sprintf("  vm_console_interface     = %q\n", vmConsole)
+		}
+		return fmt.Sprintf(`
+resource "pcd_host_config" "refused" {
+  name         = "tf-acc-hc-refused"
+  cluster_name = %q
+
+  mgmt_interface           = "enp1s0"
+%s  host_liveness_interface  = "enp1s0"
+  tunneling_interface      = "enp1s0"
+  imagelib_interface       = "enp1s0"
+  live_migration_interface = "enp1s0"
+
+  network_labels = {
+%s  }
+}
+`, blueprint, vm, b.String())
+	}
+	one := map[string]string{"physnet1": "enp1s0"}
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{Config: config("tf-acc-no-such-blueprint", "enp1s0", one), ExpectError: regexp.MustCompile(`cluster_name does not name a cluster blueprint`)},
+			{Config: config(blueprint, "", one), ExpectError: regexp.MustCompile(`vm_console_interface must be set`)},
+			{Config: config(blueprint, "enp1s0", map[string]string{"physnet1": "enp3s0"}), ExpectError: regexp.MustCompile(`no entry for the tunneling interface`)},
+			{Config: config(blueprint, "enp1s0", map[string]string{"physnet1": "enp1s0", "physnet2": "enp1s0"}), ExpectError: regexp.MustCompile(`at most one label`)},
+			// An empty map is dropped from the request, which resmgr treats as no labels.
+			{Config: config(blueprint, "enp1s0", nil), ExpectError: regexp.MustCompile(`network_labels must map at least one label`)},
 		},
 	})
 }

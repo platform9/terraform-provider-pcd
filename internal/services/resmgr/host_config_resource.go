@@ -71,6 +71,7 @@ func (r *hostConfigResource) Metadata(_ context.Context, req resource.MetadataRe
 
 func (r *hostConfigResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	useState := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
+	const requiredAtCreate = " resmgr requires it when a configuration is created."
 	iface := func(desc string) schema.StringAttribute {
 		return schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: desc, PlanModifiers: useState}
 	}
@@ -78,20 +79,27 @@ func (r *hostConfigResource) Schema(_ context.Context, _ resource.SchemaRequest,
 		MarkdownDescription: "Manages a PCD host configuration: the mapping of traffic types (management, VM console, " +
 			"tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels. " +
 			"Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned " +
-			"a host configuration ever again, so remove the `pcd_host_config_assignment` first.",
+			"a host configuration ever again, so remove the `pcd_host_config_assignment` first.\n\n" +
+			"resmgr requires `cluster_name`, every interface except `live_migration_interface`, and a `network_labels` " +
+			"entry for the tunneling interface when a configuration is created (observed on Community Edition 2026.4), " +
+			"and refuses a write that breaks those rules; the provider names the attribute to fix. Set them in the " +
+			"Terraform configuration even for an imported host configuration: a replacement recreates it from the " +
+			"Terraform configuration alone.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{Computed: true, MarkdownDescription: "The host configuration ID.", PlanModifiers: useState},
 			"name": schema.StringAttribute{Required: true, MarkdownDescription: "The host configuration name. Changing this forces a new resource: " +
 				"resmgr does not allow renaming an existing configuration.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
-			"mgmt_interface":           iface("The management-traffic interface."),
-			"vm_console_interface":     iface("The VM-console interface."),
-			"host_liveness_interface":  iface("The host-liveness interface."),
-			"tunneling_interface":      iface("The virtual-network tunnels interface."),
-			"imagelib_interface":       iface("The image-library interface."),
-			"live_migration_interface": iface("The live-migration interface."),
+			"mgmt_interface":           iface("The management-traffic interface." + requiredAtCreate),
+			"vm_console_interface":     iface("The VM-console interface." + requiredAtCreate),
+			"host_liveness_interface":  iface("The host-liveness interface." + requiredAtCreate),
+			"tunneling_interface":      iface("The virtual-network tunnels interface. It must appear as a `network_labels` value." + requiredAtCreate),
+			"imagelib_interface":       iface("The image-library interface." + requiredAtCreate),
+			"live_migration_interface": iface("The live-migration interface. Optional: resmgr does not require it when a configuration is created."),
 			"network_labels": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType,
-				MarkdownDescription: "Physical-network label → interface (e.g. `physnet1 = enp1s0`). Labels can be added and removed in place, " +
+				MarkdownDescription: "Physical-network label → interface (e.g. `physnet1 = enp1s0`). resmgr requires at least one entry when a " +
+					"configuration is created, and on every write it requires an entry for the tunneling interface and lets an " +
+					"interface carry at most one label within a configuration. Labels can be added and removed in place, " +
 					"but changing the interface an existing label maps to forces a new resource: resmgr refuses that change (400), so " +
 					"Terraform destroys and recreates the configuration, replacing any `pcd_host_config_assignment` that references it " +
 					"(unassign, delete, create, assign). Remove an assignment made outside Terraform first.",
@@ -106,7 +114,8 @@ func (r *hostConfigResource) Schema(_ context.Context, _ resource.SchemaRequest,
 						"Changing the interface an existing label maps to forces a new resource; adding or removing labels does not."),
 				}},
 			"cluster_name": schema.StringAttribute{Optional: true, Computed: true,
-				MarkdownDescription: "The cluster blueprint this config belongs to. Changing this forces a new resource: resmgr does not " +
+				MarkdownDescription: "The cluster blueprint this config belongs to; resmgr requires it when a configuration is created. " +
+					"Changing this forces a new resource: resmgr does not " +
 					"allow moving an existing configuration to another blueprint.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown(), stringplanmodifier.RequiresReplace()}},
 			"gpu_pci": schema.ListAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "PCI addresses of GPUs to pass through."},
@@ -138,7 +147,11 @@ func (r *hostConfigResource) Create(ctx context.Context, req resource.CreateRequ
 
 	var created hostConfigAPI
 	if _, err := client.Post(ctx, client.ServiceURL("hostconfigs"), body, &created, &gophercloud.RequestOpts{OkCodes: []int{200, 201, 202}}); err != nil {
-		resp.Diagnostics.AddError("resmgr: creating host config", err.Error())
+		if d := hostConfigAPIDiagnostic("creating", err); d != nil {
+			resp.Diagnostics.Append(d)
+		} else {
+			resp.Diagnostics.AddError("resmgr: creating host config", err.Error())
+		}
 		return
 	}
 	if created.ID == "" {
@@ -202,7 +215,11 @@ func (r *hostConfigResource) Update(ctx context.Context, req resource.UpdateRequ
 	}
 	id := plan.ID.ValueString()
 	if _, err := client.Put(ctx, client.ServiceURL("hostconfigs", id), body, nil, &gophercloud.RequestOpts{OkCodes: []int{200, 201, 202, 204}}); err != nil {
-		resp.Diagnostics.AddError("resmgr: updating host config", err.Error())
+		if d := hostConfigAPIDiagnostic("updating", err); d != nil {
+			resp.Diagnostics.Append(d)
+		} else {
+			resp.Diagnostics.AddError("resmgr: updating host config", err.Error())
+		}
 		return
 	}
 
