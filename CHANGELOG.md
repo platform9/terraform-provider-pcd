@@ -60,6 +60,13 @@ All notable changes to this project are documented here. The format is based on
   optional), and a label on the tunneling interface, which resmgr requires when a configuration
   is created.
 
+### Security
+
+- Bumped the indirect `google.golang.org/grpc` dependency to 1.83.2 (GHSA-2v4p-qf9q-27wj: a crash
+  in gRPC-Go xDS servers on requests missing the `:authority` and `Host` headers). As with the
+  previous gRPC advisories, the provider's gRPC server only ever serves the local Terraform CLI
+  over a private channel and runs no xDS server, so exposure was minimal.
+
 ## [0.1.11] - 2026-09-04
 
 ### Fixed
