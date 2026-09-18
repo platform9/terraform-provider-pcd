@@ -42,7 +42,7 @@ resource "pcd_host_config" "example" {
 
 ### Required
 
-- `name` (String) The host configuration name. Changing this forces a new resource: resmgr does not allow renaming an existing configuration.
+- `name` (String) The host configuration name; must not be empty. Changing this forces a new resource: resmgr does not allow renaming an existing configuration.
 
 ### Optional
 

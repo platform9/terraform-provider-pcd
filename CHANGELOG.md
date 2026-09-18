@@ -28,6 +28,9 @@ All notable changes to this project are documented here. The format is based on
   and one-label-per-interface rules on updates as well. The schema is unchanged, so the server
   keeps the last word on a release that relaxes a rule; the resource and attribute descriptions
   state the rules.
+- `pcd_host_config`: an empty `name` is refused at plan time instead of reaching resmgr, which
+  accepts a host configuration named `""` (probed on Community Edition 2026.4). `name` is also the
+  attribute a replacement is keyed on.
 
 ### Fixed
 

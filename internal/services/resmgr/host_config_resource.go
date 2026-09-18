@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gophercloud/gophercloud/v2"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -16,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
@@ -87,9 +89,11 @@ func (r *hostConfigResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"Terraform configuration alone.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{Computed: true, MarkdownDescription: "The host configuration ID.", PlanModifiers: useState},
-			"name": schema.StringAttribute{Required: true, MarkdownDescription: "The host configuration name. Changing this forces a new resource: " +
-				"resmgr does not allow renaming an existing configuration.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
+			"name": schema.StringAttribute{Required: true, MarkdownDescription: "The host configuration name; must not be empty. Changing this " +
+				"forces a new resource: resmgr does not allow renaming an existing configuration.",
+				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				// resmgr accepts "" (probed on 2026.4); refuse it here, where the user can fix it.
+				Validators: []validator.String{stringvalidator.LengthAtLeast(1)}},
 			"mgmt_interface":           iface("The management-traffic interface." + requiredAtCreate),
 			"vm_console_interface":     iface("The VM-console interface." + requiredAtCreate),
 			"host_liveness_interface":  iface("The host-liveness interface." + requiredAtCreate),
