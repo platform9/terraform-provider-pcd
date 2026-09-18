@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `pcd_networking_network` gains `dns_domain` (PCD-9926): the Designate zone that ports on the
+  network publish records to. It defaults to `""`, so omitting it removes an association: add the
+  attribute to the configuration of any network whose zone was set outside Terraform before the
+  first apply with this version, or that apply clears it. The `pcd_networking_network` data source
+  reports it.
+- `pcd_networking_subnet` gains `dns_publish_fixed_ip` (PCD-9945), the per-subnet switch that
+  publishes fixed IPs into the network's zone; a network with `external = true` publishes nothing
+  until at least one subnet sets it. Defaults to `false`. The data source reports it.
+
 ## [0.1.12] - 2026-09-17
 
 ### Added
