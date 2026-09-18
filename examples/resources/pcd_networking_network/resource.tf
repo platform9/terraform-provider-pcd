@@ -38,3 +38,17 @@ resource "pcd_networking_network" "l2" {
     segmentation_id  = 100
   }]
 }
+
+# A network whose ports publish DNS records into a Designate zone. dns_domain
+# is the zone's name (it ends in a dot) and the zone must already exist. Which
+# fixed IPs get records depends on the subnets' dns_publish_fixed_ip; see the
+# DNS guide. Omit dns_domain to remove the association.
+resource "pcd_dns_zone" "app" {
+  name  = "app.example.com."
+  email = "dns-admin@example.com"
+}
+
+resource "pcd_networking_network" "app" {
+  name       = "app-net"
+  dns_domain = pcd_dns_zone.app.name
+}
