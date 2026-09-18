@@ -32,6 +32,7 @@ data "pcd_networking_subnet" "example" {
 
 ### Read-Only
 
+- `dns_publish_fixed_ip` (Boolean) Whether fixed IPs from this subnet are published to the network's DNS zone.
 - `enable_dhcp` (Boolean) Whether DHCP is enabled.
 - `gateway_ip` (String) The gateway IP.
 - `id` (String) The subnet ID.

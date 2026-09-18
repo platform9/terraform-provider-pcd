@@ -53,19 +53,20 @@ type subnetResource struct {
 }
 
 type subnetModel struct {
-	ID              types.String `tfsdk:"id"`
-	NetworkID       types.String `tfsdk:"network_id"`
-	Name            types.String `tfsdk:"name"`
-	Description     types.String `tfsdk:"description"`
-	CIDR            types.String `tfsdk:"cidr"`
-	IPVersion       types.Int64  `tfsdk:"ip_version"`
-	GatewayIP       types.String `tfsdk:"gateway_ip"`
-	EnableDHCP      types.Bool   `tfsdk:"enable_dhcp"`
-	DNSNameservers  types.List   `tfsdk:"dns_nameservers"`
-	AllocationPools types.List   `tfsdk:"allocation_pools"`
-	TenantID        types.String `tfsdk:"tenant_id"`
-	Tags            types.Set    `tfsdk:"tags"`
-	Region          types.String `tfsdk:"region"`
+	ID                types.String `tfsdk:"id"`
+	NetworkID         types.String `tfsdk:"network_id"`
+	Name              types.String `tfsdk:"name"`
+	Description       types.String `tfsdk:"description"`
+	CIDR              types.String `tfsdk:"cidr"`
+	IPVersion         types.Int64  `tfsdk:"ip_version"`
+	GatewayIP         types.String `tfsdk:"gateway_ip"`
+	EnableDHCP        types.Bool   `tfsdk:"enable_dhcp"`
+	DNSNameservers    types.List   `tfsdk:"dns_nameservers"`
+	AllocationPools   types.List   `tfsdk:"allocation_pools"`
+	DNSPublishFixedIP types.Bool   `tfsdk:"dns_publish_fixed_ip"`
+	TenantID          types.String `tfsdk:"tenant_id"`
+	Tags              types.Set    `tfsdk:"tags"`
+	Region            types.String `tfsdk:"region"`
 }
 
 type allocationPoolModel struct {
@@ -93,6 +94,14 @@ func (r *subnetResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"dns_nameservers": schema.ListAttribute{
 				Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "DNS nameservers for the subnet.",
 				PlanModifiers: []planmodifier.List{listplanmodifier.UseStateForUnknown()},
+			},
+			"dns_publish_fixed_ip": schema.BoolAttribute{
+				Optional: true, Computed: true, Default: booldefault.StaticBool(false),
+				MarkdownDescription: "Publish a DNS record for every fixed IP allocated from this subnet, in the zone named " +
+					"by the network's `dns_domain`. Defaults to `false`. A network with `external = true` publishes nothing " +
+					"until at least one of its subnets sets this; on other networks it is the per-subnet opt-in (on a " +
+					"dual-stack network, for example, to publish only the routable family). Records are created when a port " +
+					"is created or updated, never retroactively, so set this before booting instances.",
 			},
 			"allocation_pools": schema.ListNestedAttribute{
 				Optional: true, Computed: true, MarkdownDescription: "IP allocation pools (DHCP ranges).",
@@ -126,21 +135,7 @@ func (r *subnetResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	enableDHCP := plan.EnableDHCP.ValueBool()
-	createOpts := subnets.CreateOpts{
-		NetworkID:       plan.NetworkID.ValueString(),
-		CIDR:            plan.CIDR.ValueString(),
-		Name:            plan.Name.ValueString(),
-		Description:     plan.Description.ValueString(),
-		IPVersion:       gophercloud.IPVersion(plan.IPVersion.ValueInt64()),
-		EnableDHCP:      &enableDHCP,
-		TenantID:        plan.TenantID.ValueString(),
-		DNSNameservers:  listToStrings(ctx, plan.DNSNameservers, &resp.Diagnostics),
-		AllocationPools: poolsFromList(ctx, plan.AllocationPools, &resp.Diagnostics),
-	}
-	if v := plan.GatewayIP.ValueString(); v != "" {
-		createOpts.GatewayIP = &v
-	}
+	createOpts := subnetCreateOpts(ctx, &plan, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -209,20 +204,7 @@ func (r *subnetResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	name := plan.Name.ValueString()
-	description := plan.Description.ValueString()
-	enableDHCP := plan.EnableDHCP.ValueBool()
-	updateOpts := subnets.UpdateOpts{Name: &name, Description: &description, EnableDHCP: &enableDHCP}
-	if v := plan.GatewayIP.ValueString(); v != "" {
-		updateOpts.GatewayIP = &v
-	}
-	if !plan.DNSNameservers.Equal(state.DNSNameservers) {
-		dns := listToStrings(ctx, plan.DNSNameservers, &resp.Diagnostics)
-		updateOpts.DNSNameservers = &dns
-	}
-	if !plan.AllocationPools.Equal(state.AllocationPools) {
-		updateOpts.AllocationPools = poolsFromList(ctx, plan.AllocationPools, &resp.Diagnostics)
-	}
+	updateOpts := subnetUpdateOpts(ctx, &plan, &state, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -293,6 +275,56 @@ func (r *subnetResource) ImportState(ctx context.Context, req resource.ImportSta
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
+// subnetCreateOpts builds the create body. dns_publish_fixed_ip is sent only
+// when true: false is the server default, and a Neutron without the extension
+// rejects the key. Kept apart from Create so the body is unit-testable.
+func subnetCreateOpts(ctx context.Context, plan *subnetModel, diags *diag.Diagnostics) subnets.CreateOpts {
+	enableDHCP := plan.EnableDHCP.ValueBool()
+	createOpts := subnets.CreateOpts{
+		NetworkID:       plan.NetworkID.ValueString(),
+		CIDR:            plan.CIDR.ValueString(),
+		Name:            plan.Name.ValueString(),
+		Description:     plan.Description.ValueString(),
+		IPVersion:       gophercloud.IPVersion(plan.IPVersion.ValueInt64()),
+		EnableDHCP:      &enableDHCP,
+		TenantID:        plan.TenantID.ValueString(),
+		DNSNameservers:  listToStrings(ctx, plan.DNSNameservers, diags),
+		AllocationPools: poolsFromList(ctx, plan.AllocationPools, diags),
+	}
+	if v := plan.GatewayIP.ValueString(); v != "" {
+		createOpts.GatewayIP = &v
+	}
+	if plan.DNSPublishFixedIP.ValueBool() {
+		publish := true
+		createOpts.DNSPublishFixedIP = &publish
+	}
+	return createOpts
+}
+
+// subnetUpdateOpts builds the update body from what changed between plan and
+// state; dns_publish_fixed_ip is sent in either direction when it differs.
+func subnetUpdateOpts(ctx context.Context, plan, state *subnetModel, diags *diag.Diagnostics) subnets.UpdateOpts {
+	name := plan.Name.ValueString()
+	description := plan.Description.ValueString()
+	enableDHCP := plan.EnableDHCP.ValueBool()
+	updateOpts := subnets.UpdateOpts{Name: &name, Description: &description, EnableDHCP: &enableDHCP}
+	if v := plan.GatewayIP.ValueString(); v != "" {
+		updateOpts.GatewayIP = &v
+	}
+	if !plan.DNSNameservers.Equal(state.DNSNameservers) {
+		dns := listToStrings(ctx, plan.DNSNameservers, diags)
+		updateOpts.DNSNameservers = &dns
+	}
+	if !plan.AllocationPools.Equal(state.AllocationPools) {
+		updateOpts.AllocationPools = poolsFromList(ctx, plan.AllocationPools, diags)
+	}
+	if !plan.DNSPublishFixedIP.Equal(state.DNSPublishFixedIP) && !plan.DNSPublishFixedIP.IsUnknown() {
+		publish := plan.DNSPublishFixedIP.ValueBool()
+		updateOpts.DNSPublishFixedIP = &publish
+	}
+	return updateOpts
+}
+
 func (r *subnetResource) readInto(ctx context.Context, client *gophercloud.ServiceClient, id string, m *subnetModel) (notFound bool, diags diag.Diagnostics) {
 	sub, err := subnets.Get(ctx, client, id).Extract()
 	if err != nil {
@@ -311,6 +343,7 @@ func (r *subnetResource) readInto(ctx context.Context, client *gophercloud.Servi
 	m.IPVersion = types.Int64Value(int64(sub.IPVersion))
 	m.GatewayIP = types.StringValue(sub.GatewayIP)
 	m.EnableDHCP = types.BoolValue(sub.EnableDHCP)
+	m.DNSPublishFixedIP = types.BoolValue(sub.DNSPublishFixedIP)
 	m.TenantID = types.StringValue(sub.TenantID)
 
 	dnsList, d := types.ListValueFrom(ctx, types.StringType, sub.DNSNameservers)

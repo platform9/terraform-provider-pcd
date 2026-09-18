@@ -206,3 +206,56 @@ data "pcd_networking_network" "dns" {
 }
 `, dnsDomainLine)
 }
+
+// TestAccNetworkingSubnetDNSPublishFixedIP turns publishing on at create,
+// off by update, leaves it off when the attribute is omitted, and imports.
+func TestAccNetworkingSubnetDNSPublishFixedIP(t *testing.T) {
+	const rn = "pcd_networking_subnet.dns"
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy: resource.ComposeAggregateTestCheckFunc(
+			testAccCheckSubnetDestroy(t),
+			testAccCheckNetworkDestroy(t),
+		),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccSubnetDNSPublishConfig(`dns_publish_fixed_ip = true`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckSubnetExists(t, rn),
+					resource.TestCheckResourceAttr(rn, "dns_publish_fixed_ip", "true"),
+					resource.TestCheckResourceAttrPair("data.pcd_networking_subnet.dns", "dns_publish_fixed_ip", rn, "dns_publish_fixed_ip"),
+				),
+			},
+			{
+				Config: testAccSubnetDNSPublishConfig(`dns_publish_fixed_ip = false`),
+				Check:  resource.TestCheckResourceAttr(rn, "dns_publish_fixed_ip", "false"),
+			},
+			{
+				Config: testAccSubnetDNSPublishConfig(""),
+				Check:  resource.TestCheckResourceAttr(rn, "dns_publish_fixed_ip", "false"),
+			},
+			{ResourceName: rn, ImportState: true, ImportStateVerify: true},
+		},
+	})
+}
+
+func testAccSubnetDNSPublishConfig(publishLine string) string {
+	return fmt.Sprintf(`
+resource "pcd_networking_network" "dns" {
+  name       = "tf-acc-dns-subnet-net"
+  dns_domain = "tf-acc-subnet.example.com."
+}
+
+resource "pcd_networking_subnet" "dns" {
+  name       = "tf-acc-dns-subnet"
+  network_id = pcd_networking_network.dns.id
+  cidr       = "10.103.0.0/24"
+  %s
+}
+
+data "pcd_networking_subnet" "dns" {
+  subnet_id = pcd_networking_subnet.dns.id
+}
+`, publishLine)
+}

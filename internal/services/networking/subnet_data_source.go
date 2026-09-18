@@ -34,16 +34,17 @@ type subnetDataSource struct {
 }
 
 type subnetDataSourceModel struct {
-	ID         types.String `tfsdk:"id"`
-	SubnetID   types.String `tfsdk:"subnet_id"`
-	Name       types.String `tfsdk:"name"`
-	NetworkID  types.String `tfsdk:"network_id"`
-	CIDR       types.String `tfsdk:"cidr"`
-	IPVersion  types.Int64  `tfsdk:"ip_version"`
-	GatewayIP  types.String `tfsdk:"gateway_ip"`
-	EnableDHCP types.Bool   `tfsdk:"enable_dhcp"`
-	TenantID   types.String `tfsdk:"tenant_id"`
-	Region     types.String `tfsdk:"region"`
+	ID                types.String `tfsdk:"id"`
+	SubnetID          types.String `tfsdk:"subnet_id"`
+	Name              types.String `tfsdk:"name"`
+	NetworkID         types.String `tfsdk:"network_id"`
+	CIDR              types.String `tfsdk:"cidr"`
+	IPVersion         types.Int64  `tfsdk:"ip_version"`
+	GatewayIP         types.String `tfsdk:"gateway_ip"`
+	EnableDHCP        types.Bool   `tfsdk:"enable_dhcp"`
+	DNSPublishFixedIP types.Bool   `tfsdk:"dns_publish_fixed_ip"`
+	TenantID          types.String `tfsdk:"tenant_id"`
+	Region            types.String `tfsdk:"region"`
 }
 
 func (d *subnetDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -54,16 +55,17 @@ func (d *subnetDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Look up a Neutron subnet by ID or filters.",
 		Attributes: map[string]schema.Attribute{
-			"id":          schema.StringAttribute{Computed: true, MarkdownDescription: "The subnet ID."},
-			"subnet_id":   schema.StringAttribute{Optional: true, MarkdownDescription: "Look up by subnet ID (takes precedence over filters)."},
-			"name":        schema.StringAttribute{Optional: true, MarkdownDescription: "Filter by name."},
-			"network_id":  schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Filter by (and report) the network."},
-			"cidr":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Filter by (and report) the CIDR."},
-			"ip_version":  schema.Int64Attribute{Computed: true, MarkdownDescription: "The IP version."},
-			"gateway_ip":  schema.StringAttribute{Computed: true, MarkdownDescription: "The gateway IP."},
-			"enable_dhcp": schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether DHCP is enabled."},
-			"tenant_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Filter by (and report) the owning project."},
-			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region."},
+			"id":                   schema.StringAttribute{Computed: true, MarkdownDescription: "The subnet ID."},
+			"subnet_id":            schema.StringAttribute{Optional: true, MarkdownDescription: "Look up by subnet ID (takes precedence over filters)."},
+			"name":                 schema.StringAttribute{Optional: true, MarkdownDescription: "Filter by name."},
+			"network_id":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Filter by (and report) the network."},
+			"cidr":                 schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Filter by (and report) the CIDR."},
+			"ip_version":           schema.Int64Attribute{Computed: true, MarkdownDescription: "The IP version."},
+			"gateway_ip":           schema.StringAttribute{Computed: true, MarkdownDescription: "The gateway IP."},
+			"enable_dhcp":          schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether DHCP is enabled."},
+			"dns_publish_fixed_ip": schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether fixed IPs from this subnet are published to the network's DNS zone."},
+			"tenant_id":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Filter by (and report) the owning project."},
+			"region":               schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region."},
 		},
 	}
 }
@@ -129,6 +131,7 @@ func (d *subnetDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 	data.IPVersion = types.Int64Value(int64(sub.IPVersion))
 	data.GatewayIP = types.StringValue(sub.GatewayIP)
 	data.EnableDHCP = types.BoolValue(sub.EnableDHCP)
+	data.DNSPublishFixedIP = types.BoolValue(sub.DNSPublishFixedIP)
 	data.TenantID = types.StringValue(sub.TenantID)
 	if data.Region.IsNull() || data.Region.IsUnknown() {
 		data.Region = types.StringValue(d.config.Region)
