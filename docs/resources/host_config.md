@@ -3,19 +3,33 @@
 page_title: "pcd_host_config Resource - PCD"
 subcategory: "Cluster Blueprint"
 description: |-
-  Manages a PCD host configuration: the mapping of traffic types (management, VM console,  Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned a host configuration ever again, so remove the pcd_host_config_assignment first.tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels.
+  Manages a PCD host configuration: the mapping of traffic types (management, VM console, tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels. Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned a host configuration ever again, so remove the pcd_host_config_assignment first.
+  resmgr requires cluster_name, every interface except live_migration_interface, and a network_labels entry for the tunneling interface when a configuration is created (observed on Community Edition 2026.4), and refuses a write that breaks those rules; the provider names the attribute to fix. Set them in the Terraform configuration even for an imported host configuration: a replacement recreates it from the Terraform configuration alone.
 ---
 
 # pcd_host_config (Resource)
 
-Manages a PCD host configuration: the mapping of traffic types (management, VM console,  Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned a host configuration ever again, so remove the `pcd_host_config_assignment` first.tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels.
+Manages a PCD host configuration: the mapping of traffic types (management, VM console, tunnels, image library, live migration, host liveness) to network interfaces, plus physical-network labels. Destroying one is refused while any host is still assigned to it: PCD leaves such a host unable to be assigned a host configuration ever again, so remove the `pcd_host_config_assignment` first.
+
+resmgr requires `cluster_name`, every interface except `live_migration_interface`, and a `network_labels` entry for the tunneling interface when a configuration is created (observed on Community Edition 2026.4), and refuses a write that breaks those rules; the provider names the attribute to fix. Set them in the Terraform configuration even for an imported host configuration: a replacement recreates it from the Terraform configuration alone.
 
 ## Example Usage
 
 ```terraform
+# Every traffic type on one interface, with the physical-network label the
+# provider network binds to. resmgr requires the cluster blueprint, every
+# interface except live migration, and a label on the tunneling interface when
+# the configuration is created.
 resource "pcd_host_config" "example" {
-  name           = "hc-single-nic"
-  mgmt_interface = "enp1s0"
+  name         = "hc-single-nic"
+  cluster_name = pcd_cluster_blueprint.region.name
+
+  mgmt_interface           = "enp1s0"
+  vm_console_interface     = "enp1s0"
+  host_liveness_interface  = "enp1s0"
+  tunneling_interface      = "enp1s0"
+  imagelib_interface       = "enp1s0"
+  live_migration_interface = "enp1s0"
 
   network_labels = {
     physnet1 = "enp1s0"
@@ -28,19 +42,19 @@ resource "pcd_host_config" "example" {
 
 ### Required
 
-- `name` (String) The host configuration name.
+- `name` (String) The host configuration name; must not be empty. Changing this forces a new resource: resmgr does not allow renaming an existing configuration.
 
 ### Optional
 
-- `cluster_name` (String) The cluster blueprint this config belongs to.
+- `cluster_name` (String) The cluster blueprint this config belongs to; resmgr requires it when a configuration is created. Changing this forces a new resource: resmgr does not allow moving an existing configuration to another blueprint.
 - `gpu_pci` (List of String) PCI addresses of GPUs to pass through.
-- `host_liveness_interface` (String) The host-liveness interface.
-- `imagelib_interface` (String) The image-library interface.
-- `live_migration_interface` (String) The live-migration interface.
-- `mgmt_interface` (String) The management-traffic interface.
-- `network_labels` (Map of String) Physical-network label → interface (e.g. `physnet1 = enp1s0`).
-- `tunneling_interface` (String) The virtual-network tunnels interface.
-- `vm_console_interface` (String) The VM-console interface.
+- `host_liveness_interface` (String) The host-liveness interface. resmgr requires it when a configuration is created.
+- `imagelib_interface` (String) The image-library interface. resmgr requires it when a configuration is created.
+- `live_migration_interface` (String) The live-migration interface. Optional: resmgr does not require it when a configuration is created.
+- `mgmt_interface` (String) The management-traffic interface. resmgr requires it when a configuration is created.
+- `network_labels` (Map of String) Physical-network label → interface (e.g. `physnet1 = enp1s0`). resmgr requires at least one entry when a configuration is created, and on every write it requires an entry for the tunneling interface and lets an interface carry at most one label within a configuration. Labels can be added and removed in place, but changing the interface an existing label maps to forces a new resource: resmgr refuses that change (400), so Terraform destroys and recreates the configuration, replacing any `pcd_host_config_assignment` that references it (unassign, delete, create, assign). Remove an assignment made outside Terraform first.
+- `tunneling_interface` (String) The virtual-network tunnels interface. It must appear as a `network_labels` value. resmgr requires it when a configuration is created.
+- `vm_console_interface` (String) The VM-console interface. resmgr requires it when a configuration is created.
 
 ### Read-Only
 

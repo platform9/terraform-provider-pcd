@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // Package resmgr implements the PCD resource-manager (resmgr) resources and data
-// sources: cluster blueprints, host configurations, and host role / host-config
-// assignment. resmgr is a Platform9-specific REST API (not OpenStack), reached
+// sources: cluster blueprints, host configurations, host role / host-config
+// assignment, and a read-only host lookup by hostname. resmgr is a
+// Platform9-specific REST API (not OpenStack), reached
 // through the clients.Config resmgr constructors, which resolve the `resmgr`
 // catalog endpoint and reuse the shared authenticated ProviderClient for tokens.
 //

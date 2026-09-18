@@ -127,5 +127,6 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		dns.NewZoneDataSource,
 		keymanager.NewSecretDataSource,
 		resmgr.NewBlueprintDataSource,
+		resmgr.NewHostDataSource,
 	}
 }

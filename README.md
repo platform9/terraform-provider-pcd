@@ -22,6 +22,7 @@ can do.
 | `pcd_cluster` | A **cluster** (host cluster) — the unit hypervisors join, carrying VM high availability, auto-rebalancing, GPU, and CPU-model settings. |
 | `pcd_host_config` | A **host configuration** — the mapping of each traffic type (management, VM console, tunneling, image library, live migration) to a network interface, plus physical-network labels. |
 | `pcd_host_config_assignment` | Attaches a host configuration to a host. |
+| `pcd_host` (data source) | Resolves a host's resource-manager UUID from the hostname it reports, so `host_id` never has to be copied from the UI. |
 | `pcd_host_cluster_role` | Onboards a host by assigning it a **cluster role** (`hypervisor`, `image-library`, `persistent-storage`, `dns`); PCD computes the granular role settings from the blueprint and host configuration. |
 | `pcd_host_role` | Assigns one granular **PCD role** (e.g. `pf9-ostackhost-neutron`) directly; the low-level API under `pcd_host_cluster_role`. |
 

@@ -4,6 +4,69 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`pcd_host` data source** (PCD-9799). Resolves a host's resource-manager UUID from the hostname
+  its host agent reports, so `host_id` on `pcd_host_config_assignment`, `pcd_host_cluster_role`,
+  and `pcd_host_role` no longer has to be copied out of the UI or `/etc/pf9/host_id.conf`. The
+  match is exact (hosts usually report their fully qualified name), and a miss lists the hostnames
+  the resource manager knows. The data source also exposes the host's cluster `roles`, its
+  `host_config_id`, and whether it is `responding`.
+
+### Changed
+
+- `pcd_host_config`: a create or update that resmgr refuses for a reason the provider recognizes
+  now reports the attribute to fix, with the resmgr message, instead of the raw HTTP body. Probed
+  on Community Edition 2026.4,
+  resmgr requires `cluster_name` (404 `ClusterBlueprintNotFound` for a missing or unknown
+  blueprint), the management, VM console, host liveness, tunneling, and image library interfaces
+  (400 `HostconfBadConfigInput`; the live-migration interface is optional), at least one
+  `network_labels` entry with one of them on the tunneling interface, and at most one label per
+  interface within a configuration (409 `HostIntfConflict`), and it enforces the tunneling-label
+  and one-label-per-interface rules on updates as well. The schema is unchanged, so the server
+  keeps the last word on a release that relaxes a rule; the resource and attribute descriptions
+  state the rules.
+- `pcd_host_config`: an empty `name` is refused at plan time instead of reaching resmgr, which
+  accepts a host configuration named `""` (probed on Community Edition 2026.4). `name` is also the
+  attribute a replacement is keyed on.
+
+### Fixed
+
+- `pcd_host_config`: the changes resmgr refuses on an existing host configuration now plan a
+  replacement instead of an in-place update that fails with 400 (PCD-9803). Changing the interface
+  an existing `network_labels` entry maps to (the report: a bond renamed under a physnet), renaming
+  the configuration, and changing its `cluster_name` are all refused
+  (`HostconfUpdateFail: Changing ... is not allowed`, probed on Community Edition 2026.4), so an
+  apply carrying any of them failed until the resource was renamed to force a recreate. Terraform
+  now destroys and recreates the configuration itself, and a `pcd_host_config_assignment` that
+  references it is replaced with it: unassign, delete, create, assign, so the host is briefly
+  without a host configuration. Adding or removing a label and changing an interface remain
+  in-place updates, which resmgr accepts. An assignment made outside Terraform still blocks the
+  delete, with the existing guard's instructions. A configuration that never sets `network_labels`
+  or `cluster_name` now keeps the server's values across unrelated changes; before, an unrelated
+  change planned them unknown and left the labels out of the update request, which resmgr answers
+  with 500. That carries the values through in-place updates only: a replacement recreates the
+  host configuration from the Terraform configuration alone, so set every attribute resmgr
+  requires even after an import.
+
+### Documentation
+
+- The `pcd_host_config_assignment`, `pcd_host_cluster_role`, and `pcd_host_role` examples resolve
+  the host with `pcd_host` instead of a pasted UUID, the Importing guide points configurations at
+  the data source, and the Community Edition example and guide take `host_name` instead of
+  `host_id`. The `pcd_host_config` example sets `cluster_name`, every interface (live migration is
+  optional), and a label on the tunneling interface, which resmgr requires when a configuration
+  is created.
+
+### Security
+
+- Bumped the indirect `google.golang.org/grpc` dependency to 1.83.2 (GHSA-2v4p-qf9q-27wj: a crash
+  in gRPC-Go xDS servers on requests missing the `:authority` and `Host` headers). As with the
+  previous gRPC advisories, the provider's gRPC server only ever serves the local Terraform CLI
+  over a private channel and runs no xDS server, so exposure was minimal.
+
 ## [0.1.11] - 2026-09-04
 
 ### Fixed

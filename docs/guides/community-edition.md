@@ -47,32 +47,31 @@ written.
   export OS_INSECURE=true
   ```
 
-## Find the host UUID
+## Name the host
 
-Every host-scoped resource takes the host's resource-manager UUID. It is not the
-ID that `pcdctl hypervisor list` prints, and before the host has roles there is no
-hypervisor to list anyway. Read it on the host:
-
-```shell
-cat /etc/pf9/host_id.conf
-# [hostagent]
-# host_id = 136fc11a-ec5a-4699-b097-f75796134f8d
-```
-
-Or list every authorized host through the resource manager:
+Every host-scoped resource takes the host's resource-manager UUID, but the example
+never asks for it: the `pcd_host` data source resolves it from the hostname the
+host reports. That is the name the Hosts page in the PCD UI shows, and what the
+host itself prints (usually its fully qualified name):
 
 ```shell
-TOKEN=$(pcdctl token issue -f value -c id)
-curl -sk -H "X-Auth-Token: $TOKEN" https://pcd.example.com/resmgr/v1/hosts | python3 -m json.tool
+hostname -f
+# hyp1.example.com
 ```
 
-Put the UUID into `terraform.tfvars` as `host_id`, with the rest of the inputs:
+The host is known to the resource manager once `pcdctl authorize-node` has run and
+the host agent has reported in. The UUID itself is only needed for
+`terraform import`; the
+[Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
+says where to find it.
+
+Put the hostname into `terraform.tfvars` as `host_name`, with the rest of the inputs:
 
 ```hcl
 # Copy to terraform.tfvars and fill in your values.
 
-# On the host: cat /etc/pf9/host_id.conf
-host_id = "00000000-0000-0000-0000-000000000000"
+# The hostname the host reports to PCD: hostname -f on the host, or the Hosts page.
+host_name = "hyp1.example.com"
 
 # The host's NIC (ip -br link on the host).
 host_interface = "enp1s0"
@@ -202,8 +201,15 @@ resource "pcd_host_config" "single_nic" {
   }
 }
 
+# The host is named, not identified by UUID: pcd_host resolves the
+# resource-manager UUID from the hostname the host agent reports, once the host
+# has been authorized (pcdctl authorize-node) and has reported in.
+data "pcd_host" "hyp1" {
+  name = var.host_name
+}
+
 resource "pcd_host_config_assignment" "host1" {
-  host_id        = var.host_id
+  host_id        = data.pcd_host.hyp1.id
   host_config_id = pcd_host_config.single_nic.id
 }
 
@@ -230,7 +236,7 @@ resource "pcd_cluster" "main" {
 #    library, and storage backend. Nothing here references the assignment by
 #    attribute, so the dependency is explicit.
 resource "pcd_host_cluster_role" "hypervisor" {
-  host_id              = var.host_id
+  host_id              = data.pcd_host.hyp1.id
   role                 = "hypervisor"
   host_cluster         = pcd_cluster.main.name
   wait_until_converged = true
@@ -239,7 +245,7 @@ resource "pcd_host_cluster_role" "hypervisor" {
 }
 
 resource "pcd_host_cluster_role" "image_library" {
-  host_id              = var.host_id
+  host_id              = data.pcd_host.hyp1.id
   role                 = "image-library"
   wait_until_converged = true
 
@@ -250,7 +256,7 @@ resource "pcd_host_cluster_role" "image_library" {
 # storage_backends_json; assigning the role is what turns that definition into
 # a running service on the host.
 resource "pcd_host_cluster_role" "storage" {
-  host_id              = var.host_id
+  host_id              = data.pcd_host.hyp1.id
   role                 = "persistent-storage"
   backends             = ["nfs-primary"]
   wait_until_converged = true
