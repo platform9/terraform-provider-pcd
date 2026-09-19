@@ -129,6 +129,18 @@ func TestValidatePoolsRejects(t *testing.T) {
 	if len(errs) == 0 || errs[0].Path != "pools[1].name" {
 		t.Fatalf("duplicate pool names not rejected: %v", issuePaths(errs))
 	}
+	// Two pools with one id would both update the same Designate pool.
+	first, second := bind9Pool(), bind9Pool()
+	second.Name = "secondary"
+	first.ID, second.ID = "794ccc2c-d751-44fe-b57f-8894c9f5c842", "794ccc2c-d751-44fe-b57f-8894c9f5c842"
+	errs, _ = validatePools([]poolConfig{first, second})
+	if len(errs) != 1 || errs[0].Path != "pools[1].id" {
+		t.Fatalf("duplicate pool ids not rejected at pools[1].id: %v", issuePaths(errs))
+	}
+	second.ID = ""
+	if errs, _ := validatePools([]poolConfig{first, second, bind9Pool()}); len(errs) != 1 || errs[0].Path != "pools[2].name" {
+		t.Fatalf("pools without an id must not count as duplicate ids: %v", issuePaths(errs))
+	}
 	if errs, _ := validatePools(nil); len(errs) == 0 {
 		t.Fatalf("an empty pool list produced no error")
 	}
@@ -147,15 +159,28 @@ func TestValidatePoolsWarnsOnLongMaster(t *testing.T) {
 	if len(warns) != 1 || warns[0].Path != "pools[0].targets[0].masters[0].host" || !strings.Contains(warns[0].Msg, "PCD-9946") {
 		t.Fatalf("expected one warning naming PCD-9946 at the master host, got %v", warns)
 	}
+	if strings.Contains(warns[0].Msg, "compressed form") {
+		t.Fatalf("an address with no shorter form must not suggest one: %s", warns[0].Msg)
+	}
 	p.Targets[0].Masters[0].Host = "fd97:45c2:b3a1:100::5354" // 24 characters, the reporter's workaround
 	if _, warns := validatePools([]poolConfig{p}); len(warns) != 0 {
 		t.Fatalf("a 24-character master must not warn: %v", warns)
 	}
+	// The same address written out in full is 39 characters; the warning
+	// quotes the compressed form, which fits.
+	p.Targets[0].Masters[0].Host = "fd97:45c2:b3a1:0100:0000:0000:0000:5354"
+	_, warns = validatePools([]poolConfig{p})
+	if len(warns) != 1 || !strings.Contains(warns[0].Msg, "PCD-9946") || !strings.Contains(warns[0].Msg, `compressed form "fd97:45c2:b3a1:100::5354"`) {
+		t.Fatalf("expected one PCD-9946 warning quoting the compressed form, got %v", warns)
+	}
 }
 
 // The rendered file must be what designate-manage pool update reads: one YAML
-// document holding a list of pools, with the keys the upstream sample uses and
-// nothing that was not configured.
+// document holding a list of pools, with the keys the upstream sample uses.
+// Optional keys are left out when unset, except the pool's description and
+// also_notifies: pool update parses the file onto the existing pool and keeps
+// every key the file leaves out, so clearing either reaches Designate only
+// when the key is written empty.
 func TestRenderPoolsYAML(t *testing.T) {
 	out, err := renderPoolsYAML([]poolConfig{bind9Pool(), pdns4Pool()})
 	if err != nil {
@@ -178,8 +203,8 @@ func TestRenderPoolsYAML(t *testing.T) {
 	if attrs, ok := bind["attributes"].(map[string]any); !ok || len(attrs) != 0 {
 		t.Fatalf("attributes = %v, want an empty mapping (the upstream sample always writes attributes:)", bind["attributes"])
 	}
-	if _, ok := bind["also_notifies"]; ok {
-		t.Fatalf("also_notifies rendered although unset")
+	if an, ok := bind["also_notifies"].([]any); !ok || len(an) != 0 {
+		t.Fatalf("also_notifies = %v, want an empty list when unset so clearing it reaches Designate", bind["also_notifies"])
 	}
 	target := bind["targets"].([]any)[0].(map[string]any)
 	opts := target["options"].(map[string]any)
@@ -208,5 +233,32 @@ func TestRenderPoolsYAML(t *testing.T) {
 	out, _ = renderPoolsYAML([]poolConfig{withID})
 	if !strings.Contains(out, "\n  id: 794ccc2c-d751-44fe-b57f-8894c9f5c842\n") {
 		t.Fatalf("pool id not rendered:\n%s", out)
+	}
+
+	bare := bind9Pool()
+	bare.Description = ""
+	out, _ = renderPoolsYAML([]poolConfig{bare})
+	for _, want := range []string{"\n  description: \"\"\n", "\n  also_notifies: []\n"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("unset pool lacks %q; clearing it would leave the old value in Designate:\n%s", strings.TrimSpace(want), out)
+		}
+	}
+
+	set := bind9Pool()
+	set.AlsoNotifies = []hostPort{{Host: "10.0.0.9", Port: 53}}
+	out, _ = renderPoolsYAML([]poolConfig{set})
+	back = nil
+	if err := yaml.Unmarshal([]byte(out), &back); err != nil {
+		t.Fatalf("rendered YAML does not parse back: %v\n%s", err, out)
+	}
+	if back[0]["description"] != "BIND9 on hyp1" {
+		t.Fatalf("description = %v, want %q", back[0]["description"], "BIND9 on hyp1")
+	}
+	an, ok := back[0]["also_notifies"].([]any)
+	if !ok || len(an) != 1 {
+		t.Fatalf("also_notifies = %v, want one entry", back[0]["also_notifies"])
+	}
+	if entry := an[0].(map[string]any); entry["host"] != "10.0.0.9" || entry["port"] != 53 {
+		t.Fatalf("also_notifies[0] = %v, want host 10.0.0.9 port 53", entry)
 	}
 }

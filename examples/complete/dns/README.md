@@ -27,7 +27,9 @@ on the Terraform Registry; the files here are the ones it renders.
 - BIND9 and an rndc key on that host, set up as the guide's "Prepare the DNS
   host" section describes.
 - SSH access from where Terraform runs to that host, as a user with
-  passwordless sudo.
+  passwordless sudo. `loafoe/ssh` stores the private key in the Terraform
+  state, so keep the state in an encrypted backend, or load the key into
+  `ssh-agent`, then set `agent = true` and remove `private_key` in `pool.tf`.
 
 ## Run it
 

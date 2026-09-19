@@ -3,12 +3,12 @@
 page_title: "pcd_dns_pools_config Data Source - PCD"
 subcategory: "DNS"
 description: |-
-  Renders and validates the Designate pools.yaml for the hosts that carry PCD's dns cluster role. PCD offers no API for a pool's targets and nameservers (Designate's pools API stops at name, description, attributes and NS records), so the file still has to reach each DNS host and be applied with designate-manage pool update --file; the DNS guide shows one way to deliver it. What this data source adds is the typed schema and the checks that otherwise need a page of variable validation: NS record names end in a dot, hosts are IP literals, ports are in range, a target's options match its type, and master addresses fit the width Designate can store for zones. The checks run when Terraform reads the data source: at plan time when every input is known, and at apply time when an input comes from a value computed in the same apply.
+  Renders and validates the Designate pools.yaml for the hosts that carry PCD's dns cluster role. PCD offers no API for a pool's targets and nameservers (Designate's pools API stops at name, description, attributes and NS records), so the file still has to reach each DNS host and be applied with designate-manage pool update --file. The Designate worker caches the pool, so restart pf9-designate-worker on the DNS host afterward, as the DNS guide's example does; the guide shows one way to deliver the file. What this data source adds is the typed schema and the checks that otherwise need a page of variable validation: NS record names end in a dot, hosts are IP literals, ports are in range, a target's options match its type, and master addresses fit the width Designate can store for zones. The checks run when Terraform reads the data source: at plan time when every input is known, and at apply time when an input comes from a value computed in the same apply.
 ---
 
 # pcd_dns_pools_config (Data Source)
 
-Renders and validates the Designate `pools.yaml` for the hosts that carry PCD's `dns` cluster role. PCD offers no API for a pool's targets and nameservers (Designate's pools API stops at name, description, attributes and NS records), so the file still has to reach each DNS host and be applied with `designate-manage pool update --file`; the DNS guide shows one way to deliver it. What this data source adds is the typed schema and the checks that otherwise need a page of variable validation: NS record names end in a dot, hosts are IP literals, ports are in range, a target's options match its type, and master addresses fit the width Designate can store for zones. The checks run when Terraform reads the data source: at plan time when every input is known, and at apply time when an input comes from a value computed in the same apply.
+Renders and validates the Designate `pools.yaml` for the hosts that carry PCD's `dns` cluster role. PCD offers no API for a pool's targets and nameservers (Designate's pools API stops at name, description, attributes and NS records), so the file still has to reach each DNS host and be applied with `designate-manage pool update --file`. The Designate worker caches the pool, so restart `pf9-designate-worker` on the DNS host afterward, as the DNS guide's example does; the guide shows one way to deliver the file. What this data source adds is the typed schema and the checks that otherwise need a page of variable validation: NS record names end in a dot, hosts are IP literals, ports are in range, a target's options match its type, and master addresses fit the width Designate can store for zones. The checks run when Terraform reads the data source: at plan time when every input is known, and at apply time when an input comes from a value computed in the same apply.
 
 ## Example Usage
 
@@ -16,6 +16,8 @@ Renders and validates the Designate `pools.yaml` for the hosts that carry PCD's 
 # The pool file for a host carrying the dns cluster role, backed by BIND9 on
 # the same host. designate-mdns (port 5354) on the DNS host is the master the
 # BIND server transfers zones from; rndc lets Designate add and remove zones.
+# BIND listens on 5353: on a PCD host, the dnsmasq that pcdctl prep-node
+# installs holds port 53.
 data "pcd_dns_pools_config" "default" {
   pools = [{
     name        = "default"
@@ -28,7 +30,7 @@ data "pcd_dns_pools_config" "default" {
 
     nameservers = [{
       host = "10.0.0.5"
-      port = 53
+      port = 5353
     }]
 
     targets = [{
@@ -39,7 +41,7 @@ data "pcd_dns_pools_config" "default" {
       }]
       options = {
         host          = "10.0.0.5"
-        port          = 53
+        port          = 5353
         rndc_host     = "10.0.0.5"
         rndc_port     = 953
         rndc_key_file = "/etc/designate/rndc.key"
@@ -49,9 +51,10 @@ data "pcd_dns_pools_config" "default" {
 }
 
 # yaml is the file to place at /etc/designate/pools.yaml on the DNS host and
-# apply with `designate-manage pool update --file /etc/designate/pools.yaml`;
-# id changes with the content, so it can trigger the delivery. The DNS guide
-# shows a complete delivery with the ssh provider.
+# apply with `designate-manage pool update --file /etc/designate/pools.yaml`.
+# The Designate worker caches the pool, so restart pf9-designate-worker on the
+# DNS host afterward. id changes with the content, so it can trigger the
+# delivery. The DNS guide shows a complete delivery with the ssh provider.
 output "pools_yaml" {
   value     = data.pcd_dns_pools_config.default.yaml
   sensitive = true

@@ -79,10 +79,18 @@ these rules:
 - A provider network that is not external publishes fixed IPs directly.
 - A floating IP is published when it is associated with a port.
 
-Neutron writes records when a port is created or updated, never
-retroactively: an existing port gets its record the next time it is updated.
-Set `dns_domain` and `dns_publish_fixed_ip` before you boot the instances that
-should get records.
+`dns_publish_fixed_ip` defaults to `false`, so omitting it turns publishing
+off. The PCD UI has a "DNS Publish Fixed IP" checkbox. If a subnet's flag was
+set there, add `dns_publish_fixed_ip = true` to that subnet's configuration
+before you first apply it with a provider version that has the attribute, or
+that apply clears the flag.
+
+Neutron publishes a record when it creates a port, or when a port's
+`dns_name` or `dns_domain` changes. It never publishes retroactively. An
+existing port gets its record only when its `dns_name` or `dns_domain`
+changes, or when the port is recreated; an ordinary update, such as a new name
+or security group, publishes nothing. Set `dns_domain` and
+`dns_publish_fixed_ip` before you boot the instances that should get records.
 
 ## Prepare the DNS host
 
@@ -108,17 +116,19 @@ wait until the role is assigned; "Apply" below covers it.
 
 2. **Install BIND9 and create the rndc key.** On Ubuntu the `bind9` package
    already creates `/etc/bind/rndc.key`; `rndc-confgen -a` replaces it with a
-   fresh key named `rndc-key`. Designate's worker runs as a different user from
-   BIND, so it reads a world-readable copy of the key under `/etc/designate/`.
-   The pool's `rndc_key_file` points at that copy, and both copies hold the
-   same secret.
+   fresh key named `rndc-key`. Designate's worker runs `rndc` itself, as the
+   Designate user (`pf9` on a PCD host), not as BIND's user. It reads its own
+   copy of the key under `/etc/designate/`, owned by the Designate user and
+   readable only by that user. The pool's `rndc_key_file` points at that copy,
+   and both copies hold the same secret. The `pf9` user exists on a PCD host
+   before the `dns` role is assigned. If Designate runs as another user on your
+   host (the example's `designate_user`), substitute it for `pf9` below.
 
    ```shell
    sudo apt update && sudo apt install -y bind9
    sudo rndc-confgen -a -A hmac-sha256          # replaces /etc/bind/rndc.key; key name "rndc-key"
    sudo mkdir -p /etc/designate
-   sudo cp /etc/bind/rndc.key /etc/designate/rndc.key
-   sudo chmod 0644 /etc/designate/rndc.key
+   sudo install -o pf9 -m 0400 /etc/bind/rndc.key /etc/designate/rndc.key
    ```
 
 3. **Configure BIND.** Replace `/etc/bind/named.conf.options` with this, with
@@ -164,6 +174,12 @@ have reported in. `dns_host_ip` is the address BIND listens on and Terraform
 connects to over SSH, as `dns_host_ssh_user` (default `ubuntu`), which needs
 passwordless sudo. `variables.tf` in the example directory lists every input
 with its default.
+
+`dns_host_ssh_key` is the path of the private key Terraform connects with.
+`loafoe/ssh` stores the key itself in the Terraform state: plans hide it, but
+the state file holds it. Keep the state in an encrypted backend, or load the
+key into `ssh-agent`, then set `agent = true` and remove `private_key` in
+`ssh_resource.pools`.
 
 {{ codefile "hcl" "examples/complete/dns/terraform.tfvars.example" }}
 
@@ -282,7 +298,8 @@ ps -eo user,args | grep -E 'designate-(worker|mdns)'
 
 Each line starts with the service's user, `pf9`, and names its configuration
 file after `--config-file`: `/opt/pf9/etc/pf9-designate/designate.conf`. If the
-user differs, set `designate_user`; if the file differs, set `designate_conf`.
+user differs, set `designate_user` and give that user the rndc key copy from
+step 2 of "Prepare the DNS host"; if the file differs, set `designate_conf`.
 
 Then run `designate-manage` the way the pool delivery runs it, with the user
 and the file from the first command. `pool show_config` only reads the pool:
@@ -318,7 +335,8 @@ records.
 ## Remove the association
 
 To stop publishing, omit `dns_domain` from the network, which sets it to `""`.
-That is the one switch that works on every network. Setting
+That works on every kind of network, for every port that does not set its own
+`dns_domain` and every floating IP without its own DNS name or domain. Setting
 `dns_publish_fixed_ip = false` on the subnet stops publishing only on a tenant
 network or an external network, and only when no other subnet the port has an
 address on still sets it: a provider network that is not external publishes

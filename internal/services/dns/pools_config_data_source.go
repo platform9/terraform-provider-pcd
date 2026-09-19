@@ -81,14 +81,18 @@ type targetOptionsModel struct {
 
 // poolConfig is one pool as designate-manage reads it. Struct field order is
 // the order the YAML is written in, which follows the upstream pools.yaml sample.
+// designate-manage pool update parses the file onto the existing pool, so a key
+// the file leaves out keeps its old value there. Description and also_notifies
+// are therefore always written, empty when unset, so clearing either takes
+// effect; id stays out when unset, because an empty id would be looked up.
 type poolConfig struct {
 	Name         string            `yaml:"name"`
 	ID           string            `yaml:"id,omitempty"`
-	Description  string            `yaml:"description,omitempty"`
+	Description  string            `yaml:"description"`
 	Attributes   map[string]string `yaml:"attributes"`
 	NSRecords    []nsRecord        `yaml:"ns_records"`
 	Nameservers  []hostPort        `yaml:"nameservers"`
-	AlsoNotifies []hostPort        `yaml:"also_notifies,omitempty"`
+	AlsoNotifies []hostPort        `yaml:"also_notifies"`
 	Targets      []poolTarget      `yaml:"targets"`
 }
 
@@ -135,8 +139,10 @@ func (d *poolsConfigDataSource) Schema(_ context.Context, _ datasource.SchemaReq
 		MarkdownDescription: "Renders and validates the Designate `pools.yaml` for the hosts that carry PCD's `dns` cluster " +
 			"role. PCD offers no API for a pool's targets and nameservers (Designate's pools API stops at name, " +
 			"description, attributes and NS records), so the file still has to reach each DNS host and be applied " +
-			"with `designate-manage pool update --file`; the DNS guide shows one way to deliver it. What this data " +
-			"source adds is the typed schema and the checks that otherwise need a page of variable validation: " +
+			"with `designate-manage pool update --file`. The Designate worker caches the pool, so restart " +
+			"`pf9-designate-worker` on the DNS host afterward, as the DNS guide's example does; the guide shows one " +
+			"way to deliver the file. What this data source adds is the typed schema and the checks that otherwise " +
+			"need a page of variable validation: " +
 			"NS record names end in a dot, hosts are IP literals, ports are in range, a target's options match its " +
 			"type, and master addresses fit the width Designate can store for zones. The checks run when Terraform " +
 			"reads the data source: at plan time when every input is known, and at apply time when an input comes " +
@@ -331,7 +337,7 @@ func validatePools(pools []poolConfig) (errs, warns []poolIssue) {
 	if len(pools) == 0 {
 		return []poolIssue{{"pools", "at least one pool is required"}}, nil
 	}
-	names := map[string]int{}
+	names, ids := map[string]int{}, map[string]int{}
 	for i, p := range pools {
 		at := fmt.Sprintf("pools[%d]", i)
 		if p.Name == "" {
@@ -340,6 +346,12 @@ func validatePools(pools []poolConfig) (errs, warns []poolIssue) {
 			errs = append(errs, poolIssue{at + ".name", fmt.Sprintf("duplicates pools[%d].name %q; designate-manage matches pools by name", j, p.Name)})
 		}
 		names[p.Name] = i
+		if p.ID != "" {
+			if j, dup := ids[p.ID]; dup {
+				errs = append(errs, poolIssue{at + ".id", fmt.Sprintf("duplicates pools[%d].id %q; designate-manage matches pools by id", j, p.ID)})
+			}
+			ids[p.ID] = i
+		}
 		if len(p.NSRecords) == 0 {
 			errs = append(errs, poolIssue{at + ".ns_records", "at least one NS record is required; Designate refuses to create zones in a pool without one (no_servers_configured)"})
 		}
@@ -371,10 +383,7 @@ func validatePools(pools []poolConfig) (errs, warns []poolIssue) {
 			errs = append(errs, checkHostPorts(tat+".masters", t.Masters)...)
 			for k, m := range t.Masters {
 				if len(m.Host) > zoneMasterHostMax {
-					warns = append(warns, poolIssue{fmt.Sprintf("%s.masters[%d].host", tat, k), fmt.Sprintf(
-						"%q is %d characters, and Designate stores zone masters in a %d-character column: designate-manage pool update "+
-							"fails with \"Data too long for column 'host'\" as soon as the pool has a zone (PCD-9946). Give designate-mdns a "+
-							"shorter static address, for example one with a compressible run of zeros.", m.Host, len(m.Host), zoneMasterHostMax)})
+					warns = append(warns, poolIssue{fmt.Sprintf("%s.masters[%d].host", tat, k), longMasterWarning(m.Host)})
 				}
 			}
 			o, oat := t.Options, tat+".options"
@@ -410,6 +419,22 @@ func validatePools(pools []poolConfig) (errs, warns []poolIssue) {
 	return errs, warns
 }
 
+// longMasterWarning explains PCD-9946 for a master address wider than the zone
+// masters column. When the address is an IPv6 literal written out longer than
+// it needs to be and its compressed form fits, the warning quotes that form.
+func longMasterWarning(host string) string {
+	msg := fmt.Sprintf("%q is %d characters, and Designate stores zone masters in a %d-character column: designate-manage pool update "+
+		"fails with \"Data too long for column 'host'\" as soon as the pool has a zone (PCD-9946).", host, len(host), zoneMasterHostMax)
+	// To4 guards the IPv4-mapped case, whose String() is an IPv4 address,
+	// not a shorter spelling of the same IPv6 literal.
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		if short := ip.String(); len(short) <= zoneMasterHostMax {
+			return msg + fmt.Sprintf(" Writing the address in its compressed form %q avoids the limit.", short)
+		}
+	}
+	return msg + " Give designate-mdns a shorter static address, for example one with a compressible run of zeros."
+}
+
 func checkHostPorts(at string, hps []hostPort) []poolIssue {
 	var errs []poolIssue
 	for i, hp := range hps {
@@ -431,6 +456,9 @@ func renderPoolsYAML(pools []poolConfig) (string, error) {
 	for i := range pools {
 		if pools[i].Attributes == nil {
 			pools[i].Attributes = map[string]string{}
+		}
+		if pools[i].AlsoNotifies == nil {
+			pools[i].AlsoNotifies = []hostPort{}
 		}
 	}
 	var b strings.Builder
