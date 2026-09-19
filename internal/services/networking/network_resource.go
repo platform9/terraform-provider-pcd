@@ -120,8 +120,9 @@ func (r *networkResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 					"zone, which must already exist. Defaults to `\"\"`, which is also how an association is removed: omit " +
 					"the attribute and the next apply clears it, so add it to the configuration of any network whose zone " +
 					"was set outside Terraform. Which fixed IPs get records depends on the subnets' `dns_publish_fixed_ip` " +
-					"and on whether the network is external; the DNS guide explains the rules. Records are created when a " +
-					"port is created, so set this before booting instances.",
+					"and on whether the network is external; the DNS guide explains the rules. Neutron publishes a record " +
+					"when it creates a port, or when a port's `dns_name` or `dns_domain` changes; never retroactively, so " +
+					"set this before booting instances.",
 			},
 			"segments": schema.ListNestedAttribute{
 				Optional: true,

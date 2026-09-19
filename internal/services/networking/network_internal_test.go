@@ -97,8 +97,8 @@ func TestNetworkUpdateOptsDNSDomain(t *testing.T) {
 			}
 		})
 	}
-	// A state written before the attribute existed reads back as null after
-	// refresh fills it, but a null state must still be handled: send the value.
+	// A null state models one written by a provider version without the
+	// attribute: the update must still send the planned value.
 	if _, sent := networkUpdateBody(t, dnsNetworkModel(types.StringValue("a.example.com.")), dnsNetworkModel(types.StringNull()))["dns_domain"]; !sent {
 		t.Fatalf("dns_domain not sent when state is null")
 	}

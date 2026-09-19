@@ -98,13 +98,16 @@ func (r *subnetResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"dns_publish_fixed_ip": schema.BoolAttribute{
 				Optional: true, Computed: true, Default: booldefault.StaticBool(false),
 				MarkdownDescription: "Publish a DNS record for every fixed IP allocated from this subnet, in the zone named " +
-					"by the network's `dns_domain`. Defaults to `false`. A network with `external = true` publishes nothing " +
-					"until at least one of its subnets sets this; on a tenant network it is the per-subnet opt-in (on a " +
-					"dual-stack network, for example, to publish only the routable family). It is not the only switch: a " +
+					"by the network's `dns_domain`. Defaults to `false`, so omitting it turns publishing off: the next apply " +
+					"clears a flag set outside Terraform (the PCD UI has a \"DNS Publish Fixed IP\" checkbox), so add it to " +
+					"the configuration of any subnet where it was set that way. A network with `external = true` publishes " +
+					"nothing until at least one of its subnets sets this; on a tenant network it is the per-subnet opt-in (on " +
+					"a dual-stack network, for example, to publish only the routable family). It is not the only switch: a " +
 					"provider network that is not external publishes fixed IPs without it, and a port that also has an " +
-					"address on another subnet that sets it still gets a record. Clearing the network's `dns_domain` is the " +
-					"one switch that always stops publishing. Records are created when a port is created or updated, never " +
-					"retroactively, so set this before booting instances.",
+					"address on another subnet that sets it still gets a record. Clearing the network's `dns_domain` stops " +
+					"publishing for ports that do not set their own `dns_domain` and for floating IPs without their own DNS " +
+					"name or domain. Neutron publishes a record when it creates a port, or when a port's `dns_name` or " +
+					"`dns_domain` changes; never retroactively, so set this before booting instances.",
 			},
 			"allocation_pools": schema.ListNestedAttribute{
 				Optional: true, Computed: true, MarkdownDescription: "IP allocation pools (DHCP ranges).",
