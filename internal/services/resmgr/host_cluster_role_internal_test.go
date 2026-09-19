@@ -5,8 +5,13 @@ package resmgr
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -14,6 +19,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
+
+	"github.com/platform9/terraform-provider-pcd/internal/clients"
 )
 
 func backendsList(names ...string) types.List {
@@ -259,8 +266,8 @@ func TestReadSettings(t *testing.T) {
 // After an import, settings is null in state, so the first apply with settings
 // configured reaches applySettings even when resmgr already holds them. A PUT
 // then is a real write (the host agent restarts designate-mdns), so
-// applySettings skips it when every managed key already reads back as
-// configured, compared the way Read compares them.
+// applySettings skips it on Update when every managed key already reads back
+// as configured, compared the way Read compares them.
 func TestSettingsApplied(t *testing.T) {
 	current := map[string]any{"listen": "[::]:5354", "debug": true, "workers": float64(2), "db_host": "10.0.0.1"}
 	for _, tc := range []struct {
@@ -382,6 +389,122 @@ func TestUpdateDecodesSettingsBeforeWriting(t *testing.T) {
 
 			if !resp.Diagnostics.HasError() {
 				t.Fatal("Update accepted settings with a null element")
+			}
+		})
+	}
+}
+
+// fakeResmgr answers the calls Create and Update make for a dns role with
+// settings, on host-a: the v2 assignment PUT, the v1 per-role GET (answered
+// with held), and the v1 per-role PUT, whose bodies it records. Any other call
+// fails the test.
+type fakeResmgr struct {
+	held map[string]any
+
+	mu   sync.Mutex
+	puts []map[string]any
+}
+
+func newFakeResmgr(t *testing.T, held map[string]any) (*fakeResmgr, *clients.Config) {
+	t.Helper()
+	f := &fakeResmgr{held: held}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/v2/hosts/host-a/roles/dns":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/hosts/host-a/roles/pf9-designate":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(f.held)
+		case r.Method == http.MethodPut && r.URL.Path == "/v1/hosts/host-a/roles/pf9-designate":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("settings PUT body: %v", err)
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			f.mu.Lock()
+			f.puts = append(f.puts, body)
+			f.mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected resmgr call: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected call", http.StatusTeapot)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	cfg := &clients.Config{Provider: &gophercloud.ProviderClient{
+		EndpointLocator: func(gophercloud.EndpointOpts) (string, error) { return srv.URL + "/", nil },
+	}}
+	return f, cfg
+}
+
+// settingsPuts returns the bodies of the v1 settings PUTs received so far.
+func (f *fakeResmgr) settingsPuts() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]map[string]any(nil), f.puts...)
+}
+
+// resmgr keeps a host's pf9-designate settings after the dns role is removed,
+// and a new assignment reports those old values until the expansion resets the
+// role to its defaults. So when Create reads the role, it can find exactly the
+// configured settings, left over from an earlier assignment, that the
+// expansion is about to reset. Create must write them anyway, merged over what
+// resmgr reports.
+func TestCreateWritesSettingsResmgrAlreadyReports(t *testing.T) {
+	ctx := context.Background()
+	fake, cfg := newFakeResmgr(t, map[string]any{"listen": "[::]:5354", "debug": "True"})
+	s := roleSchema(t)
+	plan := tfsdk.Plan{Schema: s, Raw: roleState(t, dnsModel(settingsMap("listen", "[::]:5354"))).Raw}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+
+	(&hostClusterRoleResource{config: cfg}).Create(ctx, resource.CreateRequest{Plan: plan}, &resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("Create: %v", resp.Diagnostics)
+	}
+	puts := fake.settingsPuts()
+	if len(puts) != 1 {
+		t.Fatalf("Create sent %d settings writes, want 1; a new assignment can report stale settings that the expansion then resets, so Create must not skip the write", len(puts))
+	}
+	if puts[0]["listen"] != "[::]:5354" || puts[0]["debug"] != "True" {
+		t.Fatalf("settings PUT body = %v, want the managed listen merged over what resmgr reports", puts[0])
+	}
+	var got hostClusterRoleModel
+	if diags := resp.State.Get(ctx, &got); diags.HasError() {
+		t.Fatalf("state: %v", diags)
+	}
+	if !got.Settings.Equal(settingsMap("listen", "[::]:5354")) {
+		t.Fatalf("settings in state = %v, want the planned value", got.Settings)
+	}
+}
+
+// Update, unlike Create, may skip the write: the role was already on the host,
+// so what resmgr reports is current. The first apply after an import is the
+// case: state has no settings yet, and resmgr may already hold them.
+func TestUpdateWritesSettingsOnlyWhenTheyDiffer(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		held     string
+		wantPuts int
+	}{
+		{name: "already held", held: "[::]:5354"},
+		{name: "differs", held: "0.0.0.0:5354", wantPuts: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			fake, cfg := newFakeResmgr(t, map[string]any{"listen": tc.held, "debug": "True"})
+			state := roleState(t, dnsModel(types.MapNull(types.StringType)))
+			plan := tfsdk.Plan{Schema: state.Schema, Raw: roleState(t, dnsModel(settingsMap("listen", "[::]:5354"))).Raw}
+			resp := resource.UpdateResponse{State: tfsdk.State{Schema: state.Schema, Raw: tftypes.NewValue(state.Schema.Type().TerraformType(ctx), nil)}}
+
+			(&hostClusterRoleResource{config: cfg}).Update(ctx, resource.UpdateRequest{Plan: plan, State: state}, &resp)
+
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("Update: %v", resp.Diagnostics)
+			}
+			if got := len(fake.settingsPuts()); got != tc.wantPuts {
+				t.Fatalf("Update sent %d settings writes, want %d; a needless write restarts designate-mdns, a skipped one leaves the old value", got, tc.wantPuts)
 			}
 		})
 	}

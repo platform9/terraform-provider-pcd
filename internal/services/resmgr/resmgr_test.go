@@ -422,8 +422,9 @@ func testAccCheckHostClusterRoleDestroy(t *testing.T, hostID, role string) resou
 // TestAccResmgrHostClusterRoleDNSSettings assigns the dns cluster role with a
 // listen override, checks resmgr's pf9-designate settings carry it while the
 // role's other default settings survive the merge, imports (settings are not
-// importable, by design), and removes the role, checking that the granular
-// pf9-designate role goes with it. Opt-in: PCD_ACC_RESMGR=1 and PCD_ACC_HOST_ID.
+// importable, by design), and removes the role, checking that the host no
+// longer lists the granular pf9-designate role. Opt-in: PCD_ACC_RESMGR=1 and
+// PCD_ACC_HOST_ID.
 // The role installs Designate services on the host and removing it
 // deauthorizes them, so expect several minutes, and run it on a lab host.
 func TestAccResmgrHostClusterRoleDNSSettings(t *testing.T) {
@@ -533,10 +534,14 @@ func testAccCheckUnmanagedDefaultsKept(t *testing.T, hostID, role string, manage
 	}
 }
 
-// testAccCheckGranularRoleGone polls the host's granular role through resmgr
-// v1 until it is gone: a 404 (which also covers a host that is itself gone) or
-// a 200 with no body. The v2 host view reports only the cluster role, so it
-// cannot show a granular role, with the settings written onto it, left behind.
+// testAccCheckGranularRoleGone polls the host's resmgr v1 record until its
+// roles list no longer includes the granular role, or the host itself is gone
+// (a 404, or a 200 with no body). The v2 host view reports only the cluster
+// role, so it cannot show a granular role left behind. The v1 per-role
+// endpoint cannot either: resmgr keeps a host's role settings after the role
+// is removed, and /v1/hosts/<id>/roles/<role> keeps answering 200 with them
+// (for 11 minutes and more on a Community Edition 2026.4 lab), while the host
+// record stops listing the role.
 func testAccCheckGranularRoleGone(t *testing.T, hostID, role string) resource.TestCheckFunc {
 	return func(_ *terraform.State) error {
 		client, err := acctest.LabConfig(t).ResmgrV1Client()
@@ -548,22 +553,31 @@ func testAccCheckGranularRoleGone(t *testing.T, hostID, role string) resource.Te
 			timeout  = 5 * time.Minute
 		)
 		ctx := context.Background()
-		url := client.ServiceURL("hosts", hostID, "roles", role)
+		url := client.ServiceURL("hosts", hostID)
 		deadline := time.Now().Add(timeout)
 		for {
 			var raw json.RawMessage
 			_, err := client.Get(ctx, url, &raw, &gophercloud.RequestOpts{OkCodes: []int{200}})
 			switch {
 			case gophercloud.ResponseCodeIs(err, 404), errors.Is(err, io.EOF):
-				return nil // io.EOF is a 200 with an empty body
+				return nil // the host is gone; io.EOF is a 200 with an empty body
 			case err != nil:
 				return fmt.Errorf("checking host %s for granular role %s: %w", hostID, role, err)
 			}
 			if b := bytes.TrimSpace(raw); len(b) == 0 || bytes.Equal(b, []byte("null")) {
 				return nil
 			}
+			var host struct {
+				Roles []string `json:"roles"`
+			}
+			if err := json.Unmarshal(raw, &host); err != nil {
+				return fmt.Errorf("decoding host %s: %w", hostID, err)
+			}
+			if !slices.Contains(host.Roles, role) {
+				return nil
+			}
 			if time.Now().After(deadline) {
-				return fmt.Errorf("granular role %s still on host %s %s after the cluster role was removed: %s", role, hostID, timeout, raw)
+				return fmt.Errorf("host %s still lists granular role %s %s after the cluster role was removed: roles %v", hostID, role, timeout, host.Roles)
 			}
 			select {
 			case <-ctx.Done():

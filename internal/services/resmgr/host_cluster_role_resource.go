@@ -111,7 +111,9 @@ func (r *hostClusterRoleResource) Schema(_ context.Context, _ resource.SchemaReq
 					"`net.ipv6.bindv6only` must be `0`, the Linux default). Only the keys listed here are managed: the rest " +
 					"keep the values PCD computes, and a key removed from this map keeps its last value until set again. " +
 					"Values are always sent as strings, even for a setting the resource manager holds as a number or a " +
-					"boolean. An apply writes the settings only when a managed key is missing " +
+					"boolean. The resource manager keeps the role's settings after the `dns` role is removed, so a later " +
+					"assignment briefly reports the old values until the role's defaults apply, and this resource writes " +
+					"its settings again on every create. An update writes them only when a managed key is missing " +
 					"from what the resource manager holds or differs from it, so the first apply after an import writes " +
 					"nothing when the values already match. " +
 					"The write happens after the host converges when `wait_until_converged` is set, and otherwise retries " +
@@ -271,7 +273,8 @@ func readSettings(current map[string]any, managed map[string]string) map[string]
 
 // settingsApplied reports whether resmgr already holds every managed setting,
 // compared as Read compares them: readSettings(current, managed) must equal
-// managed, the same keys with the same string values.
+// managed, the same keys with the same string values. Only Update relies on
+// it; on Create the values resmgr reports can be stale (see applySettings).
 func settingsApplied(current map[string]any, managed map[string]string) bool {
 	held := readSettings(current, managed)
 	if len(held) != len(managed) {
@@ -336,11 +339,18 @@ func waitRoleSettings(ctx context.Context, client *gophercloud.ServiceClient, ur
 // wait for convergence call this afterward, so the retry is the fallback for
 // callers that do not.
 //
-// When resmgr already holds every managed key with its configured value there
-// is nothing to write, and no PUT is sent: a PUT is a real write the host agent
-// acts on by restarting designate-mdns. That is the case of the first apply
-// after an import, where state has no settings yet.
-func (r *hostClusterRoleResource) applySettings(ctx context.Context, hostID, role string, managed map[string]string) error {
+// Without force, when resmgr already holds every managed key with its
+// configured value there is nothing to write, and no PUT is sent: a PUT is a
+// real write the host agent acts on by restarting designate-mdns. That is the
+// case of the first apply after an import, where state has no settings yet.
+//
+// Create passes force, so it always writes. resmgr keeps a host's
+// pf9-designate settings after the dns role is removed, and a new assignment
+// reports those old values until the expansion resets the role to its
+// defaults. What Create reads can therefore match the configuration only
+// because it is left over from an earlier assignment, and skipping the write
+// would leave the role at its defaults once the expansion lands.
+func (r *hostClusterRoleResource) applySettings(ctx context.Context, hostID, role string, managed map[string]string, force bool) error {
 	if len(managed) == 0 {
 		return nil
 	}
@@ -353,7 +363,7 @@ func (r *hostClusterRoleResource) applySettings(ctx context.Context, hostID, rol
 	if err != nil {
 		return err
 	}
-	if settingsApplied(current, managed) {
+	if !force && settingsApplied(current, managed) {
 		return nil
 	}
 	return r.putRole(ctx, clientV1, url, mergeSettings(current, managed))
@@ -433,8 +443,9 @@ func (r *hostClusterRoleResource) Create(ctx context.Context, req resource.Creat
 	}
 	// Settings go on last: after convergence when the caller waits for it,
 	// and otherwise through the 409-retrying PUT, since resmgr refuses role
-	// writes while the host converges.
-	if err := r.applySettings(ctx, hostID, role, managed); err != nil {
+	// writes while the host converges. Forced: what resmgr reports for a new
+	// assignment can be stale (see applySettings).
+	if err := r.applySettings(ctx, hostID, role, managed, true); err != nil {
 		// The role is assigned in resmgr, so it is recorded, with settings
 		// unset since the write failed. A create that errors with a non-null
 		// state leaves the resource tainted, so the next apply replaces it
@@ -621,7 +632,7 @@ func (r *hostClusterRoleResource) Update(ctx context.Context, req resource.Updat
 	}
 	// Settings go on last, after any re-assignment has converged: the
 	// expansion may have reset them, and resmgr refuses the write meanwhile.
-	if err := r.applySettings(ctx, hostID, role, managed); err != nil {
+	if err := r.applySettings(ctx, hostID, role, managed, false); err != nil {
 		plan.Settings = state.Settings
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 		resp.Diagnostics.AddError("resmgr: applying role settings", err.Error())
