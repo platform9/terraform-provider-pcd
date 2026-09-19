@@ -28,7 +28,11 @@ builds one. The region must also be able to boot an instance on a tenant
 network. The example's network has no `segments`, so Neutron gives it the
 region's tenant network type. If tenant networks cannot bind on the host, the
 instance fails with `PortBindingFailed`: give `pcd_networking_network.app`
-`segments` that your region can bind.
+`segments` that your region can bind. On an OVN region with Geneve
+encapsulation, `segments = [{ network_type = "geneve" }]`, with no physical
+network or segmentation ID, binds: Neutron takes the ID from its range, and the
+network stays a tenant network for the publishing rules below. Other regions
+need segments that their hosts map.
 
 ## How the pieces fit
 
@@ -38,15 +42,17 @@ place before the next one is useful.
 **The pool.** A pool is Designate's description of the DNS servers it manages:
 the NS records every zone advertises, the nameservers it queries to confirm a
 change has landed, and the targets it pushes zones to. The pool lives in
-`pools.yaml` on the DNS host and takes effect when `designate-manage pool
-update` reads it. Designate's API shows a pool's name, description, attributes,
-and NS records only, never its targets or nameservers, so Terraform cannot read
-a pool back. Instead, the `pcd_dns_pools_config` data source validates the pool
-and renders the file when Terraform reads it (at plan time when all its inputs
-are known at plan), and an `ssh_resource` from the `loafoe/ssh` provider copies
-the file to the host and applies it. `terraform plan` therefore diffs the
-rendered file, not what Designate holds: a change made on the host by hand
-never shows up in a plan.
+`pools.yaml` on the DNS host, and `designate-manage pool update` reads it into
+Designate. The worker loads the pool the first time it needs it and keeps using
+it until it restarts, so it sees a changed pool only after a restart.
+Designate's API shows a pool's name, description, attributes, and NS records
+only, never its targets or nameservers, so Terraform cannot read a pool back.
+Instead, the `pcd_dns_pools_config` data source validates the pool and renders
+the file when Terraform reads it (at plan time when all its inputs are known at
+plan), and an `ssh_resource` from the `loafoe/ssh` provider copies the file to
+the host and applies it. `terraform plan` therefore diffs the rendered file,
+not what Designate holds: a change made on the host by hand never shows up in a
+plan.
 
 **The zone.** `pcd_dns_zone` creates the zone the records go into. Designate
 schedules a new zone onto a pool and pushes it to the pool's targets, so the
@@ -281,9 +287,10 @@ locals {
   pools_staging_dir = "${coalesce(var.dns_host_ssh_home, "/home/${var.dns_host_ssh_user}")}/.pcd-dns"
 }
 
-# Delivery: copy the file to the DNS host and apply it. The trigger is the
-# file's hash, so this re-runs exactly when the pool changes. Without --delete
-# a pool removed from the configuration stays in Designate; delete it by hand.
+# Delivery: copy the file to the DNS host, apply it, and restart the worker.
+# The trigger is the file's hash, so this re-runs exactly when the pool
+# changes. Without --delete a pool removed from the configuration stays in
+# Designate; delete it by hand.
 resource "ssh_resource" "pools" {
   host        = var.dns_host_ip
   user        = var.dns_host_ssh_user
@@ -310,9 +317,13 @@ resource "ssh_resource" "pools" {
   # /etc/designate may not exist yet (-D creates it); the file is owned by the
   # Designate user because designate-manage runs as that user and reads its own
   # configuration file to reach the database. The staged copy is then removed.
+  # The worker loads the pool the first time it needs it and keeps using those
+  # targets until it restarts, so without the restart it ignores a changed
+  # pool's targets.
   commands = [
     "sudo install -D -o ${var.designate_user} -m 0600 ${local.pools_staging_dir}/pools.yaml /etc/designate/pools.yaml && rm -f ${local.pools_staging_dir}/pools.yaml",
-    "sudo -u ${var.designate_user} ${var.designate_manage} --config-file ${var.designate_conf} pool update --file /etc/designate/pools.yaml",
+    "sudo -u ${var.designate_user} ${var.designate_manage} --config-file ${var.designate_conf} --nodebug pool update --file /etc/designate/pools.yaml",
+    "sudo systemctl restart pf9-designate-worker",
   ]
 
   depends_on = [pcd_host_cluster_role.dns]
@@ -337,6 +348,13 @@ the Designate user, and removes the staged copy; `designate-manage pool update`
 then runs as that user. `designate-manage` matches pools by name, so the pool
 named `default` updates the pool PCD created instead of adding a second one;
 set `id` in the pool to match by UUID instead.
+
+The last command restarts `pf9-designate-worker`, the worker's service on the
+host, so the worker loads the pool again. A worker that has already loaded the
+pool keeps sending changes to the old targets until it restarts. A first
+delivery works without the restart only because the new role's worker has not
+loaded the pool yet. If you apply a pool by hand with `designate-manage pool
+update`, restart `pf9-designate-worker` on the DNS host afterward.
 
 A delivery command that fails is not reported at once: `loafoe/ssh` retries it
 every `retry_delay` until the resource's `timeout`, five minutes in the
@@ -528,8 +546,9 @@ inputs are known at plan.
 `designate-manage pool update --dry-run` does not catch a long master, because a
 dry run does not touch zones. A real run that fails on it leaves the pool half
 updated: the pool's target master is already the new address, while the zones
-keep the old one. Running `pool update` again with the previous file restores
-it. With the example, revert the change and apply again.
+keep the old one. Running `pool update` again with the previous file, then
+restarting `pf9-designate-worker`, restores it. With the example, revert the
+change and apply again.
 
 ## Upgrades and limits
 
@@ -537,11 +556,23 @@ it. With the example, revert the change and apply again.
   it again. Keep the configuration. After an upgrade, check the pool's NS
   records with `GET /designate/v2/pools`; if they reverted, deliver the file
   again with `terraform apply -replace=ssh_resource.pools`. A plain
-  `terraform apply` does not, because the file has not changed.
+  `terraform apply` does not, because the file has not changed. The delivery
+  also restarts the worker, which otherwise keeps the pool it loaded. If you
+  run `designate-manage pool update` by hand instead, restart
+  `pf9-designate-worker` on the DNS host afterward.
 - `designate-manage pool update` adds and updates pools. With `--delete`, it
   also removes pools that are missing from the file. The example does not pass
   `--delete`, so a pool you remove from the configuration stays in Designate
   until you delete it by hand.
+- When Neutron publishes a fixed IP, it also creates a reverse zone for the
+  address's /24, such as `0.90.10.in-addr.arpa.` for an address in
+  `10.90.0.0/24`, with a PTR record for the address. The reverse zone is in
+  Neutron's own service project, in the same pool, so your project's zone list
+  does not show it. As an admin, `openstack zone list --all-projects` shows it,
+  and so does the API with the `X-Auth-All-Projects: true` header. The PTR
+  records go with their ports. The reverse zones stay, after
+  `terraform destroy` too, until an admin deletes them, for example with
+  `openstack zone delete <name> --all-projects`.
 - `terraform destroy` removes the instance, the network and subnet, the zone,
   and the `dns` role. The pool stays in Designate, and BIND9 and the files under
-  `/etc/designate/` stay on the host.
+  `/etc/designate/` stay on the host. Neutron's reverse zones stay too.

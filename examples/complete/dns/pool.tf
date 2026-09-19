@@ -43,9 +43,10 @@ locals {
   pools_staging_dir = "${coalesce(var.dns_host_ssh_home, "/home/${var.dns_host_ssh_user}")}/.pcd-dns"
 }
 
-# Delivery: copy the file to the DNS host and apply it. The trigger is the
-# file's hash, so this re-runs exactly when the pool changes. Without --delete
-# a pool removed from the configuration stays in Designate; delete it by hand.
+# Delivery: copy the file to the DNS host, apply it, and restart the worker.
+# The trigger is the file's hash, so this re-runs exactly when the pool
+# changes. Without --delete a pool removed from the configuration stays in
+# Designate; delete it by hand.
 resource "ssh_resource" "pools" {
   host        = var.dns_host_ip
   user        = var.dns_host_ssh_user
@@ -72,9 +73,13 @@ resource "ssh_resource" "pools" {
   # /etc/designate may not exist yet (-D creates it); the file is owned by the
   # Designate user because designate-manage runs as that user and reads its own
   # configuration file to reach the database. The staged copy is then removed.
+  # The worker loads the pool the first time it needs it and keeps using those
+  # targets until it restarts, so without the restart it ignores a changed
+  # pool's targets.
   commands = [
     "sudo install -D -o ${var.designate_user} -m 0600 ${local.pools_staging_dir}/pools.yaml /etc/designate/pools.yaml && rm -f ${local.pools_staging_dir}/pools.yaml",
-    "sudo -u ${var.designate_user} ${var.designate_manage} --config-file ${var.designate_conf} pool update --file /etc/designate/pools.yaml",
+    "sudo -u ${var.designate_user} ${var.designate_manage} --config-file ${var.designate_conf} --nodebug pool update --file /etc/designate/pools.yaml",
+    "sudo systemctl restart pf9-designate-worker",
   ]
 
   depends_on = [pcd_host_cluster_role.dns]

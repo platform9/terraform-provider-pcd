@@ -17,7 +17,11 @@ on the Terraform Registry; the files here are the ones it renders.
 - A region that can boot an instance on a tenant network. The example's
   network has no `segments`, so Neutron gives it the region's tenant network
   type. If tenant networks cannot bind on the host, give
-  `pcd_networking_network.app` `segments` that your region can bind.
+  `pcd_networking_network.app` `segments` that your region can bind. On an OVN
+  region with Geneve encapsulation,
+  `segments = [{ network_type = "geneve" }]`, with no physical network or
+  segmentation ID, binds and keeps it a tenant network. Other regions need
+  segments that their hosts map.
 - A host for the `dns` role that has been authorized and has reported in, so
   `pcd_host` can find it by the hostname it reports.
 - BIND9 and an rndc key on that host, set up as the guide's "Prepare the DNS
@@ -67,6 +71,7 @@ dig @<dns_host_ip> -p <bind_port> "$(terraform output -raw record_name)" +short
 
 `terraform destroy` removes the instance, the network and subnet, the zone, and
 the `dns` role. The pool stays in Designate, and BIND9 and the files under
-`/etc/designate/` stay on the host. PCD acknowledges the role removal before
-the host has finished deauthorizing it, so, as with the Community Edition
-example, a second `terraform destroy` a few minutes later may be needed.
+`/etc/designate/` stay on the host. Neutron's reverse zone for the subnet
+(`0.90.10.in-addr.arpa.` for the default `network_cidr`) stays too, in
+Neutron's own project, where `openstack zone list --all-projects` shows it and
+an admin deletes it with `openstack zone delete <name> --all-projects`.
