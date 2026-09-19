@@ -413,3 +413,88 @@ func testAccCheckHostClusterRoleDestroy(t *testing.T, hostID, role string) resou
 		}
 	}
 }
+
+// TestAccResmgrHostClusterRoleDNSSettings assigns the dns cluster role with a
+// listen override, checks resmgr's pf9-designate settings carry it while the
+// rest of the settings survive, imports (settings are not importable, by
+// design), and removes the role. Opt-in: PCD_ACC_RESMGR=1 and PCD_ACC_HOST_ID.
+// The role installs Designate services on the host and removing it
+// deauthorizes them, so expect several minutes, and run it on a lab host.
+func TestAccResmgrHostClusterRoleDNSSettings(t *testing.T) {
+	if os.Getenv("PCD_ACC_RESMGR") == "" {
+		t.Skip("PCD_ACC_RESMGR not set; skipping resmgr mutation test")
+	}
+	hostID := os.Getenv("PCD_ACC_HOST_ID")
+	if hostID == "" {
+		t.Skip("PCD_ACC_HOST_ID not set; skipping dns settings test")
+	}
+	const rn = "pcd_host_cluster_role.dns"
+	cfg := func(listen string) string {
+		return fmt.Sprintf(`
+resource "pcd_host_cluster_role" "dns" {
+  host_id = %q
+  role    = "dns"
+  settings = {
+    listen = %q
+  }
+}
+`, hostID, listen)
+	}
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckHostClusterRoleDestroy(t, hostID, "dns"),
+		Steps: []resource.TestStep{
+			{
+				Config: cfg("[::]:5354"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(rn, "settings.listen", "[::]:5354"),
+					testAccCheckRoleSetting(t, hostID, "pf9-designate", "listen", "[::]:5354"),
+					testAccCheckRoleSettingsCount(t, hostID, "pf9-designate", 2),
+				),
+			},
+			{
+				Config: cfg("0.0.0.0:5354"),
+				Check:  testAccCheckRoleSetting(t, hostID, "pf9-designate", "listen", "0.0.0.0:5354"),
+			},
+			{ResourceName: rn, ImportState: true, ImportStateId: hostID + "/dns", ImportStateVerify: true, ImportStateVerifyIgnore: []string{"settings"}},
+		},
+	})
+}
+
+// testAccCheckRoleSetting reads the granular role's settings through resmgr v1.
+func testAccCheckRoleSetting(t *testing.T, hostID, role, key, want string) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		client, err := acctest.LabConfig(t).ResmgrV1Client()
+		if err != nil {
+			return err
+		}
+		var settings map[string]any
+		if _, err := client.Get(context.Background(), client.ServiceURL("hosts", hostID, "roles", role), &settings, &gophercloud.RequestOpts{OkCodes: []int{200}}); err != nil {
+			return fmt.Errorf("reading %s settings: %w", role, err)
+		}
+		if got := fmt.Sprint(settings[key]); got != want {
+			return fmt.Errorf("%s.%s = %q, want %q (all: %v)", role, key, got, want, settings)
+		}
+		return nil
+	}
+}
+
+// testAccCheckRoleSettingsCount guards the merge: a PUT that carried only the
+// override would leave the role with one setting.
+func testAccCheckRoleSettingsCount(t *testing.T, hostID, role string, atLeast int) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		client, err := acctest.LabConfig(t).ResmgrV1Client()
+		if err != nil {
+			return err
+		}
+		var settings map[string]any
+		if _, err := client.Get(context.Background(), client.ServiceURL("hosts", hostID, "roles", role), &settings, &gophercloud.RequestOpts{OkCodes: []int{200}}); err != nil {
+			return fmt.Errorf("reading %s settings: %w", role, err)
+		}
+		if len(settings) < atLeast {
+			return fmt.Errorf("%s has %d settings after the override; the merge dropped what resmgr computed: %v", role, len(settings), settings)
+		}
+		return nil
+	}
+}

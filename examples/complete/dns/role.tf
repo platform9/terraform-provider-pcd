@@ -11,4 +11,9 @@ resource "pcd_host_cluster_role" "dns" {
   host_id              = data.pcd_host.dns.id
   role                 = "dns"
   wait_until_converged = true
+
+  # Uncomment to serve IPv6 backends (see "IPv6" in the DNS guide).
+  # settings = {
+  #   listen = "[::]:5354"
+  # }
 }

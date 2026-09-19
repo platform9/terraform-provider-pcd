@@ -30,6 +30,7 @@ func roleModel(hostCluster types.String, backends types.List) *hostClusterRoleMo
 		Role:        types.StringValue("hypervisor"),
 		HostCluster: hostCluster,
 		Backends:    backends,
+		Settings:    types.MapNull(types.StringType),
 	}
 }
 
@@ -172,6 +173,98 @@ func TestImportStateRejectsABadID(t *testing.T) {
 		(&hostClusterRoleResource{}).ImportState(ctx, resource.ImportStateRequest{ID: id}, &resp)
 		if !resp.Diagnostics.HasError() {
 			t.Errorf("import id %q: no error, want <host_id>/<role> to be enforced", id)
+		}
+	}
+}
+
+func settingsMap(kv ...string) types.Map {
+	elems := map[string]attr.Value{}
+	for i := 0; i+1 < len(kv); i += 2 {
+		elems[kv[i]] = types.StringValue(kv[i+1])
+	}
+	return types.MapValueMust(types.StringType, elems)
+}
+
+// settings is written through resmgr v1, separately from the v2 assignment,
+// so a change to it must trigger that write and nothing else.
+func TestSettingsChanged(t *testing.T) {
+	base := func(s types.Map) *hostClusterRoleModel {
+		m := roleModel(types.StringNull(), types.ListNull(types.StringType))
+		m.Role = types.StringValue("dns")
+		m.Settings = s
+		return m
+	}
+	for _, tc := range []struct {
+		name        string
+		plan, state types.Map
+		want        bool
+	}{
+		{name: "both unset", plan: types.MapNull(types.StringType), state: types.MapNull(types.StringType)},
+		{name: "same", plan: settingsMap("listen", "[::]:5354"), state: settingsMap("listen", "[::]:5354")},
+		{name: "set", plan: settingsMap("listen", "[::]:5354"), state: types.MapNull(types.StringType), want: true},
+		{name: "value changed", plan: settingsMap("listen", "[::]:5354"), state: settingsMap("listen", "0.0.0.0:5354"), want: true},
+		{name: "key added", plan: settingsMap("listen", "[::]:5354", "debug", "True"), state: settingsMap("listen", "[::]:5354"), want: true},
+		{name: "removed entirely", plan: types.MapNull(types.StringType), state: settingsMap("listen", "[::]:5354"), want: true},
+		{name: "unknown plan", plan: types.MapUnknown(types.StringType), state: types.MapNull(types.StringType)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := settingsChanged(base(tc.plan), base(tc.state)); got != tc.want {
+				t.Fatalf("settingsChanged = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	// settings never makes the v2 assignment look changed.
+	if roleOptionsChanged(base(settingsMap("listen", "[::]:5354")), base(types.MapNull(types.StringType))) {
+		t.Fatalf("roleOptionsChanged = true for a settings-only change; the cluster role would be re-PUT")
+	}
+}
+
+// The v1 PUT replaces the whole settings object, and the uber-role expansion
+// computed most of it; the body must carry everything resmgr holds with only
+// the managed keys overwritten.
+func TestMergeSettings(t *testing.T) {
+	current := map[string]any{"listen": "0.0.0.0:5354", "debug": "False", "db_host": "10.0.0.1", "workers": float64(2)}
+	got := mergeSettings(current, map[string]string{"listen": "[::]:5354"})
+	if got["listen"] != "[::]:5354" {
+		t.Fatalf("listen not overwritten: %v", got)
+	}
+	if got["debug"] != "False" || got["db_host"] != "10.0.0.1" || got["workers"] != float64(2) {
+		t.Fatalf("unmanaged settings not preserved; designate would lose its configuration: %v", got)
+	}
+	if current["listen"] != "0.0.0.0:5354" {
+		t.Fatalf("mergeSettings mutated its input")
+	}
+}
+
+// State holds exactly the managed keys, as strings, so plan compares like
+// with like; a managed key resmgr dropped is absent, which plans a re-apply.
+func TestReadSettings(t *testing.T) {
+	current := map[string]any{"listen": "[::]:5354", "debug": true, "workers": float64(2), "db_host": "10.0.0.1"}
+	got := readSettings(current, map[string]string{"listen": "[::]:5354", "debug": "true", "workers": "2", "gone": "x"})
+	want := map[string]string{"listen": "[::]:5354", "debug": "true", "workers": "2"}
+	if len(got) != len(want) {
+		t.Fatalf("readSettings = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("readSettings[%s] = %q, want %q", k, got[k], v)
+		}
+	}
+	if _, ok := got["db_host"]; ok {
+		t.Fatalf("an unmanaged key leaked into state; every plan would show it as a change")
+	}
+}
+
+func TestSettingString(t *testing.T) {
+	for _, tc := range []struct {
+		in   any
+		want string
+	}{
+		{"[::]:5354", "[::]:5354"}, {true, "true"}, {float64(5354), "5354"}, {float64(1.5), "1.5"}, {nil, ""},
+		{[]any{"a"}, `["a"]`},
+	} {
+		if got := settingString(tc.in); got != tc.want {
+			t.Errorf("settingString(%v) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

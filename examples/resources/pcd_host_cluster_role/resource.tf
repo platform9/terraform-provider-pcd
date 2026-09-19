@@ -35,3 +35,14 @@ resource "pcd_host_cluster_role" "storage" {
   role     = "persistent-storage"
   backends = ["synology-iscsi"]
 }
+
+# DNS as a Service on a host: Designate's worker and mdns. settings overrides
+# the pf9-designate role's settings after assignment; listen on [::]:5354
+# serves zone transfers to IPv6 backends as well as IPv4 ones.
+resource "pcd_host_cluster_role" "dns" {
+  host_id = "04575315-80ce-4617-9b96-6611d00c9942"
+  role    = "dns"
+  settings = {
+    listen = "[::]:5354"
+  }
+}
