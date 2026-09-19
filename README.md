@@ -31,7 +31,10 @@ Two guides on the registry tie these together: the
 builds a region from an empty host to a running VM (the source is
 [`examples/complete/community-edition/`](examples/complete/community-edition/)), and the
 [Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
-says where every import ID comes from.
+says where every import ID comes from. The
+[DNS guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/dns)
+assigns the `dns` role, configures the Designate pool, and binds a network to a zone so
+instances get records when they boot.
 
 Everything else mirrors `terraform-provider-openstack` closely (attribute names, import IDs,
 `OS_*` env), so migrating an existing OpenStack configuration is largely mechanical.

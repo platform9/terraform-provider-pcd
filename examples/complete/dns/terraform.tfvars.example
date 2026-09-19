@@ -1,0 +1,6 @@
+dns_host_id      = "136fc11a-ec5a-4699-b097-f75796134f8d"
+dns_host_ip      = "10.0.0.5"
+dns_host_ssh_key = "~/.ssh/pcd_automation"
+ns_hostname      = "ns1.pcd.local."
+zone_name        = "app.pcd.local."
+zone_email       = "dns-admin@pcd.local"
