@@ -111,14 +111,15 @@ func (r *hostClusterRoleResource) Schema(_ context.Context, _ resource.SchemaReq
 					"`net.ipv6.bindv6only` must be `0`, the Linux default). Only the keys listed here are managed: the rest " +
 					"keep the values PCD computes, and a key removed from this map keeps its last value until set again. " +
 					"Values are always sent as strings, even for a setting the resource manager holds as a number or a " +
-					"boolean. The resource manager keeps the role's settings after the `dns` role is removed, so a later " +
-					"assignment briefly reports the old values until the role's defaults apply, and this resource writes " +
-					"its settings again on every create. An update writes them only when a managed key is missing " +
-					"from what the resource manager holds or differs from it, so the first apply after an import writes " +
-					"nothing when the values already match. " +
-					"The write happens after the host converges when `wait_until_converged` is set, and otherwise retries " +
-					"while the resource manager refuses role changes during convergence; the host agent then restarts " +
-					"designate-mdns, which takes a few minutes more, and `wait_until_converged` does not wait for that restart."},
+					"boolean. The resource manager keeps the role's settings after the `dns` role is removed, and a later " +
+					"assignment briefly reports the old values until the role's defaults apply, so setting `settings` " +
+					"makes create wait for the role to converge before it writes them, whether or not " +
+					"`wait_until_converged` is set, and create always writes them. An update writes them only when a " +
+					"managed key is missing from what the resource manager holds or differs from it, so the first apply " +
+					"after an import writes nothing when the values already match, and retries while the resource " +
+					"manager refuses role changes during convergence. The host agent then restarts designate-mdns, which " +
+					"typically moves to the new address within seconds to a minute of the write; `wait_until_converged` " +
+					"does not wait for that restart."},
 			"wait_until_converged": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false),
 				MarkdownDescription: "Wait until the host reports `role_status = ok` before completing. Role convergence " +
 					"installs and configures services on the host and typically takes several minutes. Enable this when " +
@@ -245,8 +246,9 @@ func managedSettings(ctx context.Context, m *hostClusterRoleModel, diags *diag.D
 
 // mergeSettings returns the body for a v1 role PUT: everything resmgr holds
 // with the managed keys overwritten. The PUT replaces the whole settings
-// object, and the uber-role expansion computed most of it (database,
-// transport, credentials), so a body holding only the overrides would wipe it.
+// object, whose other keys the uber-role expansion computed (for
+// pf9-designate, `debug` alongside `listen`), so a body holding only the
+// overrides would drop them.
 func mergeSettings(current map[string]any, managed map[string]string) map[string]any {
 	out := make(map[string]any, len(current)+len(managed))
 	for k, v := range current {
@@ -305,10 +307,13 @@ func settingString(v any) string {
 	}
 }
 
-// waitRoleSettings polls the v1 per-host role until resmgr reports it, and
-// returns its settings. The v2 assignment expands into granular roles on the
-// server, but the v1 view can lag; a PUT before the role shows up would
-// assign the granular role directly, with only these settings.
+// waitRoleSettings polls the v1 per-host role until the endpoint answers at
+// all, and returns the settings it reports. A PUT to a granular role resmgr
+// does not report would assign it directly, with only these settings. An
+// answer does not mean the current assignment's expansion has landed: resmgr
+// keeps answering for a host that carried the role before, and a new
+// assignment can return a previous assignment's settings until the expansion
+// resets them. That is why Create waits for convergence before it writes.
 func waitRoleSettings(ctx context.Context, client *gophercloud.ServiceClient, url string) (map[string]any, error) {
 	deadline := time.Now().Add(10 * time.Minute)
 	for {
@@ -334,10 +339,10 @@ func waitRoleSettings(ctx context.Context, client *gophercloud.ServiceClient, ur
 // applySettings writes the managed settings onto the cluster role's granular
 // marker role through resmgr v1, merged over what resmgr currently holds. The
 // write goes through putRole, which retries 409 RoleUpdateConflict for up to
-// ten minutes: resmgr refuses role writes while the host converges, and the
-// dns role converges for several minutes after it is assigned. Callers that
-// wait for convergence call this afterward, so the retry is the fallback for
-// callers that do not.
+// ten minutes: resmgr refuses role writes while the host converges. Create
+// waits for convergence before it calls this, and so does an Update that
+// re-assigns the role with wait_until_converged set; the retry is the
+// fallback for an Update that does not wait.
 //
 // Without force, when resmgr already holds every managed key with its
 // configured value there is nothing to write, and no PUT is sent: a PUT is a
@@ -349,7 +354,7 @@ func waitRoleSettings(ctx context.Context, client *gophercloud.ServiceClient, ur
 // reports those old values until the expansion resets the role to its
 // defaults. What Create reads can therefore match the configuration only
 // because it is left over from an earlier assignment, and skipping the write
-// would leave the role at its defaults once the expansion lands.
+// could leave the role at its defaults.
 func (r *hostClusterRoleResource) applySettings(ctx context.Context, hostID, role string, managed map[string]string, force bool) error {
 	if len(managed) == 0 {
 		return nil
@@ -424,7 +429,11 @@ func (r *hostClusterRoleResource) Create(ctx context.Context, req resource.Creat
 	}
 	plan.ID = types.StringValue(hostID + "/" + role)
 
-	if plan.WaitUntilConverged.ValueBool() {
+	// Settings wait for the role to converge whether or not the flag is set:
+	// until the expansion resets the role, resmgr can report, and keep, a
+	// previous assignment's settings, and a write that lands before the reset
+	// is lost to it. One wait serves both.
+	if plan.WaitUntilConverged.ValueBool() || len(managed) > 0 {
 		if err := r.waitConverged(ctx, hostID, role); err != nil {
 			// The role is assigned in resmgr, so it is recorded, with settings
 			// unset since they were not written yet. A create that errors with
@@ -441,10 +450,8 @@ func (r *hostClusterRoleResource) Create(ctx context.Context, req resource.Creat
 			return
 		}
 	}
-	// Settings go on last: after convergence when the caller waits for it,
-	// and otherwise through the 409-retrying PUT, since resmgr refuses role
-	// writes while the host converges. Forced: what resmgr reports for a new
-	// assignment can be stale (see applySettings).
+	// Settings go on last, after convergence. Forced: what resmgr reports for a
+	// new assignment can be stale (see applySettings).
 	if err := r.applySettings(ctx, hostID, role, managed, true); err != nil {
 		// The role is assigned in resmgr, so it is recorded, with settings
 		// unset since the write failed. A create that errors with a non-null
