@@ -243,6 +243,7 @@ resource "pcd_host_cluster_role" "dns" {
   wait_until_converged = true
 
   # Uncomment to serve IPv6 backends (see "IPv6" in the DNS guide).
+  # wait_until_converged does not wait for the designate-mdns restart that follows.
   # settings = {
   #   listen = "[::]:5354"
   # }
@@ -555,7 +556,10 @@ with `settings = { listen = "[::]:5354" }` on the `dns` role's
 `pcd_host_cluster_role`; `role.tf` has the block, commented out. The host's
 `net.ipv6.bindv6only` must be `0`, the Linux default, so that the wildcard IPv6
 socket serves IPv4 as well and IPv4 backends keep reaching `designate-mdns`.
-`sysctl net.ipv6.bindv6only` shows the value.
+`sysctl net.ipv6.bindv6only` shows the value. After you enable the override,
+`designate-mdns` restarts and takes a few minutes to come back on the new
+address, and `wait_until_converged` does not wait for it: give it that time
+before you rely on zone transfers.
 
 BIND has to listen on IPv6 too. The example's BIND configuration in step 3
 turns it off with `listen-on-v6 { none; };`. For an IPv6 backend, give BIND the

@@ -13,6 +13,7 @@ resource "pcd_host_cluster_role" "dns" {
   wait_until_converged = true
 
   # Uncomment to serve IPv6 backends (see "IPv6" in the DNS guide).
+  # wait_until_converged does not wait for the designate-mdns restart that follows.
   # settings = {
   #   listen = "[::]:5354"
   # }

@@ -112,7 +112,7 @@ func (r *hostClusterRoleResource) Schema(_ context.Context, _ resource.SchemaReq
 					"keep the values PCD computes, and a key removed from this map keeps its last value until set again. " +
 					"The write happens after the host converges when `wait_until_converged` is set, and otherwise retries " +
 					"while the resource manager refuses role changes during convergence; the host agent then restarts " +
-					"designate-mdns, which takes a few minutes more."},
+					"designate-mdns, which takes a few minutes more, and `wait_until_converged` does not wait for that restart."},
 			"wait_until_converged": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false),
 				MarkdownDescription: "Wait until the host reports `role_status = ok` before completing. Role convergence " +
 					"installs and configures services on the host and typically takes several minutes. Enable this when " +
@@ -387,12 +387,18 @@ func (r *hostClusterRoleResource) Create(ctx context.Context, req resource.Creat
 
 	if plan.WaitUntilConverged.ValueBool() {
 		if err := r.waitConverged(ctx, hostID, role); err != nil {
-			// The assignment itself succeeded: keep the resource in state so a
-			// re-apply retries the wait instead of duplicating the assignment.
-			// Settings were not written yet, so they stay unset in state too.
+			// The role is assigned in resmgr, so it is recorded, with settings
+			// unset since they were not written yet. A create that errors with
+			// a non-null state leaves the resource tainted, so the next apply
+			// replaces it (removes the role and assigns it again) unless the
+			// user untaints it. Untainted, the next apply writes any configured
+			// settings through Update and does not wait for convergence again.
 			plan.Settings = types.MapNull(types.StringType)
 			resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-			resp.Diagnostics.AddError("resmgr: waiting for host convergence", err.Error())
+			resp.Diagnostics.AddError("resmgr: waiting for host convergence", err.Error()+"\n\n"+
+				"The role is assigned, but Terraform marks it tainted and the next apply would remove and assign it again; "+
+				"`terraform untaint <address>` keeps it, and the next apply then writes any configured settings "+
+				"without waiting for convergence again.")
 			return
 		}
 	}
@@ -400,11 +406,16 @@ func (r *hostClusterRoleResource) Create(ctx context.Context, req resource.Creat
 	// and otherwise through the 409-retrying PUT, since resmgr refuses role
 	// writes while the host converges.
 	if err := r.applySettings(ctx, hostID, role, managed); err != nil {
-		// The assignment succeeded; keep it in state with settings unset so the
-		// next apply retries the settings write rather than the assignment.
+		// The role is assigned in resmgr, so it is recorded, with settings
+		// unset since the write failed. A create that errors with a non-null
+		// state leaves the resource tainted, so the next apply replaces it
+		// (removes the role and assigns it again) unless the user untaints it.
+		// Untainted, the next apply retries only the settings write.
 		plan.Settings = types.MapNull(types.StringType)
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-		resp.Diagnostics.AddError("resmgr: applying role settings", err.Error())
+		resp.Diagnostics.AddError("resmgr: applying role settings", err.Error()+"\n\n"+
+			"The role is assigned, but Terraform marks it tainted and the next apply would remove and assign it again; "+
+			"`terraform untaint <address>` keeps it, and the next apply then retries only the settings write.")
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
