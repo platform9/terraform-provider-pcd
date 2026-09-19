@@ -24,7 +24,11 @@ The files are in the provider repository under
 and are rendered below exactly as they are there. You need a region with a
 hypervisor, an image, and a flavor; the
 [Community Edition guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/community-edition)
-builds one.
+builds one. The region must also be able to boot an instance on a tenant
+network. The example's network has no `segments`, so Neutron gives it the
+region's tenant network type. If tenant networks cannot bind on the host, the
+instance fails with `PortBindingFailed`: give `pcd_networking_network.app`
+`segments` that your region can bind.
 
 ## How the pieces fit
 
@@ -91,9 +95,10 @@ wait until the role is assigned; "Apply" below covers it.
    sudo ss -lntup | grep -E ':(53|953|<bind-port>) '
    ```
 
-   If `dnsmasq` holds 53, run BIND on 5353; `terraform.tfvars.example` already
-   sets `bind_port = 5353`. If 53 is free, you can run BIND on 53 instead and
-   remove `bind_port` from `terraform.tfvars` to leave it at its default, 53.
+   If `dnsmasq` holds 53, run BIND on 5353, the `bind_port` that
+   `terraform.tfvars.example` sets. If 53 is free, you can run BIND on 53
+   instead; then, when you create `terraform.tfvars` under "Apply", remove its
+   `bind_port` line to leave the port at its default, 53.
 
 2. **Install BIND9 and create the rndc key.** On Ubuntu the `bind9` package
    already creates `/etc/bind/rndc.key`; `rndc-confgen -a` replaces it with a
@@ -333,6 +338,11 @@ then runs as that user. `designate-manage` matches pools by name, so the pool
 named `default` updates the pool PCD created instead of adding a second one;
 set `id` in the pool to match by UUID instead.
 
+A delivery command that fails is not reported at once: `loafoe/ssh` retries it
+every `retry_delay` until the resource's `timeout`, five minutes in the
+example. The error then reads `context deadline exceeded: Process exited with
+status 1`, and the command's real error follows it, under `stderr output`.
+
 `zone.tf` creates the zone, after the pool is in place.
 
 ```terraform
@@ -416,7 +426,8 @@ output "instance_ip" {
 ## Apply
 
 Copy the example inputs to `terraform.tfvars` and fill them in, then source the
-RC file and initialize:
+RC file and initialize. Keep `bind_port = 5353` if BIND runs on 5353, and
+remove the line if it runs on 53, as step 1 of "Prepare the DNS host" says.
 
 ```shell
 cp terraform.tfvars.example terraform.tfvars   # then edit terraform.tfvars
@@ -427,27 +438,44 @@ terraform init
 
 Assign the `dns` role on its own first, so you can check where Designate lives
 on the host before the pool is delivered. The apply waits a few minutes for the
-role to converge.
+role to converge. Terraform warns that resource targeting is in effect and that
+the applied changes may be incomplete; both are expected in this first stage.
 
 ```shell
 terraform apply -target=pcd_host_cluster_role.dns
 ```
 
-PCD packages Designate in its own virtualenv. Once the `dns` role is on the
-host, `designate-manage` is `/opt/pf9/pf9-designate/bin/designate-manage`,
-which is outside sudo's `PATH`; it needs
-`--config-file /opt/pf9/etc/pf9-designate/designate.conf` to reach Designate's
-database; and Designate's services run as the `pf9` user. The example's
-`designate_manage`, `designate_conf`, and `designate_user` variables default to
-those values. Confirm them on the host:
+PCD packages Designate in its own virtualenv under `/opt/pf9/pf9-designate`,
+and the virtualenv's `designate-manage` cannot run on its own: it stops with
+`ImportError: libssl.so.10`. Once the `dns` role is on the host, the
+`pf9-designate` package's wrapper, `/usr/sbin/designate-manage`, sets the
+library paths the virtualenv's binary needs and runs it. `designate-manage`
+needs `--config-file /opt/pf9/etc/pf9-designate/designate.conf` to reach
+Designate's database, and Designate's services run as the `pf9` user. The
+example's `designate_manage`, `designate_conf`, and `designate_user` variables
+default to those values. Confirm them on the host. First, see how the services
+run:
 
 ```shell
-sudo find /opt/pf9 -maxdepth 4 -name designate-manage -o -name designate.conf
-systemctl cat 'pf9-designate*' | grep -E 'User=|ExecStart='
+ps -eo user,args | grep -E 'designate-(worker|mdns)'
 ```
 
-If a path or the user differs, set the variable in `terraform.tfvars`. Then
-apply the rest:
+Each line starts with the service's user, `pf9`, and names its configuration
+file after `--config-file`: `/opt/pf9/etc/pf9-designate/designate.conf`. If the
+user differs, set `designate_user`; if the file differs, set `designate_conf`.
+
+Then run `designate-manage` the way the pool delivery runs it, with the user
+and the file from the first command. `pool show_config` only reads the pool:
+
+```shell
+sudo -u pf9 /usr/sbin/designate-manage --config-file /opt/pf9/etc/pf9-designate/designate.conf pool show_config
+```
+
+It prints the pool Designate holds now: before the delivery, PCD's placeholder
+`default` pool, with no targets. That output proves that the binary, the
+configuration file, and the user work together. If the command is not found,
+or stops with an `ImportError`, find the `pf9-designate` package's wrapper on
+the host and set `designate_manage` to its path. Then apply the rest:
 
 ```shell
 terraform apply
@@ -496,6 +524,12 @@ static address, for example an IPv6 address with a run of zeros that
 compresses, and use it for `dns_host_ip`. `pcd_dns_pools_config` warns about a
 master longer than 32 characters when Terraform reads it, at plan time when its
 inputs are known at plan.
+
+`designate-manage pool update --dry-run` does not catch a long master, because a
+dry run does not touch zones. A real run that fails on it leaves the pool half
+updated: the pool's target master is already the new address, while the zones
+keep the old one. Running `pool update` again with the previous file restores
+it. With the example, revert the change and apply again.
 
 ## Upgrades and limits
 

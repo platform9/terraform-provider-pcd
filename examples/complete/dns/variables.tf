@@ -38,12 +38,12 @@ variable "rndc_key_file" {
 }
 
 # PCD packages Designate in its own virtualenv with its own configuration
-# file, outside sudo's default PATH, and runs it as the pf9 user. These
-# defaults are what a 2026.4 host has; the DNS guide says how to confirm them.
+# file and runs it as the pf9 user. These defaults are what a 2026.4 host has;
+# the DNS guide says how to confirm them.
 variable "designate_manage" {
   type        = string
-  description = "Path, on the DNS host, of the designate-manage binary."
-  default     = "/opt/pf9/pf9-designate/bin/designate-manage"
+  description = "Path, on the DNS host, of designate-manage. The default is the pf9-designate package's wrapper, which sets the library paths the virtualenv's binary needs; the virtualenv's binary cannot run on its own."
+  default     = "/usr/sbin/designate-manage"
 }
 
 variable "designate_conf" {

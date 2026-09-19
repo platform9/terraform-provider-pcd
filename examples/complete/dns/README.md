@@ -14,6 +14,10 @@ on the Terraform Registry; the files here are the ones it renders.
 
 - A PCD region with a hypervisor, an image, and a flavor. The
   [Community Edition example](../community-edition/) builds one.
+- A region that can boot an instance on a tenant network. The example's
+  network has no `segments`, so Neutron gives it the region's tenant network
+  type. If tenant networks cannot bind on the host, give
+  `pcd_networking_network.app` `segments` that your region can bind.
 - A host for the `dns` role that has been authorized and has reported in, so
   `pcd_host` can find it by the hostname it reports.
 - BIND9 and an rndc key on that host, set up as the guide's "Prepare the DNS
@@ -31,11 +35,26 @@ cp terraform.tfvars.example terraform.tfvars
 # the private key Terraform connects with. bind_port is 5353 because dnsmasq
 # holds 53 on a PCD host; remove it if BIND runs on 53.
 terraform init
-terraform apply
+terraform apply -target=pcd_host_cluster_role.dns   # the dns role on its own first
 ```
 
-The `dns` role takes a few minutes to converge, and the apply waits for it
-before it delivers the pool.
+The `dns` role takes a few minutes to converge, and the apply waits for it.
+Terraform warns that resource targeting is in effect; that is expected in this
+first stage. Then, on the DNS host, check that Designate's services run as
+`designate_user` with `designate_conf`, and that `designate_manage` runs with
+both; the guide's "Apply" section says what each output should show:
+
+```shell
+ps -eo user,args | grep -E 'designate-(worker|mdns)'
+sudo -u pf9 /usr/sbin/designate-manage --config-file /opt/pf9/etc/pf9-designate/designate.conf pool show_config
+```
+
+Set any value that differs in `terraform.tfvars`, then apply the rest, which
+delivers the pool and creates the zone, the network, and the instance:
+
+```shell
+terraform apply
+```
 
 ## Confirm
 
