@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -266,5 +267,93 @@ func TestSettingString(t *testing.T) {
 		if got := settingString(tc.in); got != tc.want {
 			t.Errorf("settingString(%v) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// dnsModel is a dns role with the given settings, as a plan or state holds it.
+func dnsModel(settings types.Map) *hostClusterRoleModel {
+	m := roleModel(types.StringNull(), types.ListNull(types.StringType))
+	m.ID = types.StringValue("host-a/dns")
+	m.Role = types.StringValue("dns")
+	m.WaitUntilConverged = types.BoolValue(false)
+	m.Settings = settings
+	return m
+}
+
+// nullListen is `settings = { listen = null }`, which terraform validate
+// accepts and which cannot be decoded into the map the v1 PUT sends.
+func nullListen() types.Map {
+	return types.MapValueMust(types.StringType, map[string]attr.Value{"listen": types.StringNull()})
+}
+
+// failOnClientBuild turns the panic of a resmgr client built from a nil config
+// into a failure that says what happened. Deferred by tests whose resource has
+// no config, so any server call is caught.
+func failOnClientBuild(t *testing.T) {
+	t.Helper()
+	if r := recover(); r != nil {
+		t.Fatalf("a resmgr client was built before settings were decoded: %v", r)
+	}
+}
+
+func TestManagedSettingsRejectsANullElement(t *testing.T) {
+	var diags diag.Diagnostics
+	managedSettings(context.Background(), dnsModel(nullListen()), &diags)
+	if !diags.HasError() {
+		t.Fatal("managedSettings accepted a null element; Create and Update would have nothing to stop on")
+	}
+}
+
+// Create used to decode settings after the v2 PUT, so a decode failure left
+// the role assigned in resmgr and absent from state. It must fail before any
+// server call and record nothing.
+func TestCreateDecodesSettingsBeforeAssigning(t *testing.T) {
+	ctx := context.Background()
+	s := roleSchema(t)
+	plan := tfsdk.Plan{Schema: s, Raw: roleState(t, dnsModel(nullListen())).Raw}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+
+	defer failOnClientBuild(t)
+	(&hostClusterRoleResource{}).Create(ctx, resource.CreateRequest{Plan: plan}, &resp)
+
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("Create accepted settings with a null element")
+	}
+	if !resp.State.Raw.IsNull() {
+		t.Fatal("Create recorded state although nothing was assigned")
+	}
+}
+
+// Update must also decode settings before any write. The second case pairs
+// the null element with a host_cluster change: ValidateConfig keeps that pair
+// out of real configurations (settings is dns-only, host_cluster
+// hypervisor-only), but it is the one way to put the v2 PUT ahead of the
+// settings write, so it is the case that shows the decode comes first.
+func TestUpdateDecodesSettingsBeforeWriting(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		priorCluster, planCluster types.String
+	}{
+		{name: "settings only", priorCluster: types.StringNull(), planCluster: types.StringNull()},
+		{name: "with a v2 option change", priorCluster: types.StringValue("c1"), planCluster: types.StringValue("c2")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			prior := dnsModel(types.MapNull(types.StringType))
+			prior.HostCluster = tc.priorCluster
+			want := dnsModel(nullListen())
+			want.HostCluster = tc.planCluster
+
+			state := roleState(t, prior)
+			plan := tfsdk.Plan{Schema: state.Schema, Raw: roleState(t, want).Raw}
+			resp := resource.UpdateResponse{State: tfsdk.State{Schema: state.Schema, Raw: tftypes.NewValue(state.Schema.Type().TerraformType(ctx), nil)}}
+
+			defer failOnClientBuild(t)
+			(&hostClusterRoleResource{}).Update(ctx, resource.UpdateRequest{Plan: plan, State: state}, &resp)
+
+			if !resp.Diagnostics.HasError() {
+				t.Fatal("Update accepted settings with a null element")
+			}
+		})
 	}
 }

@@ -40,7 +40,7 @@ resource "pcd_host_cluster_role" "storage" {
 # the pf9-designate role's settings after assignment; listen on [::]:5354
 # serves zone transfers to IPv6 backends as well as IPv4 ones.
 resource "pcd_host_cluster_role" "dns" {
-  host_id = "04575315-80ce-4617-9b96-6611d00c9942"
+  host_id = data.pcd_host.hyp1.id
   role    = "dns"
   settings = {
     listen = "[::]:5354"

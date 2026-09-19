@@ -360,6 +360,12 @@ func (r *hostClusterRoleResource) Create(ctx context.Context, req resource.Creat
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	// Decode settings before anything is written: failing after the assignment
+	// would leave the role assigned in resmgr and absent from state.
+	managed := managedSettings(ctx, &plan, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	client, err := r.config.ResmgrV2Client()
 	if err != nil {
@@ -379,10 +385,6 @@ func (r *hostClusterRoleResource) Create(ctx context.Context, req resource.Creat
 	}
 	plan.ID = types.StringValue(hostID + "/" + role)
 
-	managed := managedSettings(ctx, &plan, &resp.Diagnostics)
-	if resp.Diagnostics.HasError() {
-		return
-	}
 	if plan.WaitUntilConverged.ValueBool() {
 		if err := r.waitConverged(ctx, hostID, role); err != nil {
 			// The assignment itself succeeded: keep the resource in state so a
@@ -542,6 +544,11 @@ func (r *hostClusterRoleResource) Update(ctx context.Context, req resource.Updat
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 		return
 	}
+	// Decode settings before anything is written, as in Create.
+	managed := managedSettings(ctx, &plan, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	hostID, role := plan.HostID.ValueString(), plan.Role.ValueString()
 	if optionsChanged {
@@ -579,10 +586,6 @@ func (r *hostClusterRoleResource) Update(ctx context.Context, req resource.Updat
 	}
 	// Settings go on last, after any re-assignment has converged: the
 	// expansion may have reset them, and resmgr refuses the write meanwhile.
-	managed := managedSettings(ctx, &plan, &resp.Diagnostics)
-	if resp.Diagnostics.HasError() {
-		return
-	}
 	if err := r.applySettings(ctx, hostID, role, managed); err != nil {
 		plan.Settings = state.Settings
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
