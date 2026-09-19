@@ -256,6 +256,35 @@ func TestReadSettings(t *testing.T) {
 	}
 }
 
+// After an import, settings is null in state, so the first apply with settings
+// configured reaches applySettings even when resmgr already holds them. A PUT
+// then is a real write (the host agent restarts designate-mdns), so
+// applySettings skips it when every managed key already reads back as
+// configured, compared the way Read compares them.
+func TestSettingsApplied(t *testing.T) {
+	current := map[string]any{"listen": "[::]:5354", "debug": true, "workers": float64(2), "db_host": "10.0.0.1"}
+	for _, tc := range []struct {
+		name    string
+		managed map[string]string
+		want    bool
+	}{
+		{name: "equal", managed: map[string]string{"listen": "[::]:5354"}, want: true},
+		{name: "differing value", managed: map[string]string{"listen": "0.0.0.0:5354"}},
+		{name: "missing key", managed: map[string]string{"listen": "[::]:5354", "gone": "x"}},
+		{name: "non-string values that render equal", managed: map[string]string{"debug": "true", "workers": "2"}, want: true},
+		{name: "non-string value that renders differently", managed: map[string]string{"debug": "True"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := settingsApplied(current, tc.managed); got != tc.want {
+				if tc.want {
+					t.Fatalf("settingsApplied = false; applySettings would rewrite settings resmgr already holds and restart designate-mdns")
+				}
+				t.Fatalf("settingsApplied = true; applySettings would skip a write resmgr needs")
+			}
+		})
+	}
+}
+
 func TestSettingString(t *testing.T) {
 	for _, tc := range []struct {
 		in   any

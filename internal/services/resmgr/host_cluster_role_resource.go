@@ -110,6 +110,10 @@ func (r *hostClusterRoleResource) Schema(_ context.Context, _ resource.SchemaReq
 					"`listen = \"[::]:5354\"` makes designate-mdns serve zone transfers over IPv6 as well as IPv4 (the host's " +
 					"`net.ipv6.bindv6only` must be `0`, the Linux default). Only the keys listed here are managed: the rest " +
 					"keep the values PCD computes, and a key removed from this map keeps its last value until set again. " +
+					"Values are always sent as strings, even for a setting the resource manager holds as a number or a " +
+					"boolean. An apply writes the settings only when a managed key is missing " +
+					"from what the resource manager holds or differs from it, so the first apply after an import writes " +
+					"nothing when the values already match. " +
 					"The write happens after the host converges when `wait_until_converged` is set, and otherwise retries " +
 					"while the resource manager refuses role changes during convergence; the host agent then restarts " +
 					"designate-mdns, which takes a few minutes more, and `wait_until_converged` does not wait for that restart."},
@@ -154,16 +158,17 @@ func (r *hostClusterRoleResource) Configure(_ context.Context, req resource.Conf
 	r.config = configureClient(req.ProviderData, &resp.Diagnostics)
 }
 
-// assignBody builds the PUT body for the role. The UI sends {} for roles with
-// no options, so absent options are an empty object rather than no body.
-func (r *hostClusterRoleResource) assignBody(ctx context.Context, m *hostClusterRoleModel, resp *resource.CreateResponse) map[string]any {
+// assignBody builds the v2 PUT body for the role, for Create and Update. The UI
+// sends {} for roles with no options, so absent options are an empty object
+// rather than no body.
+func (r *hostClusterRoleResource) assignBody(ctx context.Context, m *hostClusterRoleModel, diags *diag.Diagnostics) map[string]any {
 	body := map[string]any{}
 	if m.Role.ValueString() == "hypervisor" && !m.HostCluster.IsNull() && m.HostCluster.ValueString() != "" {
 		body["hostcluster"] = m.HostCluster.ValueString()
 	}
 	if m.Role.ValueString() == "persistent-storage" && !m.Backends.IsNull() && !m.Backends.IsUnknown() {
 		var backends []string
-		resp.Diagnostics.Append(m.Backends.ElementsAs(ctx, &backends, false)...)
+		diags.Append(m.Backends.ElementsAs(ctx, &backends, false)...)
 		body["backends"] = backends
 	}
 	return body
@@ -264,6 +269,22 @@ func readSettings(current map[string]any, managed map[string]string) map[string]
 	return out
 }
 
+// settingsApplied reports whether resmgr already holds every managed setting,
+// compared as Read compares them: readSettings(current, managed) must equal
+// managed, the same keys with the same string values.
+func settingsApplied(current map[string]any, managed map[string]string) bool {
+	held := readSettings(current, managed)
+	if len(held) != len(managed) {
+		return false
+	}
+	for k, v := range managed {
+		if held[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
 // settingString renders a JSON scalar the way a user writes it in HCL.
 func settingString(v any) string {
 	switch t := v.(type) {
@@ -314,6 +335,11 @@ func waitRoleSettings(ctx context.Context, client *gophercloud.ServiceClient, ur
 // dns role converges for several minutes after it is assigned. Callers that
 // wait for convergence call this afterward, so the retry is the fallback for
 // callers that do not.
+//
+// When resmgr already holds every managed key with its configured value there
+// is nothing to write, and no PUT is sent: a PUT is a real write the host agent
+// acts on by restarting designate-mdns. That is the case of the first apply
+// after an import, where state has no settings yet.
 func (r *hostClusterRoleResource) applySettings(ctx context.Context, hostID, role string, managed map[string]string) error {
 	if len(managed) == 0 {
 		return nil
@@ -326,6 +352,9 @@ func (r *hostClusterRoleResource) applySettings(ctx context.Context, hostID, rol
 	current, err := waitRoleSettings(ctx, clientV1, url)
 	if err != nil {
 		return err
+	}
+	if settingsApplied(current, managed) {
+		return nil
 	}
 	return r.putRole(ctx, clientV1, url, mergeSettings(current, managed))
 }
@@ -374,7 +403,7 @@ func (r *hostClusterRoleResource) Create(ctx context.Context, req resource.Creat
 	}
 
 	hostID, role := plan.HostID.ValueString(), plan.Role.ValueString()
-	body := r.assignBody(ctx, &plan, resp)
+	body := r.assignBody(ctx, &plan, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -538,9 +567,12 @@ func (r *hostClusterRoleResource) Read(ctx context.Context, req resource.ReadReq
 }
 
 // Update re-PUTs the assignment when a server-side option changed: backends and
-// host_cluster are options on the same role. wait_until_converged is client-
-// side only, and when it is the only thing that changed there is nothing to
-// send — a repeated PUT is a real write resmgr acts on, not a no-op.
+// host_cluster are options on the same role. settings is written separately,
+// through resmgr v1, when it changed or the role was re-PUT, after any wait for
+// convergence, and only when a managed key differs from what resmgr holds.
+// wait_until_converged is client-side only, and when it is the only thing that
+// changed there is nothing to send — a repeated PUT is a real write resmgr acts
+// on, not a no-op.
 func (r *hostClusterRoleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan, state hostClusterRoleModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -568,15 +600,7 @@ func (r *hostClusterRoleResource) Update(ctx context.Context, req resource.Updat
 			resp.Diagnostics.AddError("resmgr: building client", err.Error())
 			return
 		}
-		body := map[string]any{}
-		if role == "hypervisor" && !plan.HostCluster.IsNull() && plan.HostCluster.ValueString() != "" {
-			body["hostcluster"] = plan.HostCluster.ValueString()
-		}
-		if role == "persistent-storage" && !plan.Backends.IsNull() && !plan.Backends.IsUnknown() {
-			var backends []string
-			resp.Diagnostics.Append(plan.Backends.ElementsAs(ctx, &backends, false)...)
-			body["backends"] = backends
-		}
+		body := r.assignBody(ctx, &plan, &resp.Diagnostics)
 		if resp.Diagnostics.HasError() {
 			return
 		}
