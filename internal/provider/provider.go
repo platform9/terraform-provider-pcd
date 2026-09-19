@@ -125,6 +125,7 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		blockstorage.NewSnapshotDataSource,
 		loadbalancer.NewLoadBalancerDataSource,
 		dns.NewZoneDataSource,
+		dns.NewPoolsConfigDataSource,
 		keymanager.NewSecretDataSource,
 		resmgr.NewBlueprintDataSource,
 		resmgr.NewHostDataSource,
