@@ -21,7 +21,7 @@ variable "dns_host_ssh_key" {
 
 variable "bind_port" {
   type        = number
-  description = "The port BIND listens on. 53 unless something else already owns it on the host."
+  description = "The port BIND listens on. 53 unless something else already owns it on the host, as dnsmasq, installed by pcdctl prep-node, does on a PCD host."
   default     = 53
 }
 

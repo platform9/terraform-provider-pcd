@@ -4,3 +4,6 @@ dns_host_ssh_key = "~/.ssh/pcd_automation"
 ns_hostname      = "ns1.pcd.local."
 zone_name        = "app.pcd.local."
 zone_email       = "dns-admin@pcd.local"
+
+# dnsmasq, installed by pcdctl prep-node, holds port 53 on a PCD host.
+bind_port = 5353

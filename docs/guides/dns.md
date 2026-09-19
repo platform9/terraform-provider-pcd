@@ -78,17 +78,19 @@ The example runs BIND9 on the host that takes the `dns` role, and Designate
 controls it there with rndc. Do this once on that host, before
 `terraform apply`.
 
-1. **Pick BIND's port.** PCD runs its own `dnsmasq` on the host, and it holds
-   port 53 on the host's address. See what owns 53, and check that 5353 is
-   free:
+1. **Pick BIND's port.** PCD's host preparation (`pcdctl prep-node`) installs
+   the `dnsmasq` package, and its service holds port 53 on the host's
+   addresses, so a BIND server on the same host needs another port: 5353 in
+   this example. See what owns 53, and check that 5353 is free:
 
    ```shell
    sudo ss -lntup | grep -E ':(53|5353) '
    ```
 
-   If `dnsmasq` holds 53 on the host's address, run BIND on 5353 and set
-   `bind_port = 5353` in `terraform.tfvars`. If 53 is free, use 53 and leave
-   `bind_port` at its default. The steps below write the port as `<bind-port>`.
+   If `dnsmasq` holds 53, run BIND on 5353; `terraform.tfvars.example` already
+   sets `bind_port = 5353`. If 53 is free, you can run BIND on 53 instead and
+   remove `bind_port` from `terraform.tfvars` to leave it at its default, 53.
+   The steps below write the port as `<bind-port>`.
 
 2. **Install BIND9 and create the rndc key.** Designate's worker runs as a
    different user from BIND, so it reads a world-readable copy of the key under
@@ -170,6 +172,9 @@ dns_host_ssh_key = "~/.ssh/pcd_automation"
 ns_hostname      = "ns1.pcd.local."
 zone_name        = "app.pcd.local."
 zone_email       = "dns-admin@pcd.local"
+
+# dnsmasq, installed by pcdctl prep-node, holds port 53 on a PCD host.
+bind_port = 5353
 ```
 
 The `pcd` provider reads its credentials from the sourced RC file, as in the
