@@ -13,9 +13,10 @@ All notable changes to this project are documented here. The format is based on
   attribute to the configuration of any network whose zone was set outside Terraform before the
   first apply with this version, or that apply clears it. The `pcd_networking_network` data source
   reports it.
-- `pcd_networking_subnet` gains `dns_publish_fixed_ip` (PCD-9945), the per-subnet switch that
-  publishes fixed IPs into the network's zone; a network with `external = true` publishes nothing
-  until at least one subnet sets it. Defaults to `false`. The data source reports it.
+- `pcd_networking_subnet` gains `dns_publish_fixed_ip` (PCD-9945), the per-subnet opt-in that
+  publishes fixed IPs into the network's zone on tenant and external networks; a network with
+  `external = true` publishes nothing until at least one subnet sets it, and a provider network
+  that is not external publishes without it. Defaults to `false`. The data source reports it.
 
 ## [0.1.12] - 2026-09-17
 
