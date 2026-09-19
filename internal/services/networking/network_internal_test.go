@@ -121,6 +121,10 @@ func TestInvalidDNSDomain(t *testing.T) {
 		{in: label63 + ".example.com."},
 		{in: "10.in-addr.arpa."},
 		{in: strings.Repeat("a.", 120) + "example.com."},                // 252 characters with the dot
+		{in: "<project_id>.example.com."},                               // dns_domain_keywords label
+		{in: "<project_name>.<user_name>.example.com."},                 // several keyword labels
+		{in: "<tenant_id>.example.com.", wantErr: true},                 // not a keyword Neutron knows
+		{in: "<Project_ID>.example.com.", wantErr: true},                // keywords are lowercase
 		{in: "example.com", wantErr: true},                              // no trailing dot
 		{in: ".", wantErr: true},                                        // empty label
 		{in: "a..example.com.", wantErr: true},                          // empty label

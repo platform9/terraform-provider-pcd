@@ -66,7 +66,7 @@ resource "pcd_networking_subnet" "app" {
 - `cidr` (String) The CIDR of the subnet. Changing this forces a new resource.
 - `description` (String) A description of the subnet.
 - `dns_nameservers` (List of String) DNS nameservers for the subnet.
-- `dns_publish_fixed_ip` (Boolean) Publish a DNS record for every fixed IP allocated from this subnet, in the zone named by the network's `dns_domain`. Defaults to `false`. A network with `external = true` publishes nothing until at least one of its subnets sets this; on other networks it is the per-subnet opt-in (on a dual-stack network, for example, to publish only the routable family). Records are created when a port is created or updated, never retroactively, so set this before booting instances.
+- `dns_publish_fixed_ip` (Boolean) Publish a DNS record for every fixed IP allocated from this subnet, in the zone named by the network's `dns_domain`. Defaults to `false`. A network with `external = true` publishes nothing until at least one of its subnets sets this; on a tenant network it is the per-subnet opt-in (on a dual-stack network, for example, to publish only the routable family). It is not the only switch: a provider network that is not external publishes fixed IPs without it, and a port that also has an address on another subnet that sets it still gets a record. Clearing the network's `dns_domain` is the one switch that always stops publishing. Records are created when a port is created or updated, never retroactively, so set this before booting instances.
 - `enable_dhcp` (Boolean) Whether DHCP is enabled for the subnet.
 - `gateway_ip` (String) The gateway IP. Defaults to the first address in the CIDR.
 - `ip_version` (Number) IP version (4 or 6).

@@ -208,7 +208,8 @@ data "pcd_networking_network" "dns" {
 }
 
 // TestAccNetworkingSubnetDNSPublishFixedIP turns publishing on at create,
-// off by update, leaves it off when the attribute is omitted, and imports.
+// off by omitting the attribute (the schema default is what clears it, since
+// the prior state is true), keeps it off with an explicit false, and imports.
 func TestAccNetworkingSubnetDNSPublishFixedIP(t *testing.T) {
 	const rn = "pcd_networking_subnet.dns"
 	resource.Test(t, resource.TestCase{
@@ -228,11 +229,16 @@ func TestAccNetworkingSubnetDNSPublishFixedIP(t *testing.T) {
 				),
 			},
 			{
-				Config: testAccSubnetDNSPublishConfig(`dns_publish_fixed_ip = false`),
-				Check:  resource.TestCheckResourceAttr(rn, "dns_publish_fixed_ip", "false"),
+				// Omitted right after true: only the Default can plan false here,
+				// and the data source shows Neutron was updated, not just state.
+				Config: testAccSubnetDNSPublishConfig(""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(rn, "dns_publish_fixed_ip", "false"),
+					resource.TestCheckResourceAttr("data.pcd_networking_subnet.dns", "dns_publish_fixed_ip", "false"),
+				),
 			},
 			{
-				Config: testAccSubnetDNSPublishConfig(""),
+				Config: testAccSubnetDNSPublishConfig(`dns_publish_fixed_ip = false`),
 				Check:  resource.TestCheckResourceAttr(rn, "dns_publish_fixed_ip", "false"),
 			},
 			{ResourceName: rn, ImportState: true, ImportStateVerify: true},

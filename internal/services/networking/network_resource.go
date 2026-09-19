@@ -114,7 +114,9 @@ func (r *networkResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Optional: true, Computed: true, Default: stringdefault.StaticString(""),
 				MarkdownDescription: "The Designate zone that ports on this network publish DNS records to, as a fully " +
 					"qualified name ending in a dot (typically `pcd_dns_zone.example.name`), in lowercase: Neutron stores " +
-					"the value lower-cased, so a mixed-case literal is refused at plan time. A network maps to at most one " +
+					"the value lower-cased, so a mixed-case literal is refused at plan time. A label may also be one of the " +
+					"keywords `<project_id>`, `<project_name>`, `<user_id>` or `<user_name>`, which Neutron fills in from " +
+					"the project and user that create the port when it publishes a record. A network maps to at most one " +
 					"zone, which must already exist. Defaults to `\"\"`, which is also how an association is removed: omit " +
 					"the attribute and the next apply clears it, so add it to the configuration of any network whose zone " +
 					"was set outside Terraform. Which fixed IPs get records depends on the subnets' `dns_publish_fixed_ip` " +
@@ -218,8 +220,10 @@ func networkCreateOpts(ctx context.Context, plan *networkModel, diags *diag.Diag
 		}
 		createOpts = segmentsCreateOptsExt{CreateOptsBuilder: createOpts, segments: providerSegs}
 	}
-	// The dns extension, only when a zone is named: "" is the server default,
-	// and sending the key at all is a 400 on a Neutron without the extension.
+	// The dns extension, only when a zone is named: "" is the server default.
+	// gophercloud's NetworkCreateOptsExt already leaves an empty dns_domain out
+	// of the body; the guard just keeps the wrapper off the chain when there is
+	// nothing to send.
 	if v := plan.DNSDomain.ValueString(); v != "" {
 		createOpts = dns.NetworkCreateOptsExt{CreateOptsBuilder: createOpts, DNSDomain: v}
 	}
@@ -255,9 +259,21 @@ func networkUpdateOpts(plan, state *networkModel) networks.UpdateOptsBuilder {
 	return updateOpts
 }
 
-// dnsLabel is neutron-lib's DNS_LABEL_REGEX: it runs after Neutron lower-cases
-// the value, so uppercase never reaches it.
+// dnsLabel is the ordinary-label half of neutron-lib's DNS_LABEL_REGEX; the
+// other half is dnsKeywordLabels. Neutron applies it after lower-casing the
+// value, so uppercase never reaches it there.
 var dnsLabel = regexp.MustCompile(`^[a-z0-9-]{1,63}$`)
+
+// dnsKeywordLabels are the whole labels neutron-lib's DNS_LABEL_REGEX also
+// accepts (its DNS_LABEL_KEYWORDS in angle brackets). The dns_domain_keywords
+// extension driver fills them in from the request's project and user when it
+// publishes a port's record.
+var dnsKeywordLabels = map[string]bool{
+	"<project_id>":   true,
+	"<project_name>": true,
+	"<user_id>":      true,
+	"<user_name>":    true,
+}
 
 // invalidDNSDomain reports why s is not an acceptable dns_domain, or "" when
 // it is. It applies the rules of neutron-lib's validate_dns_domain, plus one
@@ -285,12 +301,15 @@ func invalidDNSDomain(s string) string {
 		switch {
 		case label == "":
 			return fmt.Sprintf("%q has an empty label.", s)
+		case dnsKeywordLabels[label]:
+			// A keyword label; the ordinary-label rules below do not apply.
 		case strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-"):
 			return fmt.Sprintf("label %q of %q must not start or end with a hyphen.", label, s)
 		case !dnsLabel.MatchString(label):
 			return fmt.Sprintf("label %q of %q must be 1 to 63 characters, each a lowercase letter, a digit or a hyphen.", label, s)
 		}
 	}
+	// Ordinary labels only: a keyword label is never all numeric.
 	if last := labels[len(labels)-1]; len(labels) > 1 && strings.Trim(last, "0123456789") == "" {
 		return fmt.Sprintf("the top-level label %q of %q must not be all numeric.", last, s)
 	}

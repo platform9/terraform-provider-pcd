@@ -99,9 +99,12 @@ func (r *subnetResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Optional: true, Computed: true, Default: booldefault.StaticBool(false),
 				MarkdownDescription: "Publish a DNS record for every fixed IP allocated from this subnet, in the zone named " +
 					"by the network's `dns_domain`. Defaults to `false`. A network with `external = true` publishes nothing " +
-					"until at least one of its subnets sets this; on other networks it is the per-subnet opt-in (on a " +
-					"dual-stack network, for example, to publish only the routable family). Records are created when a port " +
-					"is created or updated, never retroactively, so set this before booting instances.",
+					"until at least one of its subnets sets this; on a tenant network it is the per-subnet opt-in (on a " +
+					"dual-stack network, for example, to publish only the routable family). It is not the only switch: a " +
+					"provider network that is not external publishes fixed IPs without it, and a port that also has an " +
+					"address on another subnet that sets it still gets a record. Clearing the network's `dns_domain` is the " +
+					"one switch that always stops publishing. Records are created when a port is created or updated, never " +
+					"retroactively, so set this before booting instances.",
 			},
 			"allocation_pools": schema.ListNestedAttribute{
 				Optional: true, Computed: true, MarkdownDescription: "IP allocation pools (DHCP ranges).",
