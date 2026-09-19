@@ -32,7 +32,8 @@ All notable changes to this project are documented here. The format is based on
 - `pcd_host_cluster_role` gains `settings` for the `dns` role (PCD-9948): overrides for
   `pf9-designate`'s settings, such as `listen = "[::]:5354"` to serve zone transfers over IPv6,
   applied through the resource-manager v1 role API after the cluster role is assigned and again
-  whenever it is re-assigned. Only the listed keys are managed.
+  whenever it is re-assigned. Only the listed keys are managed. A create with `settings` waits for
+  the role to converge before writing them, whether or not `wait_until_converged` is set.
 
 ### Documentation
 

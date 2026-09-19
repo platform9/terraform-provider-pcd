@@ -14,8 +14,8 @@ resource "pcd_host_cluster_role" "dns" {
 
   # Uncomment to serve IPv6 backends, as the "IPv6" section describes.
   # wait_until_converged does not wait for the designate-mdns restart that
-  # follows, typically within seconds to a minute; the section says how to
-  # check it.
+  # follows, typically within seconds to a minute (5 to 33 seconds on a test
+  # host); the section says how to check it.
   # settings = {
   #   listen = "[::]:5354"
   # }

@@ -244,8 +244,8 @@ resource "pcd_host_cluster_role" "dns" {
 
   # Uncomment to serve IPv6 backends, as the "IPv6" section describes.
   # wait_until_converged does not wait for the designate-mdns restart that
-  # follows, typically within seconds to a minute; the section says how to
-  # check it.
+  # follows, typically within seconds to a minute (5 to 33 seconds on a test
+  # host); the section says how to check it.
   # settings = {
   #   listen = "[::]:5354"
   # }
@@ -560,8 +560,8 @@ with `settings = { listen = "[::]:5354" }` on the `dns` role's
 socket serves IPv4 as well and IPv4 backends keep reaching `designate-mdns`.
 `sysctl net.ipv6.bindv6only` shows the value. After you enable the override,
 `designate-mdns` restarts on the new address, typically within seconds to a
-minute of the settings write (5 to 14 seconds on a Community Edition 2026.4
-host), and `wait_until_converged` does not wait for it. Check before you rely
+minute of the settings write (5 to 33 seconds on a test host), and
+`wait_until_converged` does not wait for it. Check before you rely
 on zone transfers: on the DNS host, `ss -lntup | grep 5354` shows the socket as
 `0.0.0.0:5354` before the restart and as `*:5354` after it, which is how `ss`
 prints the dual-stack socket, not `[::]:5354`.
