@@ -29,6 +29,10 @@ All notable changes to this project are documented here. The format is based on
   addresses longer than 32 characters, which Designate 2024.1 cannot store for zones (PCD-9946).
   PCD offers no API for pool targets, so the file still has to reach the host; the DNS guide shows
   a delivery.
+- `pcd_host_cluster_role` gains `settings` for the `dns` role (PCD-9948): overrides for
+  `pf9-designate`'s settings, such as `listen = "[::]:5354"` to serve zone transfers over IPv6,
+  applied through the resource-manager v1 role API after the cluster role is assigned and again
+  whenever it is re-assigned. Only the listed keys are managed.
 
 ### Documentation
 
