@@ -116,19 +116,16 @@ wait until the role is assigned; "Apply" below covers it.
 
 2. **Install BIND9 and create the rndc key.** On Ubuntu the `bind9` package
    already creates `/etc/bind/rndc.key`; `rndc-confgen -a` replaces it with a
-   fresh key named `rndc-key`. Designate's worker runs `rndc` itself, as the
-   Designate user (`pf9` on a PCD host), not as BIND's user. It reads its own
-   copy of the key under `/etc/designate/`, owned by the Designate user and
-   readable only by that user. The pool's `rndc_key_file` points at that copy,
-   and both copies hold the same secret. The `pf9` user exists on a PCD host
-   before the `dns` role is assigned. If Designate runs as another user on your
-   host (the example's `designate_user`), substitute it for `pf9` below.
+   fresh key named `rndc-key`. PCD's worker runs `rndc` itself, as root,
+   through `designate-rootwrap-helper`, not as BIND's user or the Designate
+   user, so the copy needs no other reader. The pool's `rndc_key_file` points
+   at that copy, and both copies hold the same secret.
 
    ```shell
    sudo apt update && sudo apt install -y bind9
    sudo rndc-confgen -a -A hmac-sha256          # replaces /etc/bind/rndc.key; key name "rndc-key"
    sudo mkdir -p /etc/designate
-   sudo install -o pf9 -m 0400 /etc/bind/rndc.key /etc/designate/rndc.key
+   sudo install -o root -g root -m 0400 /etc/bind/rndc.key /etc/designate/rndc.key
    ```
 
 3. **Configure BIND.** Replace `/etc/bind/named.conf.options` with this, with
@@ -298,8 +295,7 @@ ps -eo user,args | grep -E 'designate-(worker|mdns)'
 
 Each line starts with the service's user, `pf9`, and names its configuration
 file after `--config-file`: `/opt/pf9/etc/pf9-designate/designate.conf`. If the
-user differs, set `designate_user` and give that user the rndc key copy from
-step 2 of "Prepare the DNS host"; if the file differs, set `designate_conf`.
+user differs, set `designate_user`; if the file differs, set `designate_conf`.
 
 Then run `designate-manage` the way the pool delivery runs it, with the user
 and the file from the first command. `pool show_config` only reads the pool:
