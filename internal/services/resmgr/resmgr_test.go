@@ -4,10 +4,15 @@
 package resmgr_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -404,6 +409,175 @@ func testAccCheckHostClusterRoleDestroy(t *testing.T, hostID, role string) resou
 			}
 			if time.Now().After(deadline) {
 				return fmt.Errorf("role %s still assigned to host %s after %s", role, hostID, timeout)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(interval):
+			}
+		}
+	}
+}
+
+// TestAccResmgrHostClusterRoleDNSSettings assigns the dns cluster role with a
+// listen override, checks resmgr's pf9-designate settings carry it while the
+// role's other default settings survive the merge, imports (settings are not
+// importable, by design), and removes the role, checking that the host no
+// longer lists the granular pf9-designate role. Opt-in: PCD_ACC_RESMGR=1 and
+// PCD_ACC_HOST_ID.
+// The role installs Designate services on the host and removing it
+// deauthorizes them, so expect several minutes, and run it on a lab host.
+func TestAccResmgrHostClusterRoleDNSSettings(t *testing.T) {
+	if os.Getenv("PCD_ACC_RESMGR") == "" {
+		t.Skip("PCD_ACC_RESMGR not set; skipping resmgr mutation test")
+	}
+	hostID := os.Getenv("PCD_ACC_HOST_ID")
+	if hostID == "" {
+		t.Skip("PCD_ACC_HOST_ID not set; skipping dns settings test")
+	}
+	const rn = "pcd_host_cluster_role.dns"
+	cfg := func(listen string) string {
+		return fmt.Sprintf(`
+resource "pcd_host_cluster_role" "dns" {
+  host_id = %q
+  role    = "dns"
+  settings = {
+    listen = %q
+  }
+}
+`, hostID, listen)
+	}
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy: resource.ComposeAggregateTestCheckFunc(
+			testAccCheckHostClusterRoleDestroy(t, hostID, "dns"),
+			testAccCheckGranularRoleGone(t, hostID, "pf9-designate"),
+		),
+		Steps: []resource.TestStep{
+			{
+				Config: cfg("[::]:5354"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(rn, "settings.listen", "[::]:5354"),
+					testAccCheckRoleSetting(t, hostID, "pf9-designate", "listen", "[::]:5354"),
+					testAccCheckUnmanagedDefaultsKept(t, hostID, "pf9-designate", "listen"),
+				),
+			},
+			{
+				Config: cfg("0.0.0.0:5354"),
+				Check:  testAccCheckRoleSetting(t, hostID, "pf9-designate", "listen", "0.0.0.0:5354"),
+			},
+			{ResourceName: rn, ImportState: true, ImportStateId: hostID + "/dns", ImportStateVerify: true, ImportStateVerifyIgnore: []string{"settings"}},
+		},
+	})
+}
+
+// testAccCheckRoleSetting reads the granular role's settings through resmgr v1.
+func testAccCheckRoleSetting(t *testing.T, hostID, role, key, want string) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		client, err := acctest.LabConfig(t).ResmgrV1Client()
+		if err != nil {
+			return err
+		}
+		var settings map[string]any
+		if _, err := client.Get(context.Background(), client.ServiceURL("hosts", hostID, "roles", role), &settings, &gophercloud.RequestOpts{OkCodes: []int{200}}); err != nil {
+			return fmt.Errorf("reading %s settings: %w", role, err)
+		}
+		if got := fmt.Sprint(settings[key]); got != want {
+			return fmt.Errorf("%s.%s = %q, want %q (all: %v)", role, key, got, want, settings)
+		}
+		return nil
+	}
+}
+
+// testAccCheckUnmanagedDefaultsKept guards the merge: every default setting in
+// the role definition that the configuration does not manage must still be on
+// the host's role, with its default value. A PUT that carried only the managed
+// keys would drop them. It refuses to pass on a definition with no unmanaged
+// defaults (or a response it could not find them in), which would prove
+// nothing about the merge.
+func testAccCheckUnmanagedDefaultsKept(t *testing.T, hostID, role string, managed ...string) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		client, err := acctest.LabConfig(t).ResmgrV1Client()
+		if err != nil {
+			return err
+		}
+		ctx := context.Background()
+		var def struct {
+			DefaultSettings map[string]any `json:"default_settings"`
+		}
+		if _, err := client.Get(ctx, client.ServiceURL("roles", role), &def, &gophercloud.RequestOpts{OkCodes: []int{200}}); err != nil {
+			return fmt.Errorf("reading the %s role definition: %w", role, err)
+		}
+		var settings map[string]any
+		if _, err := client.Get(ctx, client.ServiceURL("hosts", hostID, "roles", role), &settings, &gophercloud.RequestOpts{OkCodes: []int{200}}); err != nil {
+			return fmt.Errorf("reading %s settings: %w", role, err)
+		}
+		checked := 0
+		for k, want := range def.DefaultSettings {
+			if slices.Contains(managed, k) {
+				continue
+			}
+			got, ok := settings[k]
+			if !ok {
+				return fmt.Errorf("%s lost the unmanaged setting %q; the merge dropped it: %v", role, k, settings)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				return fmt.Errorf("%s.%s = %v, want its default %v; the merge changed an unmanaged setting: %v", role, k, got, want, settings)
+			}
+			checked++
+		}
+		if checked == 0 {
+			return fmt.Errorf("the %s role definition has no default settings besides %v, so the merge cannot be checked: %v", role, managed, def.DefaultSettings)
+		}
+		return nil
+	}
+}
+
+// testAccCheckGranularRoleGone polls the host's resmgr v1 record until its
+// roles list no longer includes the granular role, or the host itself is gone
+// (a 404, or a 200 with no body). The v2 host view reports only the cluster
+// role, so it cannot show a granular role left behind. The v1 per-role
+// endpoint cannot either: resmgr keeps a host's role settings after the role
+// is removed, and /v1/hosts/<id>/roles/<role> keeps answering 200 with them
+// (for 11 minutes and more on a Community Edition 2026.4 lab), while the host
+// record stops listing the role.
+func testAccCheckGranularRoleGone(t *testing.T, hostID, role string) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		client, err := acctest.LabConfig(t).ResmgrV1Client()
+		if err != nil {
+			return err
+		}
+		const (
+			interval = 10 * time.Second
+			timeout  = 5 * time.Minute
+		)
+		ctx := context.Background()
+		url := client.ServiceURL("hosts", hostID)
+		deadline := time.Now().Add(timeout)
+		for {
+			var raw json.RawMessage
+			_, err := client.Get(ctx, url, &raw, &gophercloud.RequestOpts{OkCodes: []int{200}})
+			switch {
+			case gophercloud.ResponseCodeIs(err, 404), errors.Is(err, io.EOF):
+				return nil // the host is gone; io.EOF is a 200 with an empty body
+			case err != nil:
+				return fmt.Errorf("checking host %s for granular role %s: %w", hostID, role, err)
+			}
+			if b := bytes.TrimSpace(raw); len(b) == 0 || bytes.Equal(b, []byte("null")) {
+				return nil
+			}
+			var host struct {
+				Roles []string `json:"roles"`
+			}
+			if err := json.Unmarshal(raw, &host); err != nil {
+				return fmt.Errorf("decoding host %s: %w", hostID, err)
+			}
+			if !slices.Contains(host.Roles, role) {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("host %s still lists granular role %s %s after the cluster role was removed: roles %v", hostID, role, timeout, host.Roles)
 			}
 			select {
 			case <-ctx.Done():
