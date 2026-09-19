@@ -21,13 +21,14 @@ All notable changes to this project are documented here. The format is based on
   Terraform (the PCD UI has the checkbox) before the first apply with this version, or that apply
   clears it. The data source reports it.
 - New `pcd_dns_pools_config` data source (PCD-9943): renders a Designate `pools.yaml` from typed
-  attributes and validates it at plan time (NS names end in a dot, hosts are IP literals, ports are
-  in range, bind9 and pdns4 options match the target type), replacing the page of variable
-  validation a pool configuration otherwise needs. `yaml` is sensitive (pdns4 API tokens) and `id`
-  changes with the content, so it can trigger delivery to the hosts that carry the `dns` role. It
-  warns about master addresses longer than 32 characters, which Designate 2024.1 cannot store for
-  zones (PCD-9946). PCD offers no API for pool targets, so the file still has to reach the host;
-  the DNS guide shows a delivery.
+  attributes and validates it when Terraform reads it, at plan time for inputs known at plan (NS
+  names end in a dot, hosts are IP literals, ports are in range, bind9 and pdns4 options match the
+  target type), replacing the page of variable validation a pool configuration otherwise needs.
+  `yaml` is sensitive (pdns4 API tokens), and so is `id`, its SHA-256; `id` changes with the
+  content, so it can trigger delivery to the hosts that carry the `dns` role. It warns about master
+  addresses longer than 32 characters, which Designate 2024.1 cannot store for zones (PCD-9946).
+  PCD offers no API for pool targets, so the file still has to reach the host; the DNS guide shows
+  a delivery.
 
 ### Documentation
 

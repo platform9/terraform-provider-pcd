@@ -1,6 +1,6 @@
-variable "dns_host_id" {
+variable "dns_host_name" {
   type        = string
-  description = "The resource-manager UUID of the host that takes the dns role (pcdctl hypervisor show <id> -c service_host, or /etc/pf9/host_id.conf on the host)."
+  description = "The hostname the host that takes the dns role reports to PCD (hostname -f on the host, or the Hosts page in the UI). pcd_host resolves its UUID."
 }
 
 variable "dns_host_ip" {
@@ -17,6 +17,12 @@ variable "dns_host_ssh_user" {
 variable "dns_host_ssh_key" {
   type        = string
   description = "Path to the private key for dns_host_ssh_user."
+}
+
+variable "dns_host_ssh_home" {
+  type        = string
+  description = "The home directory of dns_host_ssh_user on the DNS host. pools.yaml is staged in a private .pcd-dns directory there before it is installed. Defaults to /home/<dns_host_ssh_user>; set it when the user's home is elsewhere, /root for root for example."
+  default     = null
 }
 
 variable "bind_port" {
@@ -90,6 +96,11 @@ variable "flavor_name" {
 
 variable "instance_name" {
   type        = string
-  description = "The instance name; it becomes the hostname part of the DNS record."
+  description = "The instance name; it becomes the hostname part of the DNS record. It must be a lowercase DNS label: Nova derives the record's hostname from the name by sanitizing it, so any other name publishes under a different name from the one the record_name output prints."
   default     = "dns-demo"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.instance_name))
+    error_message = "The instance_name value must be a lowercase DNS label: 1 to 63 lowercase letters, digits and hyphens, not starting or ending with a hyphen. Nova lowercases any other name, turns spaces, underscores and dots into hyphens and drops other characters to make the record's hostname, so the record_name output would not match the published record."
+  }
 }

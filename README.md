@@ -26,12 +26,12 @@ can do.
 | `pcd_host_cluster_role` | Onboards a host by assigning it a **cluster role** (`hypervisor`, `image-library`, `persistent-storage`, `dns`); PCD computes the granular role settings from the blueprint and host configuration. |
 | `pcd_host_role` | Assigns one granular **PCD role** (e.g. `pf9-ostackhost-neutron`) directly; the low-level API under `pcd_host_cluster_role`. |
 
-Two guides on the registry tie these together: the
+Three guides on the registry tie these together: the
 [Community Edition guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/community-edition)
 builds a region from an empty host to a running VM (the source is
-[`examples/complete/community-edition/`](examples/complete/community-edition/)), and the
+[`examples/complete/community-edition/`](examples/complete/community-edition/)), the
 [Importing guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/importing)
-says where every import ID comes from. The
+says where every import ID comes from, and the
 [DNS guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/dns)
 assigns the `dns` role, configures the Designate pool, and binds a network to a zone so
 instances get records when they boot.

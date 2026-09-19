@@ -14,8 +14,10 @@ on the Terraform Registry; the files here are the ones it renders.
 
 - A PCD region with a hypervisor, an image, and a flavor. The
   [Community Edition example](../community-edition/) builds one.
-- BIND9 and an rndc key on the host that takes the `dns` role, set up as the
-  guide's "Prepare the DNS host" section describes.
+- A host for the `dns` role that has been authorized and has reported in, so
+  `pcd_host` can find it by the hostname it reports.
+- BIND9 and an rndc key on that host, set up as the guide's "Prepare the DNS
+  host" section describes.
 - SSH access from where Terraform runs to that host, as a user with
   passwordless sudo.
 
@@ -25,8 +27,9 @@ on the Terraform Registry; the files here are the ones it renders.
 source pcdctlrc                      # the RC file from Settings > API Access
 export OS_INSECURE=true              # Community Edition's self-signed certificate
 cp terraform.tfvars.example terraform.tfvars
-# edit terraform.tfvars: the host, its address, and dns_host_ssh_key, the
-# private key Terraform connects with; set bind_port if BIND is not on 53
+# edit terraform.tfvars: the host's name and address, and dns_host_ssh_key,
+# the private key Terraform connects with. bind_port is 5353 because dnsmasq
+# holds 53 on a PCD host; remove it if BIND runs on 53.
 terraform init
 terraform apply
 ```

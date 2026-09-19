@@ -3,12 +3,12 @@
 page_title: "pcd_dns_pools_config Data Source - PCD"
 subcategory: "DNS"
 description: |-
-  Renders and validates the Designate pools.yaml for the hosts that carry PCD's dns cluster role. PCD offers no API for a pool's targets and nameservers (Designate's pools API stops at name, description, attributes and NS records), so the file still has to reach each DNS host and be applied with designate-manage pool update --file; the DNS guide shows one way to deliver it. What this data source adds is the typed schema and the checks that otherwise need a page of variable validation: NS record names end in a dot, hosts are IP literals, ports are in range, a target's options match its type, and master addresses fit the width Designate can store for zones.
+  Renders and validates the Designate pools.yaml for the hosts that carry PCD's dns cluster role. PCD offers no API for a pool's targets and nameservers (Designate's pools API stops at name, description, attributes and NS records), so the file still has to reach each DNS host and be applied with designate-manage pool update --file; the DNS guide shows one way to deliver it. What this data source adds is the typed schema and the checks that otherwise need a page of variable validation: NS record names end in a dot, hosts are IP literals, ports are in range, a target's options match its type, and master addresses fit the width Designate can store for zones. The checks run when Terraform reads the data source: at plan time when every input is known, and at apply time when an input comes from a value computed in the same apply.
 ---
 
 # pcd_dns_pools_config (Data Source)
 
-Renders and validates the Designate `pools.yaml` for the hosts that carry PCD's `dns` cluster role. PCD offers no API for a pool's targets and nameservers (Designate's pools API stops at name, description, attributes and NS records), so the file still has to reach each DNS host and be applied with `designate-manage pool update --file`; the DNS guide shows one way to deliver it. What this data source adds is the typed schema and the checks that otherwise need a page of variable validation: NS record names end in a dot, hosts are IP literals, ports are in range, a target's options match its type, and master addresses fit the width Designate can store for zones.
+Renders and validates the Designate `pools.yaml` for the hosts that carry PCD's `dns` cluster role. PCD offers no API for a pool's targets and nameservers (Designate's pools API stops at name, description, attributes and NS records), so the file still has to reach each DNS host and be applied with `designate-manage pool update --file`; the DNS guide shows one way to deliver it. What this data source adds is the typed schema and the checks that otherwise need a page of variable validation: NS record names end in a dot, hosts are IP literals, ports are in range, a target's options match its type, and master addresses fit the width Designate can store for zones. The checks run when Terraform reads the data source: at plan time when every input is known, and at apply time when an input comes from a value computed in the same apply.
 
 ## Example Usage
 
@@ -67,7 +67,7 @@ output "pools_yaml" {
 
 ### Read-Only
 
-- `id` (String) SHA-256 of `yaml`. It changes exactly when the rendered file changes, so it works as the trigger for whatever delivers the file.
+- `id` (String, Sensitive) SHA-256 of `yaml`. It changes exactly when the rendered file changes, so it works as the trigger for whatever delivers the file. Sensitive because it is an unsalted hash of `yaml`: anyone who sees it and has the configuration could test guesses at a pdns4 `api_token` offline. It still works as a trigger; plans show that it changed, not its value.
 - `yaml` (String, Sensitive) The rendered `pools.yaml`: one document holding the list of pools. Sensitive because pdns4 targets carry an API token.
 
 <a id="nestedatt--pools"></a>

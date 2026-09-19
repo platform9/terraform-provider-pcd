@@ -38,10 +38,11 @@ change has landed, and the targets it pushes zones to. The pool lives in
 update` reads it. Designate's API shows a pool's name, description, attributes,
 and NS records only, never its targets or nameservers, so Terraform cannot read
 a pool back. Instead, the `pcd_dns_pools_config` data source validates the pool
-at plan time and renders the file, and an `ssh_resource` from the `loafoe/ssh`
-provider copies the file to the host and applies it. `terraform plan` therefore
-diffs the rendered file, not what Designate holds: a change made on the host by
-hand never shows up in a plan.
+and renders the file when Terraform reads it (at plan time when all its inputs
+are known at plan), and an `ssh_resource` from the `loafoe/ssh` provider copies
+the file to the host and applies it. `terraform plan` therefore diffs the
+rendered file, not what Designate holds: a change made on the host by hand
+never shows up in a plan.
 
 **The zone.** `pcd_dns_zone` creates the zone the records go into. Designate
 schedules a new zone onto a pool and pushes it to the pool's targets, so the
@@ -68,38 +69,42 @@ these rules:
 - A provider network that is not external publishes fixed IPs directly.
 - A floating IP is published when it is associated with a port.
 
-Neutron writes records when a port is created or updated, never for ports that
-already exist. Set `dns_domain` and `dns_publish_fixed_ip` before you boot the
-instances that should get records.
+Neutron writes records when a port is created or updated, never
+retroactively: an existing port gets its record the next time it is updated.
+Set `dns_domain` and `dns_publish_fixed_ip` before you boot the instances that
+should get records.
 
 ## Prepare the DNS host
 
 The example runs BIND9 on the host that takes the `dns` role, and Designate
 controls it there with rndc. Do this once on that host, before
-`terraform apply`.
+`terraform apply`. One more check, of where Designate lives on the host, has to
+wait until the role is assigned; "Apply" below covers it.
 
 1. **Pick BIND's port.** PCD's host preparation (`pcdctl prep-node`) installs
    the `dnsmasq` package, and its service holds port 53 on the host's
    addresses, so a BIND server on the same host needs another port: 5353 in
-   this example. See what owns 53, and check that 5353 is free:
+   this example. The steps below write the port as `<bind-port>`. See what
+   owns 53, and check that `<bind-port>` and rndc's port, 953, are free:
 
    ```shell
-   sudo ss -lntup | grep -E ':(53|5353) '
+   sudo ss -lntup | grep -E ':(53|953|<bind-port>) '
    ```
 
    If `dnsmasq` holds 53, run BIND on 5353; `terraform.tfvars.example` already
    sets `bind_port = 5353`. If 53 is free, you can run BIND on 53 instead and
    remove `bind_port` from `terraform.tfvars` to leave it at its default, 53.
-   The steps below write the port as `<bind-port>`.
 
-2. **Install BIND9 and create the rndc key.** Designate's worker runs as a
-   different user from BIND, so it reads a world-readable copy of the key under
-   `/etc/designate/`. The pool's `rndc_key_file` points at that copy, and both
-   copies hold the same secret.
+2. **Install BIND9 and create the rndc key.** On Ubuntu the `bind9` package
+   already creates `/etc/bind/rndc.key`; `rndc-confgen -a` replaces it with a
+   fresh key named `rndc-key`. Designate's worker runs as a different user from
+   BIND, so it reads a world-readable copy of the key under `/etc/designate/`.
+   The pool's `rndc_key_file` points at that copy, and both copies hold the
+   same secret.
 
    ```shell
    sudo apt update && sudo apt install -y bind9
-   sudo rndc-confgen -a -A hmac-sha256          # writes /etc/bind/rndc.key, key name "rndc-key"
+   sudo rndc-confgen -a -A hmac-sha256          # replaces /etc/bind/rndc.key; key name "rndc-key"
    sudo mkdir -p /etc/designate
    sudo cp /etc/bind/rndc.key /etc/designate/rndc.key
    sudo chmod 0644 /etc/designate/rndc.key
@@ -135,43 +140,27 @@ controls it there with rndc. Do this once on that host, before
    sudo named-checkconf
    sudo systemctl enable named
    sudo systemctl restart named
-   sudo ss -lntup | grep named        # named on <dns-host-ip>:<bind-port> and :953
+   sudo ss -lntup | grep -E ':(53|953|<bind-port>) '   # named on <dns-host-ip>:<bind-port> and :953
    ```
-
-4. **Know where Designate lives.** PCD packages Designate in its own
-   virtualenv. Once the `dns` role is on the host, `designate-manage` is
-   `/opt/pf9/pf9-designate/bin/designate-manage`, which is outside sudo's
-   `PATH`; it needs `--config-file /opt/pf9/etc/pf9-designate/designate.conf`
-   to reach Designate's database; and Designate's services run as the `pf9`
-   user. The example's `designate_manage`, `designate_conf`, and
-   `designate_user` variables default to those values. To confirm them on your
-   host, assign the role first with
-   `terraform apply -target=pcd_host_cluster_role.dns`, then run:
-
-   ```shell
-   sudo find /opt/pf9 -maxdepth 4 -name designate-manage -o -name designate.conf
-   systemctl cat 'pf9-designate*' | grep -E 'User=|ExecStart='
-   ```
-
-   If a path or the user differs, set the variable in `terraform.tfvars`.
 
 ## The configuration
 
 The inputs name the host, its address, and the key Terraform connects with.
-`dns_host_id` is the host's resource-manager UUID
-(`pcdctl hypervisor show <id> -c service_host`, or `/etc/pf9/host_id.conf` on
-the host). `dns_host_ip` is the address BIND listens on and Terraform connects
-to over SSH, as `dns_host_ssh_user` (default `ubuntu`), which needs
+`dns_host_name` is the hostname the host reports to PCD (`hostname -f` on the
+host, or the Hosts page in the PCD UI); the `pcd_host` data source resolves the
+host's resource-manager UUID from it, so the host must have been authorized and
+have reported in. `dns_host_ip` is the address BIND listens on and Terraform
+connects to over SSH, as `dns_host_ssh_user` (default `ubuntu`), which needs
 passwordless sudo. `variables.tf` in the example directory lists every input
 with its default.
 
 ```hcl
-dns_host_id      = "136fc11a-ec5a-4699-b097-f75796134f8d"
+dns_host_name    = "dns1.example.com"
 dns_host_ip      = "10.0.0.5"
-dns_host_ssh_key = "~/.ssh/pcd_automation"
-ns_hostname      = "ns1.pcd.local."
-zone_name        = "app.pcd.local."
-zone_email       = "dns-admin@pcd.local"
+dns_host_ssh_key = "~/.ssh/id_ed25519"
+ns_hostname      = "ns1.pcd.example.com."
+zone_name        = "app.pcd.example.com."
+zone_email       = "dns-admin@pcd.example.com"
 
 # dnsmasq, installed by pcdctl prep-node, holds port 53 on a PCD host.
 bind_port = 5353
@@ -209,17 +198,23 @@ provider "pcd" {
 }
 ```
 
-`role.tf` assigns the `dns` role. `wait_until_converged` holds the apply until
-the host reports the role healthy, because the pool delivery needs
-`designate-manage` on the host and the zone needs the worker and
-`designate-mdns` running.
+`role.tf` looks the host up by name and assigns it the `dns` role.
+`wait_until_converged` holds the apply until the host reports the role healthy,
+because the pool delivery needs `designate-manage` on the host and the zone
+needs the worker and `designate-mdns` running.
 
 ```terraform
+# The host is named, not identified by UUID: pcd_host resolves the
+# resource-manager UUID from the hostname its host agent reports.
+data "pcd_host" "dns" {
+  name = var.dns_host_name
+}
+
 # The dns cluster role installs designate-worker and designate-mdns on the
 # host. It converges in a few minutes; everything below needs it running, so
 # the wait is on.
 resource "pcd_host_cluster_role" "dns" {
-  host_id              = var.dns_host_id
+  host_id              = data.pcd_host.dns.id
   role                 = "dns"
   wait_until_converged = true
 }
@@ -229,13 +224,16 @@ resource "pcd_host_cluster_role" "dns" {
 target's master is `designate-mdns` on the same host, port 5354: BIND transfers
 each zone from there. The options tell the worker where BIND answers queries
 (`bind_port`) and where rndc reaches it (port 953, with the key from step 2).
-The data source refuses a malformed pool at plan time: an NS record name that
-does not end in a dot, a host that is not an IP address, a port out of range,
-or options that do not match the target type.
+The data source refuses a malformed pool when Terraform reads it, which is at
+plan time here because every input is a variable (a value computed during the
+apply would defer the read, and the checks, to the apply): an NS record name
+that does not end in a dot, a host that is not an IP address, a port out of
+range, or options that do not match the target type.
 
 ```terraform
 # The pool: what Designate needs to know about the BIND server it pushes zones
-# to. pcd_dns_pools_config validates it at plan time and renders pools.yaml.
+# to. pcd_dns_pools_config validates it and renders pools.yaml when Terraform
+# reads it, which is at plan time here: every input is a variable.
 data "pcd_dns_pools_config" "default" {
   pools = [{
     name        = "default"
@@ -268,6 +266,16 @@ data "pcd_dns_pools_config" "default" {
   }]
 }
 
+# The file is staged in a directory only the SSH user can open. loafoe/ssh
+# creates a copied file world-readable and sets its permissions afterward, in
+# a separate command, so the directory is what keeps a PowerDNS token private.
+# The path is absolute because loafoe/ssh quotes it when it sets permissions,
+# where ~ does not expand: the user's home is dns_host_ssh_home when set, else
+# /home/<dns_host_ssh_user>.
+locals {
+  pools_staging_dir = "${coalesce(var.dns_host_ssh_home, "/home/${var.dns_host_ssh_user}")}/.pcd-dns"
+}
+
 # Delivery: copy the file to the DNS host and apply it. The trigger is the
 # file's hash, so this re-runs exactly when the pool changes. Without --delete
 # a pool removed from the configuration stays in Designate; delete it by hand.
@@ -283,17 +291,22 @@ resource "ssh_resource" "pools" {
     pools = data.pcd_dns_pools_config.default.id
   }
 
+  # Runs before the file is copied.
+  pre_commands = [
+    "umask 077 && mkdir -p ${local.pools_staging_dir} && chmod 700 ${local.pools_staging_dir}",
+  ]
+
   file {
-    destination = "/tmp/pools.yaml"
+    destination = "${local.pools_staging_dir}/pools.yaml"
     content     = data.pcd_dns_pools_config.default.yaml
     permissions = "0600"
   }
 
   # /etc/designate may not exist yet (-D creates it); the file is owned by the
   # Designate user because designate-manage runs as that user and reads its own
-  # configuration file to reach the database.
+  # configuration file to reach the database. The staged copy is then removed.
   commands = [
-    "sudo install -D -o ${var.designate_user} -m 0600 /tmp/pools.yaml /etc/designate/pools.yaml && rm -f /tmp/pools.yaml",
+    "sudo install -D -o ${var.designate_user} -m 0600 ${local.pools_staging_dir}/pools.yaml /etc/designate/pools.yaml && rm -f ${local.pools_staging_dir}/pools.yaml",
     "sudo -u ${var.designate_user} ${var.designate_manage} --config-file ${var.designate_conf} pool update --file /etc/designate/pools.yaml",
   ]
 
@@ -302,13 +315,23 @@ resource "ssh_resource" "pools" {
 ```
 
 The `ssh_resource` runs again whenever the data source's `id`, a SHA-256 of the
-rendered file, changes, so the file travels exactly when the pool changes. The
-file is sensitive (a PowerDNS target carries an API token), so plans show the
-hash change, not the file. On the host it becomes `/etc/designate/pools.yaml`,
-readable only by the Designate user, and `designate-manage pool update` runs as
-that user. `designate-manage` matches pools by name, so the pool named
-`default` updates the pool PCD created instead of adding a second one; set `id`
-in the pool to match by UUID instead.
+rendered file, changes, so the file travels exactly when the pool changes. Both
+are sensitive: the file because a PowerDNS target carries an API token, and
+`id` because a hash of the file would let anyone who reads a plan and has the
+configuration test guesses at that token. A plan shows that the trigger
+changed, not its value.
+
+The file travels through a private directory. Before the copy, `pre_commands`
+creates `.pcd-dns` in the SSH user's home directory (`dns_host_ssh_home`,
+`/home/<dns_host_ssh_user>` unless you set it) with mode 0700. `loafoe/ssh`
+creates the copied file readable by everyone and sets its mode to 0600 in a
+separate command afterward, so the directory is what keeps other users on the
+host from reading it, including when a dropped connection leaves it behind.
+The first command installs it as `/etc/designate/pools.yaml`, readable only by
+the Designate user, and removes the staged copy; `designate-manage pool update`
+then runs as that user. `designate-manage` matches pools by name, so the pool
+named `default` updates the pool PCD created instead of adding a second one;
+set `id` in the pool to match by UUID instead.
 
 `zone.tf` creates the zone, after the pool is in place.
 
@@ -330,7 +353,8 @@ fixed IPs.
 ```terraform
 # A tenant network bound to the zone, and a subnet that publishes its fixed
 # IPs. Both are set before the instance exists: Neutron creates records when a
-# port is created, never for ports that already exist.
+# port is created or updated, never retroactively, so an existing port gets its
+# record only the next time it is updated.
 resource "pcd_networking_network" "app" {
   name       = "dns-demo-net"
   dns_domain = pcd_dns_zone.app.name
@@ -346,7 +370,9 @@ resource "pcd_networking_subnet" "app" {
 ```
 
 `app.tf` boots the instance on that network. Its record is
-`<instance_name>.<zone_name>`.
+`<instance_name>.<zone_name>`: Nova derives the record's hostname from the
+instance name by sanitizing it, and `instance_name` accepts only a lowercase
+DNS label, which sanitizing leaves unchanged.
 
 ```terraform
 data "pcd_images_image" "app" {
@@ -373,6 +399,9 @@ resource "pcd_compute_instance" "app" {
 }
 ```
 
+`outputs.tf` prints the record's name, to look up against BIND, and the
+instance's address, the answer to expect.
+
 ```terraform
 output "record_name" {
   description = "The name Neutron publishes for the instance; resolve it against the BIND server to confirm."
@@ -384,17 +413,47 @@ output "instance_ip" {
 }
 ```
 
-## Confirm it worked
+## Apply
 
-Source the RC file and apply. The apply waits a few minutes for the `dns` role
-to converge before it delivers the pool.
+Copy the example inputs to `terraform.tfvars` and fill them in, then source the
+RC file and initialize:
 
 ```shell
+cp terraform.tfvars.example terraform.tfvars   # then edit terraform.tfvars
 source pcdctlrc
 export OS_INSECURE=true
 terraform init
+```
+
+Assign the `dns` role on its own first, so you can check where Designate lives
+on the host before the pool is delivered. The apply waits a few minutes for the
+role to converge.
+
+```shell
+terraform apply -target=pcd_host_cluster_role.dns
+```
+
+PCD packages Designate in its own virtualenv. Once the `dns` role is on the
+host, `designate-manage` is `/opt/pf9/pf9-designate/bin/designate-manage`,
+which is outside sudo's `PATH`; it needs
+`--config-file /opt/pf9/etc/pf9-designate/designate.conf` to reach Designate's
+database; and Designate's services run as the `pf9` user. The example's
+`designate_manage`, `designate_conf`, and `designate_user` variables default to
+those values. Confirm them on the host:
+
+```shell
+sudo find /opt/pf9 -maxdepth 4 -name designate-manage -o -name designate.conf
+systemctl cat 'pf9-designate*' | grep -E 'User=|ExecStart='
+```
+
+If a path or the user differs, set the variable in `terraform.tfvars`. Then
+apply the rest:
+
+```shell
 terraform apply
 ```
+
+## Confirm it worked
 
 When the apply finishes, the zone holds an A record for the instance, and BIND
 answers for it:
@@ -410,9 +469,13 @@ records.
 
 ## Remove the association
 
-To stop publishing, omit `dns_domain` from the network, which sets it to `""`,
-or set `dns_publish_fixed_ip = false` on the subnet. Neither touches records
-that already exist: a record stays in the zone until its port goes away.
+To stop publishing, omit `dns_domain` from the network, which sets it to `""`.
+That is the one switch that works on every network. Setting
+`dns_publish_fixed_ip = false` on the subnet stops publishing only on a tenant
+network or an external network, and only when no other subnet the port has an
+address on still sets it: a provider network that is not external publishes
+fixed IPs without the flag. Neither change touches records that already exist:
+a record stays in the zone until its port goes away.
 
 Clearing a network's zone in the PCD UI also turns `dns_publish_fixed_ip` off
 on every subnet of the network. Terraform changes only the attribute you
@@ -430,8 +493,9 @@ existing zone, so a master address longer than 32 characters, such as a
 full-length IPv6 address, applies cleanly until the pool has a zone and fails
 with `Data too long for column 'host'` from then on. Give the DNS host a short
 static address, for example an IPv6 address with a run of zeros that
-compresses, and use it for `dns_host_ip`. `pcd_dns_pools_config` warns at plan
-time about a master longer than 32 characters.
+compresses, and use it for `dns_host_ip`. `pcd_dns_pools_config` warns about a
+master longer than 32 characters when Terraform reads it, at plan time when its
+inputs are known at plan.
 
 ## Upgrades and limits
 
