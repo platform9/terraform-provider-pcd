@@ -10,7 +10,8 @@
 ## Problem
 
 Four resources call their service's create, then wait for a target status, and return the wait's
-error without saving state:
+error without saving state. They are the four this change fixes, not the only resources with this
+problem — eight more have it too (see **Other resources with the same gap** near the end):
 
 | Resource | Wait call in `Create` | Wait |
 | --- | --- | --- |
@@ -174,6 +175,26 @@ destroying the tainted resource would fail with a 400. This is unverified agains
 different failure mode from the one this change addresses; closing it would mean adding force or
 retry logic to three `Delete`s. It is deliberately out of scope. Keeping state is still an
 improvement in that case: Terraform at least knows the object exists.
+
+## Other resources with the same gap
+
+Eight more resources call their service's create and then wait for a target status without saving
+state first — the same gap the **Problem** section above describes for the four resources this
+change fixes. None of the eight are touched by this change; fixing them is separate follow-up work.
+
+- `pcd_dns_zone` — `internal/services/dns/zone_resource.go:128`
+- `pcd_dns_recordset` — `internal/services/dns/recordset_resource.go:116`
+- `pcd_loadbalancer_loadbalancer` — `internal/services/loadbalancer/loadbalancer_resource.go:143`
+- `pcd_loadbalancer_listener` — `internal/services/loadbalancer/listener_resource.go:161` (the wait
+  after `listeners.Create`; `Create` also waits for the parent load balancer at line 125, before the
+  listener exists, which is not this gap)
+- `pcd_loadbalancer_pool` — `internal/services/loadbalancer/pool_resource.go:171` (likewise; line 143
+  is the pre-create wait for the parent load balancer)
+- `pcd_loadbalancer_member` — `internal/services/loadbalancer/member_resource.go:146` (likewise; line
+  117 is the pre-create wait)
+- `pcd_loadbalancer_monitor` — `internal/services/loadbalancer/monitor_resource.go:153` (likewise;
+  line 118 is the pre-create wait)
+- `pcd_keymanager_secret` — `internal/services/keymanager/secret_resource.go:157`
 
 ## Changelog
 

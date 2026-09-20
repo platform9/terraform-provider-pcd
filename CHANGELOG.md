@@ -54,7 +54,10 @@ All notable changes to this project are documented here. The format is based on
   marks the resource tainted, so the next apply deletes and recreates it and a destroy deletes it.
   Before, the failed apply left no state: Terraform lost track of an object the service kept, the
   next apply created a second one, and the first had to be deleted through the API. The attributes
-  the service had not reported yet are saved empty until the next refresh.
+  the service had not reported yet are saved empty until the next refresh. A create wait that times
+  out leaves the Cinder object in `creating`, where Cinder may refuse the delete; because the
+  object is now tainted, that refusal blocks the next apply, not only a destroy, until it is
+  cleared by hand — the correct behavior for a tainted resource, not a regression.
 - `pcd_images_image`: an apply interrupted while the image data is uploading no longer leaves a
   `queued` image in Glance with nothing in state. When an upload or an import request fails, the
   provider still deletes the image it created, but it now keeps the image in state if that
