@@ -332,8 +332,10 @@ func TestWaitForZoneDeletedFailsFastWhenAHealthyZoneEntersError(t *testing.T) {
 			status := "ERROR"
 			if gets == 1 {
 				// The first poll finds the zone still on its way out: a
-				// normal, non-ERROR in-progress status.
-				status = "PENDING_DELETE"
+				// normal, non-ERROR in-progress status. Designate reports
+				// this as status PENDING with action DELETE, not a combined
+				// "PENDING_DELETE" status.
+				status = "PENDING"
 			}
 			fmt.Fprintf(w, `{"id": "zone-1", "name": "healthy.example.com.", "status": %q, "action": "DELETE"}`, status)
 		default:
@@ -360,7 +362,7 @@ func TestWaitForZoneDeletedFailsFastWhenAHealthyZoneEntersError(t *testing.T) {
 	}
 	if elapsed >= 4*time.Second {
 		t.Fatalf("waitForZoneDeleted took %s to fail; want it to fail on the poll right after "+
-			"PENDING_DELETE, well inside the 5s timeout -- a waiter polled through instead of "+
+			"PENDING, well inside the 5s timeout -- a waiter polled through instead of "+
 			"latched would take the full timeout", elapsed)
 	}
 }
