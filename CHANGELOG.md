@@ -33,6 +33,20 @@ All notable changes to this project are documented here. The format is based on
   Nova kept, the next apply booted a second one, and the first had to be deleted through the API.
   The attributes Nova had not reported when the build failed are saved empty until the next
   refresh. Verified on a Community Edition 2026.4 lab, against a server that failed to schedule.
+- `pcd_images_image`: a create with `image_source_url` now fails as soon as Glance reports the
+  web-download import failed, instead of polling for the full 30 minutes and reporting only a
+  timeout. A failed import leaves the image in `queued`, not `killed`, and records the stores it
+  could not write in the image's `os_glance_failed_import` property; the provider reads that
+  property and reports the store names, the status Glance left the image in, and where the
+  underlying reason is recorded — the Glance import task, which needs the admin role to read, and
+  the `glance-api` log. Observed on Community Edition 2026.4 with the Cinder service disabled,
+  where the store could not create a volume and the apply spent half an hour printing
+  `Still creating...`. The image a failed create made is now deleted, matching what the provider
+  already does when the upload or the import request itself fails, so a retry no longer needs a
+  manual `openstack image delete`; if that delete is itself refused — a `protected` image, say —
+  the error says so and names the image to remove. A create that times out still leaves the image
+  in place, because the import may yet finish, and its message now names the stores Glance was
+  still importing into.
 
 ### Documentation
 
@@ -42,10 +56,10 @@ All notable changes to this project are documented here. The format is based on
   resource manager — which resolves the host configuration's interfaces by name in its own
   inventory — refuses the next `pcd_host_config_assignment` with `404 HostIntfIpNotFound`; and the
   `cinder-volume` service that the persistent-storage deauthorization disables and re-assignment
-  does not re-enable, which sends every new volume to `error` and strands the next apply on
-  `pcd_images_image` for its full thirty-minute timeout. The section gives the commands for both,
-  how to confirm they took, and the orphans a hung apply leaves outside Terraform state. Verified
-  on a Community Edition 2026.4 lab.
+  does not re-enable, which sends every new volume to `error` and fails the next apply on
+  `pcd_images_image`, whose import the store cannot complete. The section gives the commands for
+  both, how to confirm they took, and the orphans a failed apply leaves outside Terraform state.
+  Verified on a Community Edition 2026.4 lab.
 - **The Community Edition example's tenant networks boot.** Its blueprint used a VLAN underlay,
   which makes every tenant network a VLAN on the physical-network label of the tunneling
   interface. resmgr keeps a label after the host configuration that defined it is deleted and

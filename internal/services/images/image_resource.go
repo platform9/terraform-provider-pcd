@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // Glance checksums are md5; this only compares against them.
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -204,11 +205,14 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 		}
 	}
 
-	img, err = waitForImageActive(ctx, client, img.ID, 30*time.Minute)
+	// waitForNewImage returns nil on failure, so keep img pointing at the
+	// created image until the wait has succeeded.
+	active, err := waitForNewImage(ctx, client, img.ID, 30*time.Minute)
 	if err != nil {
 		resp.Diagnostics.AddError("images: waiting for active image", err.Error())
 		return
 	}
+	img = active
 
 	resp.Diagnostics.Append(r.flatten(ctx, img, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -444,6 +448,21 @@ func (r *imageResource) flatten(ctx context.Context, img *images.Image, m *image
 	return diags
 }
 
+// errImportFailed marks a wait that ended because Glance recorded a failed
+// import on the image, rather than one that ran out of time. Create deletes the
+// image for the first and leaves it alone for the second.
+var errImportFailed = errors.New("glance recorded a failed import")
+
+// imageProperty reads one of Glance's os_glance_* bookkeeping keys, which
+// arrive as ordinary response fields and land in Properties. A value that is
+// not a string reads as absent: these keys hold comma-joined store lists, and
+// anything else is not one. Unlike flatten, this does not go through
+// fmt.Sprintf, which would turn a missing key into a non-empty string.
+func imageProperty(img *images.Image, key string) string {
+	s, _ := img.Properties[key].(string)
+	return s
+}
+
 func waitForImageActive(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*images.Image, error) {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -457,8 +476,25 @@ func waitForImageActive(ctx context.Context, client *gophercloud.ServiceClient, 
 		case images.ImageStatusKilled:
 			return nil, fmt.Errorf("image %s entered killed state", id)
 		}
+		// A web-download import that fails leaves the image queued, not killed:
+		// Glance records the stores it could not write and reverts the status,
+		// so without this the wait polls a dead import until it times out.
+		if stores := imageProperty(img, "os_glance_failed_import"); stores != "" {
+			return nil, fmt.Errorf("%w: image %s could not be imported into store(s) %s, and Glance "+
+				"left it in status %q. The reason is recorded in the Glance import task and the "+
+				"glance-api log; reading the task needs the admin role (\"openstack task list\"). A "+
+				"store that cannot allocate backing space, for example a disabled cinder-volume "+
+				"service, is a common cause", errImportFailed, id, stores, img.Status)
+		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timed out waiting for image %s to become active (last status %q)", id, img.Status)
+			// Naming the stores Glance is still working on separates a slow
+			// import from one that is not making progress at all.
+			progress := ""
+			if stores := imageProperty(img, "os_glance_importing_to_stores"); stores != "" {
+				progress = fmt.Sprintf(", still importing into store(s) %s", stores)
+			}
+			return nil, fmt.Errorf("timed out waiting for image %s to become active (last status %q%s)",
+				id, img.Status, progress)
 		}
 		select {
 		case <-ctx.Done():
@@ -466,6 +502,22 @@ func waitForImageActive(ctx context.Context, client *gophercloud.ServiceClient, 
 		case <-time.After(3 * time.Second):
 		}
 	}
+}
+
+// waitForNewImage waits for a freshly created image to become active. An image
+// whose import Glance reports as failed is deleted: it holds no data, Create is
+// about to fail without recording it in state, and the orphan blocks the retry.
+// This matches what Create already does when the upload or the import request
+// itself fails. A timeout is left alone, because the import may still finish.
+func waitForNewImage(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*images.Image, error) {
+	img, err := waitForImageActive(ctx, client, id, timeout)
+	if errors.Is(err, errImportFailed) {
+		if derr := images.Delete(ctx, client, id).ExtractErr(); derr != nil {
+			return img, fmt.Errorf("%w. The image could not be removed either (%v); delete it before retrying", err, derr)
+		}
+		return img, fmt.Errorf("%w. The image has been deleted, so the apply can be retried once the store is fixed", err)
+	}
+	return img, err
 }
 
 func fileMD5(path string) (string, error) {
