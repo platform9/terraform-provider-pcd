@@ -167,9 +167,12 @@ func waitForLoadBalancerActive(ctx context.Context, client *gophercloud.ServiceC
 // change that, and cannot. Its purpose is narrower: a root in ERROR should be
 // reported by the child's own delete call, with a specific 409, rather than
 // by this wait failing first with a generic "did not reach ACTIVE" message,
-// and a root that moved to ERROR only after a child's delete already
-// succeeded should not be mistaken for a failed delete. See
-// settleForChildDelete, which callers use instead of calling this directly.
+// and a root that settles in ERROR only after a child's delete's 204 already
+// came back -- accepted, not done -- must not be mistaken for a failed
+// delete: Octavia's own revert path marks the failed child ERROR and returns
+// the load balancer to ACTIVE to unlock it, so an ERROR root here means
+// something else failed, not that delete. See settleForChildDelete, which
+// callers use instead of calling this directly.
 func waitForLoadBalancerSettled(ctx context.Context, client *gophercloud.ServiceClient, lbID string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

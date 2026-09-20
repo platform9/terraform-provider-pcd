@@ -567,7 +567,11 @@ func TestMonitorDeleteReturnsCleanlyWhenItsPoolIs404(t *testing.T) {
 
 // A pool that resolves its root load balancer through its listener (rather
 // than a direct loadbalancer_id) must get the same treatment: if the
-// listener is already gone, the pool went with it.
+// listener lookup 404s, the parent chain is gone and there is nothing left
+// to resolve, so the delete must return cleanly. This is not because
+// deleting a listener deletes its pool -- Octavia's get_delete_listener_flow
+// does not; pools are shareable, and only the load balancer's own cascade
+// delete removes them.
 func TestPoolDeleteReturnsCleanlyWhenItsListenerIs404(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
