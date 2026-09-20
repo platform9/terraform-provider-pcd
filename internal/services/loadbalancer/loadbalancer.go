@@ -20,11 +20,13 @@
 // child's delete with HTTP 409 -- nothing in this package can change that.
 // Settling on ERROR only stops the wait itself from being the failure: the
 // child's own delete call reports the 409 if Octavia refuses it, and the real
-// benefit is the wait done right after a child's delete succeeds, so a root
-// that has since moved to ERROR does not turn an already-successful delete
-// into a reported failure. The root load balancer's own delete
-// (loadbalancer_resource.go) skips both waits entirely and goes straight to
-// a cascade delete.
+// benefit is the wait done right after a child's delete's 204 comes back --
+// accepted, not done. Octavia's own revert path marks a failed child ERROR
+// and returns the load balancer to ACTIVE to unlock it, so a root that has
+// settled in ERROR by then means something else failed, not that delete, and
+// this wait must not turn it into a reported failure. The root load
+// balancer's own delete (loadbalancer_resource.go) skips both waits entirely
+// and goes straight to a cascade delete.
 package loadbalancer
 
 import (

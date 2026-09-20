@@ -1,5 +1,15 @@
 # Create Records Its Object Before It Waits: The Remaining Eight — Implementation Plan
 
+> **Status (2026-09-20):** Tasks 0, 1a, 1b, 2, 3, 4, and 6 shipped on
+> `pushkar/create-state-remaining-eight`. **Task 5 — recording the four load balancer children,
+> sections 5a–5d below — was dropped at its lab gate** and did not ship. The deployed Octavia
+> 15.0.1 refuses a child `DELETE` with 409 while the root load balancer is in `ERROR`
+> (`MUTABLE_STATUSES = (lib_consts.ACTIVE,)`, `octavia/common/constants.py:249`), so recording
+> those four would have produced tainted resources that could never be destroyed. See
+> `docs/superpowers/specs/2026-09-19-create-state-before-wait-remaining-eight-design.md` for the
+> full finding. The Task 5a–5d sections are kept below as the record of what was designed, not as
+> work still to run.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the eight remaining resources record the created object in Terraform state as soon as the service accepts it, so a failed or interrupted wait leaves a tainted resource instead of an orphan — without making any destroy worse in the process.
@@ -2453,7 +2463,7 @@ still leave state.
 ```
 
 ---
-### Task 5a: `pcd_lb_listener`
+### Task 5a: `pcd_lb_listener` — DROPPED, did not ship (see status banner at top)
 
 Part of Task 5. **Do not start until Task 3 is verified on the lab.** Appends to the test file Task 4 created.
 
@@ -2943,7 +2953,7 @@ to issue the listener DELETE and ride out one PENDING_UPDATE poll.
 - Not verifiable by any in-process unit test, and it applies to the five already-shipped resources as much as to this one: UseStateForUnknown is on 7 of this resource's attributes, so a tainted listener's null computed values could in principle be copied into the replacement plan and produce 'Provider produced inconsistent result after apply'. These tests call Create/Read/Delete directly and never go through Terraform core's plan, so they provably cannot catch it. The settled design's single CE lab run against pcd_blockstorage_volume covers the mechanism for all of them; make sure that run actually happens before this lands.
 
 ---
-### Task 5b: `pcd_lb_pool`
+### Task 5b: `pcd_lb_pool` — DROPPED, did not ship (see status banner at top)
 
 Part of Task 5. **Do not start until Task 3 is verified on the lab.** Appends to the test file Task 4 created.
 
@@ -3784,7 +3794,7 @@ load balancer through an extra API call that the recorded state must not break.
 - The post-delete settle can emit a second, identical ERROR warning. diag.Diagnostics.Append skips duplicates (terraform-plugin-framework v1.19.0 diag/diagnostics.go), so the operator sees one, and the test asserts WarningsCount() > 0 rather than an exact count. Noting it in case a reviewer expects one warning per call site.
 
 ---
-### Task 5c: `pcd_lb_member`
+### Task 5c: `pcd_lb_member` — DROPPED, did not ship (see status banner at top)
 
 Part of Task 5. **Do not start until Task 3 is verified on the lab.** Appends to the test file Task 4 created.
 
@@ -4454,7 +4464,7 @@ Create, Read and Delete against an httptest Octavia.
 - UseStateForUnknown is on nine of memberModel's fifteen attributes (member_resource.go:69, 71, 75, 79-89). A tainted member's computed attributes are recorded as null, and in principle core could copy those nulls into the replacement plan and then reject the apply with 'Provider produced inconsistent result after apply'. The in-process unit tests provably cannot catch this — they call Create/Read/Delete directly and never go through core's plan. The already-shipped pcd_blockstorage_volume has identical exposure, so one CE lab run against the volume settles it for all thirteen call sites; it is listed under verification commands rather than duplicated per resource.
 
 ---
-### Task 5d: `pcd_lb_monitor`
+### Task 5d: `pcd_lb_monitor` — DROPPED, did not ship (see status banner at top)
 
 Part of Task 5. **Do not start until Task 3 is verified on the lab.** Appends to the test file Task 4 created. Do not claim in the changelog that Octavia allows only one health monitor per pool — gophercloud's own docs say otherwise.
 

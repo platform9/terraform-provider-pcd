@@ -614,11 +614,13 @@ func TestPoolDeleteReturnsCleanlyWhenItsListenerIs404(t *testing.T) {
 }
 
 // This is the case the settle wrapper exists to fix. A monitor's own DELETE
-// succeeds against Octavia, but the root load balancer has moved to ERROR by
-// the time the post-delete wait runs (unrelated activity elsewhere in the
-// tree, for instance). waitForLoadBalancerActive used to report that as a
-// failed delete, so Terraform kept a monitor in state that Octavia had
-// already removed. The settle wrapper must report no error.
+// gets back a 204 from Octavia -- accepted, not done -- but the root load
+// balancer has moved to ERROR by the time the post-delete wait runs
+// (unrelated activity elsewhere in the tree, for instance). Octavia's own
+// revert path marks a failed child ERROR and returns the load balancer to
+// ACTIVE to unlock it, so a root in ERROR here means something else failed,
+// not this delete. waitForLoadBalancerActive used to report it as a failed
+// delete anyway; the settle wrapper must report no error.
 func TestMonitorDeleteReportsNoErrorWhenRootGoesErrorAfterASuccessfulDelete(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

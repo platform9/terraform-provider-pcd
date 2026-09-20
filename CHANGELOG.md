@@ -116,8 +116,10 @@ All notable changes to this project are documented here. The format is based on
   delete waited for the root to reach `ACTIVE`, both before and after issuing its own delete,
   and failed immediately — before the child's `DELETE` was ever sent — if the root was already
   in `ERROR`; the same wait also reported a delete as failed if the root moved to `ERROR` only
-  after that delete had already succeeded, leaving a resource in state that Octavia had already
-  removed. Both waits now stop once the root leaves its transient `PENDING_*` statuses, treating
+  after that delete's `204` came back — accepted, not done — because Octavia's own revert path
+  marks a failed child `ERROR` and returns the load balancer to `ACTIVE` to unlock it, so a root
+  left in `ERROR` here never means that delete failed, though the resource stayed in state
+  anyway. Both waits now stop once the root leaves its transient `PENDING_*` statuses, treating
   `ACTIVE`, `ERROR`, `DELETED`, and a 404 as settled. Octavia still refuses a child's `DELETE`
   while the root remains in `ERROR` — that has not changed, and cannot from this side — but the
   refusal is now reported by the child's own delete call, a 409 naming the load balancer to

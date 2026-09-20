@@ -290,7 +290,7 @@ func (r *poolResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	rootLB, err := r.rootLBID(ctx, client, &state)
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
-			return // the listener is gone, so the pool went with it
+			return // the listener 404ed: the parent chain is gone, nothing left to resolve
 		}
 		resp.Diagnostics.AddError("loadbalancer: resolving root load balancer", err.Error())
 		return
