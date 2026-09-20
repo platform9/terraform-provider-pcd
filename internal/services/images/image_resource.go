@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // Glance checksums are md5; this only compares against them.
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -444,6 +445,21 @@ func (r *imageResource) flatten(ctx context.Context, img *images.Image, m *image
 	return diags
 }
 
+// errImportFailed marks a wait that ended because Glance recorded a failed
+// import on the image, rather than one that ran out of time. Create deletes the
+// image for the first and leaves it alone for the second.
+var errImportFailed = errors.New("glance recorded a failed import")
+
+// imageProperty reads one of Glance's os_glance_* bookkeeping keys, which
+// arrive as ordinary response fields and land in Properties. A value that is
+// not a string reads as absent: these keys hold comma-joined store lists, and
+// anything else is not one. Unlike flatten, this does not go through
+// fmt.Sprintf, which would turn a missing key into a non-empty string.
+func imageProperty(img *images.Image, key string) string {
+	s, _ := img.Properties[key].(string)
+	return s
+}
+
 func waitForImageActive(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*images.Image, error) {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -456,6 +472,16 @@ func waitForImageActive(ctx context.Context, client *gophercloud.ServiceClient, 
 			return img, nil
 		case images.ImageStatusKilled:
 			return nil, fmt.Errorf("image %s entered killed state", id)
+		}
+		// A web-download import that fails leaves the image queued, not killed:
+		// Glance records the stores it could not write and reverts the status,
+		// so without this the wait polls a dead import until it times out.
+		if stores := imageProperty(img, "os_glance_failed_import"); stores != "" {
+			return nil, fmt.Errorf("%w: image %s could not be imported into store(s) %s, and Glance "+
+				"left it in status %q. The reason is recorded in the Glance import task and the "+
+				"glance-api log; reading the task needs the admin role (\"openstack task list\"). A "+
+				"store that cannot allocate backing space, for example a disabled cinder-volume "+
+				"service, is a common cause", errImportFailed, id, stores, img.Status)
 		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("timed out waiting for image %s to become active (last status %q)", id, img.Status)
