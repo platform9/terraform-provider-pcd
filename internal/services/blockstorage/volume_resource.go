@@ -130,6 +130,11 @@ func (r *volumeResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
+	plan.ID = types.StringValue(vol.ID)
+	if !recordCreated(ctx, resp, &plan) {
+		return
+	}
+
 	if _, err := waitForVolumeStatus(ctx, client, vol.ID, "available", 20*time.Minute); err != nil {
 		resp.Diagnostics.AddError("blockstorage: waiting for volume to become available", err.Error())
 		return
