@@ -30,7 +30,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
 )
@@ -501,16 +503,30 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
+	plan.ID = types.StringValue(server.ID)
+	plan.FlavorID = types.StringValue(flavorID)
+	// A boot-from-volume instance has no image; Nova reports image "" and so
+	// does state, which is what an unset image_id must round-trip to.
+	plan.ImageID = types.StringValue(imageID)
+
+	// Nova keeps the server even when its build fails (ERROR, e.g.
+	// PortBindingFailed), so record it before waiting. A failed or interrupted
+	// wait then returns its error with the server in state, Terraform marks the
+	// instance tainted, and the next apply or a destroy deletes it instead of
+	// leaving it behind and booting another. The attributes Nova has not
+	// reported yet are saved as null; the next refresh reads them.
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	resp.Diagnostics.Append(nullUnknowns(&resp.State)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	server, err = waitForServerActive(ctx, client, server.ID, 30*time.Minute)
 	if err != nil {
 		resp.Diagnostics.AddError("compute: waiting for instance to become active", err.Error())
 		return
 	}
 
-	plan.FlavorID = types.StringValue(flavorID)
-	// A boot-from-volume instance has no image; Nova reports image "" and so
-	// does state, which is what an unset image_id must round-trip to.
-	plan.ImageID = types.StringValue(imageID)
 	resp.Diagnostics.Append(r.flatten(ctx, server, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -767,6 +783,23 @@ func (r *instanceResource) flatten(ctx context.Context, server *servers.Server, 
 	return diags
 }
 
+// nullUnknowns replaces every unknown value in state with null. Terraform
+// refuses unknown values in state, and Create saves the planned instance before
+// Nova has reported its computed attributes.
+func nullUnknowns(state *tfsdk.State) diag.Diagnostics {
+	raw, err := tftypes.Transform(state.Raw, func(_ *tftypes.AttributePath, v tftypes.Value) (tftypes.Value, error) {
+		if v.IsKnown() {
+			return v, nil
+		}
+		return tftypes.NewValue(v.Type(), nil), nil
+	})
+	if err != nil {
+		return diag.Diagnostics{diag.NewErrorDiagnostic("compute: preparing instance state", err.Error())}
+	}
+	state.Raw = raw
+	return nil
+}
+
 func networksFromList(ctx context.Context, l types.List, diags *diag.Diagnostics) []servers.Network {
 	if l.IsNull() || l.IsUnknown() {
 		return nil
@@ -897,6 +930,9 @@ func waitForServerStatus(ctx context.Context, client *gophercloud.ServiceClient,
 	}
 }
 
+// waitForServerDeleted polls until Nova answers 404, whatever the status: a
+// server in ERROR (such as one a failed Create left tainted) keeps reporting
+// ERROR while Nova deletes it, so ERROR is not a failure here.
 func waitForServerDeleted(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {

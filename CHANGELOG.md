@@ -25,6 +25,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- `pcd_compute_instance`: an instance whose build fails after Nova accepts it (status `ERROR`,
+  seen on Community Edition as `PortBindingFailed`) now stays in state, and so does one whose boot
+  times out or whose apply is interrupted while it boots. The apply still fails with the Nova
+  fault, and Terraform marks the instance tainted, so the next apply deletes and recreates it and
+  a destroy deletes it. Before, the failed apply left no state: Terraform lost track of a server
+  Nova kept, the next apply booted a second one, and the first had to be deleted through the API.
+  The attributes Nova had not reported when the build failed are saved empty until the next
+  refresh. Verified on a Community Edition 2026.4 lab, against a server that failed to schedule.
 - `pcd_images_image`: a create with `image_source_url` now fails as soon as Glance reports the
   web-download import failed, instead of polling for the full 30 minutes and reporting only a
   timeout. A failed import leaves the image in `queued`, not `killed`, and records the stores it
