@@ -44,6 +44,6 @@ address returns from `br-tun` to the interface; without it the next
 enp1s0 is missing an IP`. Then re-enable the volume service the storage
 deauthorization disabled, `pcdctl volume service set --enable
 <host-uuid>@nfs-primary cinder-volume`; without it every volume lands in `error`
-and the apply hangs on `pcd_images_image.cirros` for the provider's
-thirty-minute image timeout. The guide's "Before onboarding the host again"
-section has the checks and the cleanup a hung apply needs.
+and the apply fails on `pcd_images_image.cirros` with Glance reporting a failed
+import. The guide's "Before onboarding the host again" section has the checks
+and the cleanup a failed apply needs.

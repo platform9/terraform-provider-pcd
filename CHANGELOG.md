@@ -48,10 +48,10 @@ All notable changes to this project are documented here. The format is based on
   resource manager — which resolves the host configuration's interfaces by name in its own
   inventory — refuses the next `pcd_host_config_assignment` with `404 HostIntfIpNotFound`; and the
   `cinder-volume` service that the persistent-storage deauthorization disables and re-assignment
-  does not re-enable, which sends every new volume to `error` and strands the next apply on
-  `pcd_images_image` for its full thirty-minute timeout. The section gives the commands for both,
-  how to confirm they took, and the orphans a hung apply leaves outside Terraform state. Verified
-  on a Community Edition 2026.4 lab.
+  does not re-enable, which sends every new volume to `error` and fails the next apply on
+  `pcd_images_image`, whose import the store cannot complete. The section gives the commands for
+  both, how to confirm they took, and the orphans a failed apply leaves outside Terraform state.
+  Verified on a Community Edition 2026.4 lab.
 - **The Community Edition example's tenant networks boot.** Its blueprint used a VLAN underlay,
   which makes every tenant network a VLAN on the physical-network label of the tunneling
   interface. resmgr keeps a label after the host configuration that defined it is deleted and
