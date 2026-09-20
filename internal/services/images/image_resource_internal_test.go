@@ -224,3 +224,61 @@ func TestWaitForImageActiveTimeoutReportsImportProgress(t *testing.T) {
 		})
 	}
 }
+
+// Create never records a failed image in state, so one left in Glance is an
+// orphan that blocks the retry with a name or checksum clash. A timeout is a
+// different matter: the import may still finish, and a killed image is the
+// upload path's existing behavior, which this change does not touch.
+func TestWaitForNewImageDeletesOnlyAFailedImport(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		body       string
+		timeout    time.Duration
+		wantDelete int64
+	}{
+		{
+			name:       "failed import is deleted",
+			body:       imageBody("queued", map[string]string{"os_glance_failed_import": "file"}),
+			timeout:    30 * time.Minute,
+			wantDelete: 1,
+		},
+		{
+			name:    "killed is left alone",
+			body:    imageBody("killed", nil),
+			timeout: 30 * time.Minute,
+		},
+		{
+			name:    "timeout is left alone",
+			body:    imageBody("queued", nil),
+			timeout: 0,
+		},
+		{
+			name:    "active is left alone",
+			body:    imageBody("active", nil),
+			timeout: 30 * time.Minute,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, srv := newImageClient(t, tc.body)
+
+			_, _ = waitForNewImage(context.Background(), client, "img-1", tc.timeout)
+
+			if got := srv.deletes.Load(); got != tc.wantDelete {
+				t.Fatalf("deleted %d times, want %d", got, tc.wantDelete)
+			}
+		})
+	}
+}
+
+// The successful path still hands the image back to Create.
+func TestWaitForNewImageReturnsTheActiveImage(t *testing.T) {
+	client, _ := newImageClient(t, imageBody("active", nil))
+
+	img, err := waitForNewImage(context.Background(), client, "img-1", 30*time.Minute)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if img == nil || img.ID != "img-1" {
+		t.Fatalf("img = %+v, want the image Create will flatten into state", img)
+	}
+}

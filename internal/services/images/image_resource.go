@@ -205,11 +205,14 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 		}
 	}
 
-	img, err = waitForImageActive(ctx, client, img.ID, 30*time.Minute)
+	// The result goes into its own variable: the wait returns a nil image on
+	// failure, and img.ID is still needed to clean up after one.
+	active, err := waitForNewImage(ctx, client, img.ID, 30*time.Minute)
 	if err != nil {
 		resp.Diagnostics.AddError("images: waiting for active image", err.Error())
 		return
 	}
+	img = active
 
 	resp.Diagnostics.Append(r.flatten(ctx, img, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -499,6 +502,19 @@ func waitForImageActive(ctx context.Context, client *gophercloud.ServiceClient, 
 		case <-time.After(3 * time.Second):
 		}
 	}
+}
+
+// waitForNewImage waits for a freshly created image to become active. An image
+// whose import Glance reports as failed is deleted: it holds no data, Create is
+// about to fail without recording it in state, and the orphan blocks the retry.
+// This matches what Create already does when the upload or the import request
+// itself fails. A timeout is left alone, because the import may still finish.
+func waitForNewImage(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*images.Image, error) {
+	img, err := waitForImageActive(ctx, client, id, timeout)
+	if errors.Is(err, errImportFailed) {
+		_ = images.Delete(ctx, client, id).ExtractErr()
+	}
+	return img, err
 }
 
 func fileMD5(path string) (string, error) {
