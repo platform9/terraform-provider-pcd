@@ -115,9 +115,19 @@ func waitForZoneActive(ctx context.Context, client *gophercloud.ServiceClient, z
 }
 
 // waitForZoneDeleted blocks until the zone is gone (404).
+//
+// A zone a failed create wait abandoned in ERROR is still deletable, and
+// Designate can still report ERROR on the first poll after the DELETE is
+// accepted, so ERROR counts as a delete failure only once the zone has been
+// seen leaving it. gophercloud.WaitFor calls the predicate serially, so the
+// captured flag needs no synchronization. Do not simplify this back to an
+// unconditional poll to 404/timeout: that would turn a healthy zone's
+// genuine failure during delete into a ten-minute timeout too, which is
+// strictly worse than this latch.
 func waitForZoneDeleted(ctx context.Context, client *gophercloud.ServiceClient, zoneID string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	seenNonError, lastStatus := false, ""
 	err := gophercloud.WaitFor(ctx, func(ctx context.Context) (bool, error) {
 		z, err := zones.Get(ctx, client, zoneID).Extract()
 		if err != nil {
@@ -126,12 +136,20 @@ func waitForZoneDeleted(ctx context.Context, client *gophercloud.ServiceClient, 
 			}
 			return false, err
 		}
-		if z.Status == dnsError {
+		lastStatus = z.Status
+		if z.Status != dnsError {
+			seenNonError = true
+			return false, nil
+		}
+		if seenNonError {
 			return false, fmt.Errorf("zone %s entered ERROR status during delete", zoneID)
 		}
 		return false, nil
 	})
 	if err != nil {
+		if lastStatus != "" {
+			return fmt.Errorf("waiting for zone %s to delete (last status %q): %w", zoneID, lastStatus, err)
+		}
 		return fmt.Errorf("waiting for zone %s to delete: %w", zoneID, err)
 	}
 	return nil

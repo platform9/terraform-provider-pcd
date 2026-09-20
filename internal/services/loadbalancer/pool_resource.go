@@ -289,11 +289,13 @@ func (r *poolResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 
 	rootLB, err := r.rootLBID(ctx, client, &state)
 	if err != nil {
+		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+			return // the listener 404ed: the parent chain is gone, nothing left to resolve
+		}
 		resp.Diagnostics.AddError("loadbalancer: resolving root load balancer", err.Error())
 		return
 	}
-	if err := waitForLoadBalancerActive(ctx, client, rootLB, defaultLBTimeout); err != nil {
-		resp.Diagnostics.AddError("loadbalancer: waiting before pool delete", err.Error())
+	if !settleForChildDelete(ctx, client, rootLB, "pool", "before", &resp.Diagnostics) {
 		return
 	}
 	if err := pools.Delete(ctx, client, state.ID.ValueString()).ExtractErr(); err != nil {
@@ -303,9 +305,7 @@ func (r *poolResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		resp.Diagnostics.AddError("loadbalancer: deleting pool", err.Error())
 		return
 	}
-	if err := waitForLoadBalancerActive(ctx, client, rootLB, defaultLBTimeout); err != nil {
-		resp.Diagnostics.AddError("loadbalancer: waiting after pool delete", err.Error())
-	}
+	settleForChildDelete(ctx, client, rootLB, "pool", "after", &resp.Diagnostics)
 }
 
 func (r *poolResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

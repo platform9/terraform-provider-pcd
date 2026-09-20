@@ -146,10 +146,11 @@ func TestVolumeCreateKeepsAVolumeThatFailedToBuild(t *testing.T) {
 }
 
 // An apply interrupted while Create is waiting for the volume to become
-// available must still leave the volume in state: recordCreated runs before
-// the wait, so a canceled context loses only the wait, never the record. This
-// test pins that for the shared wait/record mechanism; it is not repeated for
-// snapshots and backups, which share the same recordCreated call.
+// available must still leave the volume in state: tfstate.RecordCreated runs
+// before the wait, so a canceled context loses only the wait, never the
+// record. This test pins that for the shared wait/record mechanism; it is not
+// repeated for snapshots and backups, which share the same
+// tfstate.RecordCreated call.
 func TestVolumeCreateKeepsAVolumeWhenTheWaitIsCanceled(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())

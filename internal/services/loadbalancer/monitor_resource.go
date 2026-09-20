@@ -274,11 +274,13 @@ func (r *monitorResource) Delete(ctx context.Context, req resource.DeleteRequest
 	poolID := state.PoolID.ValueString()
 	rootLB, err := rootLBIDFromPool(ctx, client, poolID)
 	if err != nil {
+		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+			return // the pool is gone, so the monitor went with it
+		}
 		resp.Diagnostics.AddError("loadbalancer: resolving root load balancer", err.Error())
 		return
 	}
-	if err := waitForLoadBalancerActive(ctx, client, rootLB, defaultLBTimeout); err != nil {
-		resp.Diagnostics.AddError("loadbalancer: waiting before monitor delete", err.Error())
+	if !settleForChildDelete(ctx, client, rootLB, "monitor", "before", &resp.Diagnostics) {
 		return
 	}
 	if err := monitors.Delete(ctx, client, state.ID.ValueString()).ExtractErr(); err != nil {
@@ -288,9 +290,7 @@ func (r *monitorResource) Delete(ctx context.Context, req resource.DeleteRequest
 		resp.Diagnostics.AddError("loadbalancer: deleting monitor", err.Error())
 		return
 	}
-	if err := waitForLoadBalancerActive(ctx, client, rootLB, defaultLBTimeout); err != nil {
-		resp.Diagnostics.AddError("loadbalancer: waiting after monitor delete", err.Error())
-	}
+	settleForChildDelete(ctx, client, rootLB, "monitor", "after", &resp.Diagnostics)
 }
 
 func (r *monitorResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

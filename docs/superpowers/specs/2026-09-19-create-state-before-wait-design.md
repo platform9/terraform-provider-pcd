@@ -5,13 +5,19 @@
 **Branch:** `pushkar/create-state-before-wait`, stacked on `pushkar/instance-failed-create`
 **Scope:** `internal/tfstate` (new), `internal/services/compute/instance_resource.go`,
 `internal/services/blockstorage/{volume,snapshot,backup}_resource.go`,
-`internal/services/images/image_resource.go`, their tests, and `CHANGELOG.md`
+`internal/services/images/image_resource.go`, `internal/services/dns/zone_resource.go`
+(`pcd_dns_zone`; its delete waiter, `waitForZoneDeleted` in `internal/services/dns/dns.go`,
+was relaxed alongside the create-state fix so a zone abandoned in `ERROR` by a failed create
+can still be deleted), `internal/services/loadbalancer/loadbalancer_resource.go`
+(`pcd_lb_loadbalancer`; its delete waiter, `waitForLoadBalancerDeleted` in
+`internal/services/loadbalancer/loadbalancer.go`, was relaxed the same way so a load balancer
+abandoned in `ERROR` by a failed create can still be deleted), their tests, and `CHANGELOG.md`
 
 ## Problem
 
 Four resources call their service's create, then wait for a target status, and return the wait's
 error without saving state. They are the four this change fixes, not the only resources with this
-problem — eight more have it too (see **Other resources with the same gap** near the end):
+problem — four more have it too (see **Other resources with the same gap** near the end):
 
 | Resource | Wait call in `Create` | Wait |
 | --- | --- | --- |
@@ -38,7 +44,10 @@ and the next apply or a destroy removes it.
 ## Non-goals
 
 - Changing any create wait's target status, timeout, or error message.
-- Changing which statuses the waiters treat as failures.
+- Changing which statuses a *create* wait treats as failures. A *delete* waiter may still relax
+  which status it treats as a failure, since the same status (`ERROR` on both Designate and
+  Octavia) is overloaded across the create and delete phases; see **Design** for the rule this
+  applies.
 - Closing the timeout-in-`creating` delete gap (see **Known gap**).
 - Any change to `pcd_compute_instance` beyond moving its helper to the shared package.
 
@@ -146,6 +155,23 @@ The two compose with one addition on that side: the `errImportFailed` deletion m
 fails keeps the state. Its timeout and `killed` paths deliberately do not delete, and they want the
 state kept, which is what this change gives them.
 
+### 6. A delete waiter may relax a failure status only behind a seen-transition latch
+
+Recording state before the wait means a delete waiter now regularly meets an object a failed
+create wait abandoned in the same status (`ERROR`, for both Designate and Octavia) that a
+genuinely failing delete also produces. A delete waiter that fails the instant it sees that status
+turns every one of those abandoned objects into a destroy that fails on its first poll, forever,
+with `terraform state rm` as the only way out — worse than the silent orphan this change fixes.
+
+The rule: **a delete waiter may treat a status as a failure only once the object has been observed
+leaving it.** A boolean latched by the first non-failure status distinguishes "already in that
+status when the delete began" (not a failure — keep polling) from "entered that status while being
+deleted" (a real failure — fail fast, as before). `gophercloud.WaitFor` calls its predicate
+serially, so the latch needs no synchronization. This does not reopen the Non-goals bullet above:
+that bullet is about a *create* wait's failure statuses, which are unchanged everywhere in this
+change; only two delete waiters (`waitForZoneDeleted`, `waitForLoadBalancerDeleted`) apply the
+latch, and both keep failing fast for the case where the object was healthy when the delete began.
+
 ## Testing
 
 Unit tests only, following `internal/services/compute/instance_failed_create_internal_test.go`:
@@ -176,25 +202,31 @@ different failure mode from the one this change addresses; closing it would mean
 retry logic to three `Delete`s. It is deliberately out of scope. Keeping state is still an
 improvement in that case: Terraform at least knows the object exists.
 
+An Octavia load balancer has the same gap in a different status. A create wait that times out, or
+an apply interrupted while the load balancer builds, leaves it in `PENDING_CREATE`, which Octavia
+treats as immutable: `loadbalancers.Delete` (`internal/services/loadbalancer/loadbalancer_resource.go:258`)
+returns 409 and the destroy fails until Octavia settles the load balancer on its own. Same shape as
+the Cinder `creating` gap above, and deliberately not fixed here. Keeping state is still an
+improvement: Terraform at least knows the load balancer exists.
+
 ## Other resources with the same gap
 
-Eight more resources call their service's create and then wait for a target status without saving
+Four more resources call their service's create and then wait for a target status without saving
 state first — the same gap the **Problem** section above describes for the four resources this
-change fixes. None of the eight are touched by this change; fixing them is separate follow-up work.
+change fixes. `pcd_dns_recordset` and `pcd_keymanager_secret`, both listed here originally, were
+fixed by `pushkar/create-state-remaining-eight`; the four load balancer children below are the
+only ones left, and that same branch found they cannot simply be ported — see its design doc.
+None of the four are touched by this change; fixing them is separate follow-up work.
 
-- `pcd_dns_zone` — `internal/services/dns/zone_resource.go:128`
-- `pcd_dns_recordset` — `internal/services/dns/recordset_resource.go:116`
-- `pcd_loadbalancer_loadbalancer` — `internal/services/loadbalancer/loadbalancer_resource.go:143`
-- `pcd_loadbalancer_listener` — `internal/services/loadbalancer/listener_resource.go:161` (the wait
+- `pcd_lb_listener` — `internal/services/loadbalancer/listener_resource.go:161` (the wait
   after `listeners.Create`; `Create` also waits for the parent load balancer at line 125, before the
   listener exists, which is not this gap)
-- `pcd_loadbalancer_pool` — `internal/services/loadbalancer/pool_resource.go:171` (likewise; line 143
+- `pcd_lb_pool` — `internal/services/loadbalancer/pool_resource.go:171` (likewise; line 143
   is the pre-create wait for the parent load balancer)
-- `pcd_loadbalancer_member` — `internal/services/loadbalancer/member_resource.go:146` (likewise; line
+- `pcd_lb_member` — `internal/services/loadbalancer/member_resource.go:146` (likewise; line
   117 is the pre-create wait)
-- `pcd_loadbalancer_monitor` — `internal/services/loadbalancer/monitor_resource.go:153` (likewise;
+- `pcd_lb_monitor` — `internal/services/loadbalancer/monitor_resource.go:153` (likewise;
   line 118 is the pre-create wait)
-- `pcd_keymanager_secret` — `internal/services/keymanager/secret_resource.go:157`
 
 ## Changelog
 

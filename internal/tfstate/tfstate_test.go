@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -103,5 +104,75 @@ func TestNullUnknownsLeavesAFullyKnownStateAlone(t *testing.T) {
 	}
 	if state.Raw.String() != before {
 		t.Fatalf("state changed:\n before %s\n after  %s", before, state.Raw.String())
+	}
+}
+
+// A state row with no id names nothing a destroy could delete, so RecordCreated
+// must refuse to write it: dropping the row and reporting a provider bug is
+// recoverable, but recording an id-less row is not.
+func TestRecordCreatedRejectsAPlanWithNoID(t *testing.T) {
+	ctx := context.Background()
+	s := schema.Schema{Attributes: map[string]schema.Attribute{
+		"id":    schema.StringAttribute{Computed: true},
+		"name":  schema.StringAttribute{Optional: true},
+		"tags":  schema.SetAttribute{Computed: true, ElementType: types.StringType},
+		"count": schema.Int64Attribute{Computed: true},
+	}}
+	resp := &resource.CreateResponse{
+		State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)},
+	}
+	plan := &sampleModel{
+		ID:    types.StringNull(),
+		Name:  types.StringValue("data-1"),
+		Tags:  types.SetUnknown(types.StringType),
+		Count: types.Int64Unknown(),
+	}
+
+	if tfstate.RecordCreated(ctx, resp, plan) {
+		t.Fatal("RecordCreated = true, want false: a plan with no id must be rejected")
+	}
+	if !resp.State.Raw.IsNull() {
+		t.Fatalf("state = %s, want null: a row with no id must be dropped, not written", resp.State.Raw)
+	}
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("Diagnostics has no error, want one reporting the missing id")
+	}
+}
+
+// The happy path: a plan with a known id and some not-yet-reported computed
+// attributes is saved, with the unknowns nulled and the id preserved.
+func TestRecordCreatedSavesAPlanWithAKnownID(t *testing.T) {
+	ctx := context.Background()
+	s := schema.Schema{Attributes: map[string]schema.Attribute{
+		"id":    schema.StringAttribute{Computed: true},
+		"name":  schema.StringAttribute{Optional: true},
+		"tags":  schema.SetAttribute{Computed: true, ElementType: types.StringType},
+		"count": schema.Int64Attribute{Computed: true},
+	}}
+	resp := &resource.CreateResponse{
+		State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)},
+	}
+	plan := &sampleModel{
+		ID:    types.StringValue("vol-1"),
+		Name:  types.StringValue("data-1"),
+		Tags:  types.SetUnknown(types.StringType),
+		Count: types.Int64Unknown(),
+	}
+
+	if !tfstate.RecordCreated(ctx, resp, plan) {
+		t.Fatalf("RecordCreated = false, want true: %v", resp.Diagnostics)
+	}
+	if resp.State.Raw.IsNull() {
+		t.Fatal("state is null, want the row saved")
+	}
+	if !resp.State.Raw.IsFullyKnown() {
+		t.Fatalf("state still holds unknown values, which Terraform refuses: %v", resp.State.Raw)
+	}
+	var got sampleModel
+	if d := resp.State.Get(ctx, &got); d.HasError() {
+		t.Fatalf("reading the state back: %v", d)
+	}
+	if got.ID.ValueString() != "vol-1" {
+		t.Fatalf("id = %s, want vol-1: a known id must survive", got.ID)
 	}
 }
