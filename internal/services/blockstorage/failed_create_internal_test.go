@@ -38,6 +38,7 @@ func fakeConfig(url string) *clients.Config {
 // volume in state (Terraform then taints it), and the refresh and delete a
 // destroy runs must remove the volume even though Cinder reports "error".
 func TestVolumeCreateKeepsAVolumeThatFailedToBuild(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	var mu sync.Mutex
@@ -144,10 +145,93 @@ func TestVolumeCreateKeepsAVolumeThatFailedToBuild(t *testing.T) {
 	}
 }
 
+// An apply interrupted while Create is waiting for the volume to become
+// available must still leave the volume in state: recordCreated runs before
+// the wait, so a canceled context loses only the wait, never the record. This
+// test pins that for the shared wait/record mechanism; it is not repeated for
+// snapshots and backups, which share the same recordCreated call.
+func TestVolumeCreateKeepsAVolumeWhenTheWaitIsCanceled(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	var once sync.Once
+	firstPoll := make(chan struct{})
+	cinder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /volumes":
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprint(w, `{"volume": {"id": "vol-1", "status": "creating"}}`)
+		case "GET /volumes/vol-1":
+			// The volume never leaves "creating": the only way the wait ends is
+			// the context canceled below, once Create has started waiting.
+			once.Do(func() { close(firstPoll) })
+			fmt.Fprint(w, `{"volume": {"id": "vol-1", "name": "data-1", "size": 1, "status": "creating",
+				"description": "", "volume_type": "__DEFAULT__", "availability_zone": "nova",
+				"bootable": "false", "encrypted": false, "metadata": {}}}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer cinder.Close()
+
+	go func() {
+		<-firstPoll
+		cancel()
+	}()
+
+	r := &volumeResource{config: fakeConfig(cinder.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+	s := sch.Schema
+
+	planned := volumeModel{
+		ID:               types.StringUnknown(),
+		Name:             types.StringValue("data-1"),
+		Size:             types.Int64Value(1),
+		Description:      types.StringUnknown(),
+		VolumeType:       types.StringUnknown(),
+		AvailabilityZone: types.StringUnknown(),
+		SnapshotID:       types.StringNull(),
+		SourceVolID:      types.StringNull(),
+		ImageID:          types.StringNull(),
+		Metadata:         types.MapUnknown(types.StringType),
+		Bootable:         types.BoolUnknown(),
+		Encrypted:        types.BoolUnknown(),
+		Status:           types.StringUnknown(),
+		Region:           types.StringUnknown(),
+	}
+	plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+	if d := plan.Set(ctx, &planned); d.HasError() {
+		t.Fatalf("building the plan: %v", d)
+	}
+
+	createResp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+	r.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("create succeeded; want the canceled wait reported")
+	}
+	if createResp.State.Raw.IsNull() {
+		t.Fatal("create returned no state: an interrupted apply forgets vol-1 and the next apply creates a second volume")
+	}
+	if !createResp.State.Raw.IsFullyKnown() {
+		t.Fatalf("create state holds unknown values, which Terraform refuses: %v", createResp.State.Raw)
+	}
+	var got volumeModel
+	if d := createResp.State.Get(context.Background(), &got); d.HasError() {
+		t.Fatalf("reading the create state: %v", d)
+	}
+	if got.ID.ValueString() != "vol-1" {
+		t.Fatalf("create state id = %s, want vol-1", got.ID)
+	}
+}
+
 // A snapshot whose creation ends in "error" stays in Cinder. Create must return
 // the error with the snapshot in state, and the refresh and delete a destroy
 // runs must remove it even though Cinder reports "error".
 func TestSnapshotCreateKeepsASnapshotThatFailed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	var mu sync.Mutex
@@ -251,6 +335,7 @@ func TestSnapshotCreateKeepsASnapshotThatFailed(t *testing.T) {
 // error with the backup in state, and the refresh and delete a destroy runs must
 // remove it even though Cinder reports "error".
 func TestBackupCreateKeepsABackupThatFailed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	var mu sync.Mutex

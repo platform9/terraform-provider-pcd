@@ -39,7 +39,8 @@ func configureClient(providerData any, diags *diag.Diagnostics) *clients.Config 
 // or a destroy deletes it instead of leaving it behind and creating another. The
 // attributes Cinder has not reported yet are saved as null, since Terraform
 // refuses unknown values in state, and the next refresh reads them. It reports
-// whether Create should carry on.
+// whether Create should carry on. Callers must set the object's ID on plan
+// before calling, since plan's any signature cannot enforce that.
 func recordCreated(ctx context.Context, resp *resource.CreateResponse, plan any) bool {
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 	resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
