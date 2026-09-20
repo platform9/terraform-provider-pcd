@@ -262,10 +262,10 @@ disables the host's `cinder-volume` service, and assigning the role again does
 not re-enable it: after a destroy, `cinder-volume <host-uuid>@nfs-primary` is
 still listed and up, but its status is disabled, with `disabled_reason` `Pf9
 disabling service cinder-volume ... due to requested deauth`. Nothing fails
-outright — the next apply strands instead. Every volume it creates goes to
-`error`, the image's web-download import never finishes, and the apply sits in
-`pcd_images_image.cirros: Still creating...` for the provider's full
-thirty-minute image timeout, with nothing in the log to say why. Enable the
+outright — the next apply breaks on storage instead. Every volume it creates
+goes to `error`, and the image's web-download import fails because the store
+cannot allocate a volume for it, ending the apply with `glance recorded a
+failed import: image ... could not be imported into store(s) ...`. Enable the
 service before applying:
 
 ```shell
@@ -273,14 +273,14 @@ pcdctl volume service list                                               # statu
 pcdctl volume service set --enable <host-uuid>@nfs-primary cinder-volume
 ```
 
-If an apply already hung that way, it left resources behind that never reached
-Terraform state, and they have to go before the next run: the `queued` image,
-its `image-<id>` backing volume in the service project, and the `workload-data`
-volume.
+If an apply already failed that way, it left volumes behind that never reached
+Terraform state, and they have to go before the next run: the image's
+`image-<id>` backing volume in the service project, and the `workload-data`
+volume. The provider deletes the image whose import failed, so the listing is
+only a confirmation — an image it could not delete is named in the error.
 
 ```shell
-pcdctl image list                      # cirros, queued
-pcdctl image delete <image-id>
+pcdctl image list                      # cirros should be gone
 pcdctl volume list --all-projects      # image-<id> and workload-data
 pcdctl volume delete <volume-id>
 ```
