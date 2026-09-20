@@ -268,11 +268,13 @@ func (r *memberResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	poolID := state.PoolID.ValueString()
 	rootLB, err := rootLBIDFromPool(ctx, client, poolID)
 	if err != nil {
+		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+			return // the pool is gone, so the member went with it
+		}
 		resp.Diagnostics.AddError("loadbalancer: resolving root load balancer", err.Error())
 		return
 	}
-	if err := waitForLoadBalancerActive(ctx, client, rootLB, defaultLBTimeout); err != nil {
-		resp.Diagnostics.AddError("loadbalancer: waiting before member delete", err.Error())
+	if !settleForChildDelete(ctx, client, rootLB, "member", "before", &resp.Diagnostics) {
 		return
 	}
 	if err := pools.DeleteMember(ctx, client, poolID, state.ID.ValueString()).ExtractErr(); err != nil {
@@ -282,9 +284,7 @@ func (r *memberResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		resp.Diagnostics.AddError("loadbalancer: deleting member", err.Error())
 		return
 	}
-	if err := waitForLoadBalancerActive(ctx, client, rootLB, defaultLBTimeout); err != nil {
-		resp.Diagnostics.AddError("loadbalancer: waiting after member delete", err.Error())
-	}
+	settleForChildDelete(ctx, client, rootLB, "member", "after", &resp.Diagnostics)
 }
 
 func (r *memberResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

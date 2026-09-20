@@ -15,6 +15,7 @@ import (
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
@@ -290,5 +291,396 @@ func TestWaitForLoadBalancerDeletedFailsOnAnErrorEnteredDuringDelete(t *testing.
 	}
 	if !strings.Contains(err.Error(), "entered ERROR provisioning status during delete") {
 		t.Fatalf("wait error = %q; want the delete-failure message", err)
+	}
+}
+
+// buildDeleteState packs model into a tfsdk.State for the given schema, the
+// same way a resource's Delete receives the prior state from Terraform.
+func buildDeleteState[T any](t *testing.T, ctx context.Context, sch schema.Schema, model *T) tfsdk.State {
+	t.Helper()
+	state := tfsdk.State{Schema: sch, Raw: tftypes.NewValue(sch.Type().TerraformType(ctx), nil)}
+	if d := state.Set(ctx, model); d.HasError() {
+		t.Fatalf("building delete state: %v", d)
+	}
+	return state
+}
+
+// A listener's delete must still be attempted while its load balancer is in
+// ERROR. waitForLoadBalancerActive used to fail this wait before the DELETE
+// was ever issued (gophercloud's WaitFor runs its predicate once immediately,
+// so an ERROR root meant the listener's own delete call never ran).
+// waitForLoadBalancerSettled treats ERROR as settled, so the DELETE is
+// issued -- but Octavia's own immutability check still refuses a child
+// mutation against a root that is not ACTIVE, so the DELETE itself comes
+// back 409 here. That 409 is real, verified Octavia behavior (see the
+// package doc and waitForLoadBalancerSettled), not a gap in the fake, so it
+// is reported as a delete error, alongside a warning naming the load
+// balancer to repair.
+func TestListenerDeleteIssuesDeleteAndReportsOctaviasConflictWhileRootIsError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	deleteCalled := false
+	octavia := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2.0/lbaas/loadbalancers/lb-1":
+			fmt.Fprint(w, `{"loadbalancer": {"id": "lb-1", "provisioning_status": "ERROR",
+				"operating_status": "OFFLINE", "tags": []}}`)
+		case "DELETE /v2.0/lbaas/listeners/listener-1":
+			deleteCalled = true
+			w.WriteHeader(http.StatusConflict)
+			fmt.Fprint(w, `{"faultstring": "Load Balancer lb-1 is immutable and cannot be updated."}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer octavia.Close()
+
+	r := &listenerResource{config: fakeConfig(octavia.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+
+	state := buildDeleteState(t, ctx, sch.Schema, &listenerModel{
+		ID:                     types.StringValue("listener-1"),
+		LoadbalancerID:         types.StringValue("lb-1"),
+		Protocol:               types.StringValue("HTTP"),
+		ProtocolPort:           types.Int64Value(80),
+		Name:                   types.StringNull(),
+		Description:            types.StringNull(),
+		DefaultPoolID:          types.StringNull(),
+		ConnectionLimit:        types.Int64Null(),
+		DefaultTLSContainerRef: types.StringNull(),
+		SNIContainerRefs:       types.ListNull(types.StringType),
+		AdminStateUp:           types.BoolValue(true),
+		TimeoutClientData:      types.Int64Null(),
+		TimeoutMemberConnect:   types.Int64Null(),
+		TimeoutMemberData:      types.Int64Null(),
+		TimeoutTCPInspect:      types.Int64Null(),
+		InsertHeaders:          types.MapNull(types.StringType),
+		AllowedCIDRs:           types.ListNull(types.StringType),
+		Tags:                   types.SetNull(types.StringType),
+		ProvisioningStatus:     types.StringNull(),
+		OperatingStatus:        types.StringNull(),
+		Region:                 types.StringNull(),
+	})
+
+	resp := resource.DeleteResponse{State: state}
+	r.Delete(ctx, resource.DeleteRequest{State: state}, &resp)
+
+	mu.Lock()
+	called := deleteCalled
+	mu.Unlock()
+	if !called {
+		t.Fatal("listener delete never issued DELETE /v2.0/lbaas/listeners/listener-1: a root in ERROR must not block the attempt")
+	}
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("delete succeeded; want Octavia's 409 reported")
+	}
+	errs := resp.Diagnostics.Errors()
+	if len(errs) == 0 || !strings.Contains(errs[0].Detail(), "409") {
+		t.Fatalf("delete errors = %v; want the 409 Octavia returned", errs)
+	}
+	warnings := resp.Diagnostics.Warnings()
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w.Detail(), "lb-1") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("delete warnings = %v; want one naming load balancer lb-1", warnings)
+	}
+}
+
+// A pool's delete must still wait for the root load balancer to leave a
+// transient status before issuing its own delete: PENDING_UPDATE is not
+// settled, and waitForLoadBalancerSettled must keep polling through it
+// exactly as waitForLoadBalancerActive did, then proceed once the root
+// reaches ACTIVE.
+func TestPoolDeleteWaitsThroughPendingUpdateThenDeletesOnceActive(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	polls, deleteCalled := 0, false
+	octavia := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2.0/lbaas/loadbalancers/lb-2":
+			polls++
+			status := "PENDING_UPDATE"
+			if polls > 2 {
+				status = "ACTIVE"
+			}
+			fmt.Fprintf(w, `{"loadbalancer": {"id": "lb-2", "provisioning_status": %q,
+				"operating_status": "ONLINE", "tags": []}}`, status)
+		case "DELETE /v2.0/lbaas/pools/pool-1":
+			deleteCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer octavia.Close()
+
+	r := &poolResource{config: fakeConfig(octavia.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+
+	state := buildDeleteState(t, ctx, sch.Schema, &poolModel{
+		ID:                 types.StringValue("pool-1"),
+		Name:               types.StringNull(),
+		Description:        types.StringNull(),
+		Protocol:           types.StringValue("HTTP"),
+		LBMethod:           types.StringValue("ROUND_ROBIN"),
+		LoadbalancerID:     types.StringValue("lb-2"),
+		ListenerID:         types.StringNull(),
+		AdminStateUp:       types.BoolValue(true),
+		Persistence:        types.ObjectNull(poolPersistenceAttrTypes),
+		Tags:               types.SetNull(types.StringType),
+		ProjectID:          types.StringNull(),
+		MonitorID:          types.StringNull(),
+		ProvisioningStatus: types.StringNull(),
+		OperatingStatus:    types.StringNull(),
+		Region:             types.StringNull(),
+	})
+
+	resp := resource.DeleteResponse{State: state}
+	r.Delete(ctx, resource.DeleteRequest{State: state}, &resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("delete of a pool whose root settles at ACTIVE: %v", resp.Diagnostics)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !deleteCalled {
+		t.Fatal("pool delete never issued DELETE /v2.0/lbaas/pools/pool-1")
+	}
+	if polls < 3 {
+		t.Fatalf("load balancer polled %d times; want the wait to poll past PENDING_UPDATE and settle again after the delete", polls)
+	}
+}
+
+// A member's delete resolves its pool to find the root load balancer. If the
+// pool is already gone -- cascade-deleted along with the load balancer, for
+// example -- the member went with it: the delete must return cleanly with no
+// error and must never attempt a member DELETE naming a pool that no longer
+// exists.
+func TestMemberDeleteReturnsCleanlyWhenItsPoolIs404(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	octavia := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2.0/lbaas/pools/pool-404":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer octavia.Close()
+
+	r := &memberResource{config: fakeConfig(octavia.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+
+	state := buildDeleteState(t, ctx, sch.Schema, &memberModel{
+		ID:                 types.StringValue("member-1"),
+		PoolID:             types.StringValue("pool-404"),
+		Address:            types.StringValue("10.0.0.9"),
+		ProtocolPort:       types.Int64Value(80),
+		Name:               types.StringNull(),
+		Weight:             types.Int64Null(),
+		SubnetID:           types.StringNull(),
+		AdminStateUp:       types.BoolValue(true),
+		Backup:             types.BoolValue(false),
+		MonitorAddress:     types.StringNull(),
+		MonitorPort:        types.Int64Null(),
+		Tags:               types.SetNull(types.StringType),
+		ProvisioningStatus: types.StringNull(),
+		OperatingStatus:    types.StringNull(),
+		Region:             types.StringNull(),
+	})
+
+	resp := resource.DeleteResponse{State: state}
+	r.Delete(ctx, resource.DeleteRequest{State: state}, &resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("delete of a member whose pool is already gone: %v", resp.Diagnostics)
+	}
+}
+
+// The monitor equivalent of the member case above: a 404 resolving the
+// monitor's pool means the monitor went with it.
+func TestMonitorDeleteReturnsCleanlyWhenItsPoolIs404(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	octavia := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2.0/lbaas/pools/pool-404":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer octavia.Close()
+
+	r := &monitorResource{config: fakeConfig(octavia.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+
+	state := buildDeleteState(t, ctx, sch.Schema, &monitorModel{
+		ID:                 types.StringValue("monitor-1"),
+		PoolID:             types.StringValue("pool-404"),
+		Type:               types.StringValue("HTTP"),
+		Delay:              types.Int64Value(5),
+		Timeout:            types.Int64Value(3),
+		MaxRetries:         types.Int64Value(3),
+		MaxRetriesDown:     types.Int64Value(3),
+		HTTPMethod:         types.StringNull(),
+		URLPath:            types.StringNull(),
+		ExpectedCodes:      types.StringNull(),
+		Name:               types.StringNull(),
+		AdminStateUp:       types.BoolValue(true),
+		Tags:               types.SetNull(types.StringType),
+		ProvisioningStatus: types.StringNull(),
+		OperatingStatus:    types.StringNull(),
+		Region:             types.StringNull(),
+	})
+
+	resp := resource.DeleteResponse{State: state}
+	r.Delete(ctx, resource.DeleteRequest{State: state}, &resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("delete of a monitor whose pool is already gone: %v", resp.Diagnostics)
+	}
+}
+
+// A pool that resolves its root load balancer through its listener (rather
+// than a direct loadbalancer_id) must get the same treatment: if the
+// listener is already gone, the pool went with it.
+func TestPoolDeleteReturnsCleanlyWhenItsListenerIs404(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	octavia := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2.0/lbaas/listeners/listener-404":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer octavia.Close()
+
+	r := &poolResource{config: fakeConfig(octavia.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+
+	state := buildDeleteState(t, ctx, sch.Schema, &poolModel{
+		ID:                 types.StringValue("pool-2"),
+		Name:               types.StringNull(),
+		Description:        types.StringNull(),
+		Protocol:           types.StringValue("HTTP"),
+		LBMethod:           types.StringValue("ROUND_ROBIN"),
+		LoadbalancerID:     types.StringNull(),
+		ListenerID:         types.StringValue("listener-404"),
+		AdminStateUp:       types.BoolValue(true),
+		Persistence:        types.ObjectNull(poolPersistenceAttrTypes),
+		Tags:               types.SetNull(types.StringType),
+		ProjectID:          types.StringNull(),
+		MonitorID:          types.StringNull(),
+		ProvisioningStatus: types.StringNull(),
+		OperatingStatus:    types.StringNull(),
+		Region:             types.StringNull(),
+	})
+
+	resp := resource.DeleteResponse{State: state}
+	r.Delete(ctx, resource.DeleteRequest{State: state}, &resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("delete of a pool whose listener is already gone: %v", resp.Diagnostics)
+	}
+}
+
+// This is the case the settle wrapper exists to fix. A monitor's own DELETE
+// succeeds against Octavia, but the root load balancer has moved to ERROR by
+// the time the post-delete wait runs (unrelated activity elsewhere in the
+// tree, for instance). waitForLoadBalancerActive used to report that as a
+// failed delete, so Terraform kept a monitor in state that Octavia had
+// already removed. The settle wrapper must report no error.
+func TestMonitorDeleteReportsNoErrorWhenRootGoesErrorAfterASuccessfulDelete(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	deleteCalled := false
+	octavia := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2.0/lbaas/pools/pool-5":
+			fmt.Fprint(w, `{"pool": {"id": "pool-5", "loadbalancers": [{"id": "lb-5"}], "listeners": []}}`)
+		case "GET /v2.0/lbaas/loadbalancers/lb-5":
+			status := "ACTIVE"
+			if deleteCalled {
+				status = "ERROR"
+			}
+			fmt.Fprintf(w, `{"loadbalancer": {"id": "lb-5", "provisioning_status": %q,
+				"operating_status": "ONLINE", "tags": []}}`, status)
+		case "DELETE /v2.0/lbaas/healthmonitors/monitor-1":
+			deleteCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer octavia.Close()
+
+	r := &monitorResource{config: fakeConfig(octavia.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+
+	state := buildDeleteState(t, ctx, sch.Schema, &monitorModel{
+		ID:                 types.StringValue("monitor-1"),
+		PoolID:             types.StringValue("pool-5"),
+		Type:               types.StringValue("HTTP"),
+		Delay:              types.Int64Value(5),
+		Timeout:            types.Int64Value(3),
+		MaxRetries:         types.Int64Value(3),
+		MaxRetriesDown:     types.Int64Value(3),
+		HTTPMethod:         types.StringNull(),
+		URLPath:            types.StringNull(),
+		ExpectedCodes:      types.StringNull(),
+		Name:               types.StringNull(),
+		AdminStateUp:       types.BoolValue(true),
+		Tags:               types.SetNull(types.StringType),
+		ProvisioningStatus: types.StringNull(),
+		OperatingStatus:    types.StringNull(),
+		Region:             types.StringNull(),
+	})
+
+	resp := resource.DeleteResponse{State: state}
+	r.Delete(ctx, resource.DeleteRequest{State: state}, &resp)
+
+	mu.Lock()
+	called := deleteCalled
+	mu.Unlock()
+	if !called {
+		t.Fatal("monitor delete never issued DELETE /v2.0/lbaas/healthmonitors/monitor-1")
+	}
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("delete succeeded against Octavia but was reported as failed: %v", resp.Diagnostics)
 	}
 }

@@ -301,8 +301,7 @@ func (r *listenerResource) Delete(ctx context.Context, req resource.DeleteReques
 	}
 
 	lbID := state.LoadbalancerID.ValueString()
-	if err := waitForLoadBalancerActive(ctx, client, lbID, defaultLBTimeout); err != nil {
-		resp.Diagnostics.AddError("loadbalancer: waiting before listener delete", err.Error())
+	if !settleForChildDelete(ctx, client, lbID, "listener", "before", &resp.Diagnostics) {
 		return
 	}
 	if err := listeners.Delete(ctx, client, state.ID.ValueString()).ExtractErr(); err != nil {
@@ -312,9 +311,7 @@ func (r *listenerResource) Delete(ctx context.Context, req resource.DeleteReques
 		resp.Diagnostics.AddError("loadbalancer: deleting listener", err.Error())
 		return
 	}
-	if err := waitForLoadBalancerActive(ctx, client, lbID, defaultLBTimeout); err != nil {
-		resp.Diagnostics.AddError("loadbalancer: waiting after listener delete", err.Error())
-	}
+	settleForChildDelete(ctx, client, lbID, "listener", "after", &resp.Diagnostics)
 }
 
 func (r *listenerResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
