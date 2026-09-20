@@ -18,6 +18,16 @@ All notable changes to this project are documented here. The format is based on
   `pcd_images_image` for its full thirty-minute timeout. The section gives the commands for both,
   how to confirm they took, and the orphans a hung apply leaves outside Terraform state. Verified
   on a Community Edition 2026.4 lab.
+- **The Community Edition example's tenant networks boot.** Its blueprint used a VLAN underlay,
+  which makes every tenant network a VLAN on the physical-network label of the tunneling
+  interface. resmgr keeps a label after the host configuration that defined it is deleted and
+  gives the VLAN range to only one of the labels it has on the tunnel bridge, so in a region where
+  another host configuration had come and gone, tenant networks landed on a label the host did not
+  map and instances failed with `PortBindingFailed`. The example now sets
+  `underlay_type = "geneve"`: tenant networks are overlays on the tunneling interface and need no
+  label and no VLANs on the switch. The guide explains both underlays.
+- `pcd_cluster_blueprint`: `underlay_type` lists the values resmgr accepts (`vlan`, `vxlan`,
+  `geneve`); it said `vlan` or `other`.
 
 ## [0.1.13] - 2026-09-19
 

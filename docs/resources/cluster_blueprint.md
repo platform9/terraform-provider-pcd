@@ -95,7 +95,7 @@ resource "pcd_cluster_blueprint" "example" {
 Optional:
 
 - `enabled` (Boolean) Whether virtual networking is enabled.
-- `underlay_type` (String) The underlay type: `vlan` or `other`.
+- `underlay_type` (String) How tenant networks are carried between hosts: `vlan`, `vxlan`, or `geneve`.
 - `vnid_range` (String) The VLAN/VNI segmentation ID range (e.g. `1000:2000`).
 
 ## Import
