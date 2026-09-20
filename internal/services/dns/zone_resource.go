@@ -26,6 +26,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -125,13 +126,29 @@ func (r *zoneResource) Create(ctx context.Context, req resource.CreateRequest, r
 		resp.Diagnostics.AddError("dns: creating zone", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(zone.ID)
+	// Designate keeps a zone whose build fails (status ERROR), so record it
+	// before the wait, which is the step that gives up on it.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
+
 	if err := waitForZoneActive(ctx, client, zone.ID, defaultDNSTimeout); err != nil {
 		resp.Diagnostics.AddError("dns: waiting for zone to become active", err.Error())
 		return
 	}
 
-	_, readDiags := r.readInto(ctx, client, zone.ID, &plan)
+	notFound, readDiags := r.readInto(ctx, client, zone.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("dns: reading zone after create",
+			fmt.Sprintf("Zone %s no longer exists.", zone.ID))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

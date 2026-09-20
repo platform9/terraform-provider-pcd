@@ -171,3 +171,133 @@ func TestRecordSetCreateKeepsARecordSetThatFailedToBuild(t *testing.T) {
 		t.Fatalf("delete returned after %d polls; want it to wait out the ERROR status until Designate answers 404", getsAfterDelete)
 	}
 }
+
+// A zone whose build ends in ERROR stays in Designate. Create used to return
+// without state, so Terraform forgot the zone, the next apply created another,
+// and the first had to be deleted by hand. Create must return the error with
+// the zone in state (Terraform then taints it), and the refresh and delete a
+// destroy runs must remove the zone even though Designate still reports ERROR
+// on the first poll after the DELETE is accepted.
+func TestZoneCreateKeepsAZoneThatFailedToBuild(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const zoneJSON = `{"id": "zone-1", "name": "tf-acc-failed.example.com.",
+		"email": "dns@example.com", "type": "PRIMARY", "ttl": 3600, "description": "",
+		"status": "ERROR", "action": "CREATE", "serial": 1, "pool_id": "pool-1",
+		"project_id": "proj-1", "attributes": {}, "masters": []}`
+
+	var mu sync.Mutex
+	deleteCalled, getsAfterDelete := false, 0
+	designate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v2/zones":
+			// Designate answers 201 or 202; the zone is bare, with no wrapper key.
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprint(w, `{"id": "zone-1", "name": "tf-acc-failed.example.com.",
+				"status": "PENDING", "action": "CREATE"}`)
+		case "GET /v2/zones/zone-1":
+			if deleteCalled {
+				getsAfterDelete++
+				// The first poll after the DELETE still reports ERROR: the delete
+				// waiter must poll through it rather than bail.
+				if getsAfterDelete > 1 {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+			}
+			fmt.Fprint(w, zoneJSON)
+		case "DELETE /v2/zones/zone-1":
+			// zones.Delete accepts 202 only, and decodes the body, so an empty
+			// body fails with io.EOF.
+			deleteCalled = true
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprint(w, `{"id": "zone-1", "status": "PENDING", "action": "DELETE"}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer designate.Close()
+
+	r := &zoneResource{config: fakeConfig(designate.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+	s := sch.Schema
+
+	// No attribute in the zone schema carries a static default, so every
+	// Optional+Computed attribute the config does not set is unknown here.
+	planned := zoneModel{
+		ID:          types.StringUnknown(),
+		Name:        types.StringValue("tf-acc-failed.example.com."),
+		Type:        types.StringValue("PRIMARY"),
+		Email:       types.StringValue("dns@example.com"),
+		TTL:         types.Int64Unknown(),
+		Description: types.StringUnknown(),
+		Masters:     types.ListUnknown(types.StringType),
+		Attributes:  types.MapUnknown(types.StringType),
+		Serial:      types.Int64Unknown(),
+		Status:      types.StringUnknown(),
+		PoolID:      types.StringUnknown(),
+		ProjectID:   types.StringUnknown(),
+		Region:      types.StringUnknown(),
+	}
+	plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+	if d := plan.Set(ctx, &planned); d.HasError() {
+		t.Fatalf("building the plan: %v", d)
+	}
+
+	createResp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+	r.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("create succeeded; want the ERROR status reported")
+	}
+	if createResp.State.Raw.IsNull() {
+		t.Fatal("create returned no state: Terraform forgets zone-1 and the next apply creates a second zone")
+	}
+	if !createResp.State.Raw.IsFullyKnown() {
+		t.Fatalf("create state holds unknown values, which Terraform refuses: %v", createResp.State.Raw)
+	}
+	var got zoneModel
+	if d := createResp.State.Get(ctx, &got); d.HasError() {
+		t.Fatalf("reading the create state: %v", d)
+	}
+	if got.ID.ValueString() != "zone-1" || got.Name.ValueString() != "tf-acc-failed.example.com." {
+		t.Fatalf("create state id=%s name=%s; want zone-1, tf-acc-failed.example.com.", got.ID, got.Name)
+	}
+	if !got.Status.IsNull() {
+		t.Fatalf("create state status = %s; want null, since Designate has not reported it yet", got.Status)
+	}
+
+	// terraform destroy (or the replacing apply) refreshes the tainted zone first.
+	readResp := resource.ReadResponse{State: createResp.State}
+	r.Read(ctx, resource.ReadRequest{State: createResp.State}, &readResp)
+	if readResp.Diagnostics.HasError() {
+		t.Fatalf("refresh of the failed zone: %v", readResp.Diagnostics)
+	}
+	if d := readResp.State.Get(ctx, &got); d.HasError() {
+		t.Fatalf("reading the refreshed state: %v", d)
+	}
+	if got.Status.ValueString() != "ERROR" {
+		t.Fatalf("refreshed status = %s, want ERROR", got.Status)
+	}
+	if got.Region.ValueString() != "region-one" {
+		t.Fatalf("refreshed region = %s, want region-one backfilled from the provider config", got.Region)
+	}
+
+	deleteResp := resource.DeleteResponse{State: readResp.State}
+	r.Delete(ctx, resource.DeleteRequest{State: readResp.State}, &deleteResp)
+	if deleteResp.Diagnostics.HasError() {
+		t.Fatalf("delete of a zone in ERROR: %v", deleteResp.Diagnostics)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !deleteCalled {
+		t.Fatal("delete never called DELETE /v2/zones/zone-1")
+	}
+	if getsAfterDelete < 2 {
+		t.Fatalf("delete returned after %d polls; want it to poll through the ERROR status until Designate answers 404", getsAfterDelete)
+	}
+}

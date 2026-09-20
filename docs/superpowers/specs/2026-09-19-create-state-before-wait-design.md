@@ -5,13 +5,16 @@
 **Branch:** `pushkar/create-state-before-wait`, stacked on `pushkar/instance-failed-create`
 **Scope:** `internal/tfstate` (new), `internal/services/compute/instance_resource.go`,
 `internal/services/blockstorage/{volume,snapshot,backup}_resource.go`,
-`internal/services/images/image_resource.go`, their tests, and `CHANGELOG.md`
+`internal/services/images/image_resource.go`, `internal/services/dns/zone_resource.go`
+(`pcd_dns_zone`; its delete waiter, `waitForZoneDeleted` in `internal/services/dns/dns.go`,
+was relaxed alongside the create-state fix so a zone abandoned in `ERROR` by a failed create
+can still be deleted), their tests, and `CHANGELOG.md`
 
 ## Problem
 
 Four resources call their service's create, then wait for a target status, and return the wait's
 error without saving state. They are the four this change fixes, not the only resources with this
-problem — eight more have it too (see **Other resources with the same gap** near the end):
+problem — seven more have it too (see **Other resources with the same gap** near the end):
 
 | Resource | Wait call in `Create` | Wait |
 | --- | --- | --- |
@@ -178,11 +181,10 @@ improvement in that case: Terraform at least knows the object exists.
 
 ## Other resources with the same gap
 
-Eight more resources call their service's create and then wait for a target status without saving
+Seven more resources call their service's create and then wait for a target status without saving
 state first — the same gap the **Problem** section above describes for the four resources this
-change fixes. None of the eight are touched by this change; fixing them is separate follow-up work.
+change fixes. None of the seven are touched by this change; fixing them is separate follow-up work.
 
-- `pcd_dns_zone` — `internal/services/dns/zone_resource.go:128`
 - `pcd_dns_recordset` — `internal/services/dns/recordset_resource.go:116`
 - `pcd_loadbalancer_loadbalancer` — `internal/services/loadbalancer/loadbalancer_resource.go:143`
 - `pcd_loadbalancer_listener` — `internal/services/loadbalancer/listener_resource.go:161` (the wait

@@ -65,6 +65,18 @@ All notable changes to this project are documented here. The format is based on
   go active, the provider still deletes the image it created, but it now keeps the image in state
   if that deletion fails, so a destroy or the next apply retries it instead of the image being left
   behind.
+- `pcd_dns_zone`: a zone whose create wait gives up now stays in state. Designate keeps a zone
+  whose build fails (status `ERROR`), and it keeps one abandoned in `PENDING` by a ten-minute
+  timeout or an interrupted apply. The apply still fails with the Designate status, and Terraform
+  marks the zone tainted, so the next apply deletes and recreates it and a destroy deletes it.
+  Before, the failed apply left no state: Terraform lost track of a zone Designate kept, the next
+  apply created a second one with the same name, and the first had to be deleted through the API.
+  The attributes Designate had not reported when the build failed are saved empty until the next
+  refresh. Destroying such a zone also used to fail: the delete wait treated `ERROR` as a delete
+  failure on its very first poll, even though the `DELETE` had already been accepted, so the
+  destroy reported an error and kept the zone in state. It now polls through an `ERROR` the delete
+  inherited and reports one the zone enters while being deleted, and a delete that times out names
+  the last status it saw.
 
 ### Documentation
 
