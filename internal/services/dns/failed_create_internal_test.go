@@ -5,11 +5,14 @@ package dns
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -299,5 +302,116 @@ func TestZoneCreateKeepsAZoneThatFailedToBuild(t *testing.T) {
 	}
 	if getsAfterDelete < 2 {
 		t.Fatalf("delete returned after %d polls; want it to poll through the ERROR status until Designate answers 404", getsAfterDelete)
+	}
+}
+
+// The next two tests drive waitForZoneDeleted directly, bypassing
+// Create/Read/Delete, so each pins exactly one of the latch's three required
+// cases (the third, ERROR-then-non-error-then-404, is already exercised end
+// to end by TestZoneCreateKeepsAZoneThatFailedToBuild above).
+
+// Case 1: a healthy zone whose delete genuinely fails. The first poll sees a
+// normal in-progress status, latching seenNonError, and a later ERROR must
+// still fail fast with the existing message. TestZoneCreateKeepsAZoneThat-
+// FailedToBuild never puts a non-ERROR status before an ERROR one, so it
+// cannot catch a regression here: simplifying the waiter to an unconditional
+// poll to 404/timeout (the design's rejected Option A) would pass that test
+// unchanged while turning this case into a ten-minute timeout.
+func TestWaitForZoneDeletedFailsFastWhenAHealthyZoneEntersError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	gets := 0
+	designate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2/zones/zone-1":
+			gets++
+			status := "ERROR"
+			if gets == 1 {
+				// The first poll finds the zone still on its way out: a
+				// normal, non-ERROR in-progress status.
+				status = "PENDING_DELETE"
+			}
+			fmt.Fprintf(w, `{"id": "zone-1", "name": "healthy.example.com.", "status": %q, "action": "DELETE"}`, status)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer designate.Close()
+
+	client, err := fakeConfig(designate.URL).DNSV2Client()
+	if err != nil {
+		t.Fatalf("building the fake DNS client: %v", err)
+	}
+
+	start := time.Now()
+	err = waitForZoneDeleted(ctx, client, "zone-1", 5*time.Second)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("waitForZoneDeleted succeeded; want the ERROR entered during delete reported")
+	}
+	if !strings.Contains(err.Error(), "entered ERROR status during delete") {
+		t.Fatalf("error = %v; want it to name the ERROR-during-delete failure", err)
+	}
+	if elapsed >= 4*time.Second {
+		t.Fatalf("waitForZoneDeleted took %s to fail; want it to fail on the poll right after "+
+			"PENDING_DELETE, well inside the 5s timeout -- a waiter polled through instead of "+
+			"latched would take the full timeout", elapsed)
+	}
+}
+
+// Case 3: a zone the failed create wait already abandoned in ERROR, whose
+// backend delete then also fails, so it never leaves ERROR. Unlike case 1,
+// there is no "during delete" transition to report -- the zone was already
+// broken when the delete began -- so this must not fail fast, and it must
+// eventually time out rather than being wedged forever the way the
+// unconditional pre-fix bail wedged it (see the reverted-bail negative
+// control in the task report; that is a different regression from case 1's
+// and does not exercise the same code path this test does).
+func TestWaitForZoneDeletedTimesOutRatherThanWedgingOnPersistentError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	designate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2/zones/zone-1":
+			// The zone never leaves ERROR: the backend refuses the delete.
+			fmt.Fprint(w, `{"id": "zone-1", "name": "wedged.example.com.", "status": "ERROR", "action": "DELETE"}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer designate.Close()
+
+	client, err := fakeConfig(designate.URL).DNSV2Client()
+	if err != nil {
+		t.Fatalf("building the fake DNS client: %v", err)
+	}
+
+	start := time.Now()
+	err = waitForZoneDeleted(ctx, client, "zone-1", 2*time.Second)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("waitForZoneDeleted succeeded; want the persistent ERROR to time out the delete")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v; want it to wrap context.DeadlineExceeded", err)
+	}
+	if strings.Contains(err.Error(), "entered ERROR status during delete") {
+		t.Fatalf("error = %v; a zone already in ERROR before the delete began must not report "+
+			`"entered ERROR status during delete" -- it was never seen leaving ERROR`, err)
+	}
+	if !strings.Contains(err.Error(), `last status "ERROR"`) {
+		t.Fatalf("error = %v; want the timeout to name the last observed status", err)
+	}
+	if elapsed < 2*time.Second {
+		t.Fatalf("waitForZoneDeleted returned after %s, before its own 2s timeout elapsed", elapsed)
 	}
 }
