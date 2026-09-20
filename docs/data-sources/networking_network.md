@@ -34,5 +34,6 @@ data "pcd_networking_network" "example" {
 - `description` (String) The network description.
 - `external` (Boolean) Whether the network is external.
 - `id` (String) The network ID.
+- `mtu` (Number) The network's MTU, as PCD assigned or as it was set. Compare it with the host interface's MTU: a network claiming more than the interface carries drops large packets silently.
 - `port_security_enabled` (Boolean) Whether port security is enforced on ports of this network. `false` on a Layer 2 / "Simple" network.
 - `shared` (Boolean) Whether the network is shared.

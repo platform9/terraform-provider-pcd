@@ -34,6 +34,12 @@ variable "allocation_pool_end" {
   description = "Last address PCD may hand to an instance."
 }
 
+variable "network_mtu" {
+  type        = number
+  default     = null
+  description = "The MTU of the workload network. Leave null to take PCD's own default (9000 for a flat network on Community Edition 2026.4), and set it to the host interface's MTU (usually 1500) when the interface carries less than that."
+}
+
 variable "dns_nameservers" {
   type        = list(string)
   description = "Nameservers instances receive over DHCP."

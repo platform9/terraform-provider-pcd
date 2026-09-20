@@ -63,6 +63,7 @@ resource "pcd_networking_network" "l2" {
 - `admin_state_up` (Boolean) The administrative state of the network.
 - `description` (String) A description of the network.
 - `external` (Boolean) Whether the network has an external routing facility.
+- `mtu` (Number) The network's MTU. Left unset, PCD assigns one from the region's own Neutron configuration, which on Community Edition 2026.4 is 9000 for flat and VLAN networks and 8942 for Geneve — the PCD UI, which sends an MTU of its own, produces different values for the same network. That default can exceed what the host's interface actually carries, and the mismatch is silent: small packets and ordinary TCP work while large datagrams are dropped on the way out of the host. Compare it with the interface (`ip link show <iface>`) and set this explicitly when they differ. Neutron rejects a value above the deployment's maximum. Instances already attached to the network keep the old MTU until their ports are re-attached (a hard reboot).
 - `name` (String) The name of the network.
 - `port_security_enabled` (Boolean) Whether port security (security groups and anti-spoofing) is enforced on ports of this network. Defaults to `true`. Set `false` for a Layer 2 / "Simple" network, where the VM manages its own addressing and security groups do not apply — mirrors the PCD UI's Simple Network option.
 - `region` (String) The region. Defaults to the provider's region.

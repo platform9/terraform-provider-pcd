@@ -14,6 +14,7 @@ import (
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/external"
+	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/mtu"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/portsecurity"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/provider"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/networks"
@@ -58,6 +59,7 @@ type networkModel struct {
 	Region       types.String `tfsdk:"region"`
 	Segments     types.List   `tfsdk:"segments"`
 	PortSecurity types.Bool   `tfsdk:"port_security_enabled"`
+	MTU          types.Int64  `tfsdk:"mtu"`
 }
 
 type segmentModel struct {
@@ -72,6 +74,7 @@ type networkExtended struct {
 	networks.Network
 	external.NetworkExternalExt
 	portsecurity.PortSecurityExt
+	mtu.NetworkMTUExt
 }
 
 func (r *networkResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -102,6 +105,16 @@ func (r *networkResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				MarkdownDescription: "Whether port security (security groups and anti-spoofing) is enforced on ports of this network. " +
 					"Defaults to `true`. Set `false` for a Layer 2 / \"Simple\" network, where the VM manages its own addressing and " +
 					"security groups do not apply — mirrors the PCD UI's Simple Network option.",
+			},
+			"mtu": schema.Int64Attribute{
+				Optional: true, Computed: true,
+				MarkdownDescription: "The network's MTU. Left unset, PCD assigns one from the region's own Neutron configuration, " +
+					"which on Community Edition 2026.4 is 9000 for flat and VLAN networks and 8942 for Geneve — the PCD UI, which " +
+					"sends an MTU of its own, produces different values for the same network. That default can exceed what the host's " +
+					"interface actually carries, and the mismatch is silent: small packets and ordinary TCP work while large datagrams " +
+					"are dropped on the way out of the host. Compare it with the interface (`ip link show <iface>`) and set this " +
+					"explicitly when they differ. Neutron rejects a value above the deployment's maximum. Instances already attached " +
+					"to the network keep the old MTU until their ports are re-attached (a hard reboot).",
 			},
 			"segments": schema.ListNestedAttribute{
 				Optional: true,
@@ -196,6 +209,9 @@ func (r *networkResource) Create(ctx context.Context, req resource.CreateRequest
 	if !plan.PortSecurity.IsNull() && !plan.PortSecurity.IsUnknown() {
 		ps := plan.PortSecurity.ValueBool()
 		createOpts = portsecurity.NetworkCreateOptsExt{CreateOptsBuilder: createOpts, PortSecurityEnabled: &ps}
+	}
+	if !plan.MTU.IsNull() && !plan.MTU.IsUnknown() {
+		createOpts = mtu.CreateOptsExt{CreateOptsBuilder: createOpts, MTU: int(plan.MTU.ValueInt64())}
 	}
 	if !plan.Segments.IsNull() && !plan.Segments.IsUnknown() {
 		var segs []segmentModel
@@ -296,6 +312,11 @@ func (r *networkResource) Update(ctx context.Context, req resource.UpdateRequest
 		ps := plan.PortSecurity.ValueBool()
 		updateOpts = portsecurity.NetworkUpdateOptsExt{UpdateOptsBuilder: updateOpts, PortSecurityEnabled: &ps}
 	}
+	// The extension omits the key when MTU is 0, so an MTU cannot be cleared
+	// back to the deployment's default once set; Neutron keeps the last value.
+	if !plan.MTU.Equal(state.MTU) && !plan.MTU.IsNull() && !plan.MTU.IsUnknown() {
+		updateOpts = mtu.UpdateOptsExt{UpdateOptsBuilder: updateOpts, MTU: int(plan.MTU.ValueInt64())}
+	}
 
 	if _, err := networks.Update(ctx, client, plan.ID.ValueString(), updateOpts).Extract(); err != nil {
 		resp.Diagnostics.AddError("networking: updating network", err.Error())
@@ -366,6 +387,7 @@ func (r *networkResource) readInto(ctx context.Context, client *gophercloud.Serv
 	m.External = types.BoolValue(n.External)
 	m.PortSecurity = types.BoolValue(n.PortSecurityEnabled)
 	m.TenantID = types.StringValue(n.TenantID)
+	m.MTU = types.Int64Value(int64(n.MTU))
 
 	tagVals := n.Tags
 	if tagVals == nil {

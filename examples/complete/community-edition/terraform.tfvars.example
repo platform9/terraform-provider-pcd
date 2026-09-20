@@ -15,3 +15,8 @@ network_cidr          = "192.168.1.0/24"
 network_gateway       = "192.168.1.1"
 allocation_pool_start = "192.168.1.200"
 allocation_pool_end   = "192.168.1.220"
+
+# The MTU instances should use. Set it to the host NIC's MTU (ip link show
+# <iface>) unless your network carries jumbo frames; PCD's own default is
+# larger, and instances silently lose large packets when it exceeds the NIC's.
+# network_mtu = 1500

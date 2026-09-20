@@ -42,6 +42,8 @@ func TestAccNetworkingNetworkAndSubnet_basic(t *testing.T) {
 					resource.TestCheckResourceAttr(subName, "enable_dhcp", "true"),
 					resource.TestCheckResourceAttrSet(subName, "gateway_ip"),
 					resource.TestCheckResourceAttrPair(subName, "network_id", netName, "id"),
+					// Unset, the MTU is whatever the region's Neutron assigns.
+					resource.TestCheckResourceAttrSet(netName, "mtu"),
 				),
 			},
 			{
@@ -52,6 +54,43 @@ func TestAccNetworkingNetworkAndSubnet_basic(t *testing.T) {
 			{ResourceName: subName, ImportState: true, ImportStateVerify: true},
 		},
 	})
+}
+
+// TestAccNetworkingNetwork_mtu sets an MTU explicitly, then lowers it. PCD
+// derives a default MTU from the region's own Neutron configuration, which can
+// exceed what the host's interface carries, so a configuration has to be able
+// to state the MTU it wants.
+func TestAccNetworkingNetwork_mtu(t *testing.T) {
+	const netName = "pcd_networking_network.test"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckNetworkDestroy(t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccNetworkMTUConfig("tf-acc-net-mtu", 1500),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckNetworkExists(t, netName),
+					resource.TestCheckResourceAttr(netName, "mtu", "1500"),
+				),
+			},
+			{
+				Config: testAccNetworkMTUConfig("tf-acc-net-mtu", 1400),
+				Check:  resource.TestCheckResourceAttr(netName, "mtu", "1400"),
+			},
+			{ResourceName: netName, ImportState: true, ImportStateVerify: true},
+		},
+	})
+}
+
+func testAccNetworkMTUConfig(netName string, mtu int) string {
+	return fmt.Sprintf(`
+resource "pcd_networking_network" "test" {
+  name = %q
+  mtu  = %d
+}
+`, netName, mtu)
 }
 
 func testAccNetworkSubnetConfig(netName, cidr string) string {
