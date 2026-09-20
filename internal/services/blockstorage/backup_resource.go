@@ -110,6 +110,11 @@ func (r *backupResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
+	plan.ID = types.StringValue(backup.ID)
+	if !recordCreated(ctx, resp, &plan) {
+		return
+	}
+
 	final, err := waitForBackupStatus(ctx, client, backup.ID, "available", 30*time.Minute)
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: waiting for backup to become available", err.Error())
