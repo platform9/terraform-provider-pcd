@@ -154,9 +154,12 @@ resource "pcd_cluster_blueprint" "region" {
   name            = var.blueprint_name
   dns_domain_name = var.dns_domain_name
 
+  # Tenant networks are Geneve overlays carried over the host's tunneling
+  # interface, each with an ID from vnid_range, so they need no
+  # physical-network label and no VLANs on the switch.
   virtual_networking = {
     enabled       = true
-    underlay_type = "vlan"
+    underlay_type = "geneve"
     vnid_range    = "1000:2000"
   }
 
@@ -265,7 +268,16 @@ resource "pcd_host_cluster_role" "storage" {
 }
 ```
 
-Three things in this file are worth understanding before you change it.
+Four things in this file are worth understanding before you change it.
+
+**How tenant networks travel.** `virtual_networking` decides what a network
+created without `segments` (a tenant network) becomes. With `underlay_type =
+"geneve"`, each one is an overlay tunneled over the host configuration's
+`tunneling_interface`, with an ID from `vnid_range`, so it needs no
+physical-network label and no VLANs on the switch. With `"vlan"`, each one is
+instead a VLAN from `vnid_range` on the physical-network label the host
+configuration puts on its tunneling interface (`physnet1` here), and the switch
+ports between hosts must carry those VLANs.
 
 **Three names, and what each becomes.** `storage_backends_json` has two levels
 of keys. The top-level key (`nfs`) is the backend name: on the host it becomes

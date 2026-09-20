@@ -87,7 +87,7 @@ func (r *blueprintResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				PlanModifiers:       objUseState,
 				Attributes: map[string]schema.Attribute{
 					"enabled":       schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Whether virtual networking is enabled."},
-					"underlay_type": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The underlay type: `vlan` or `other`."},
+					"underlay_type": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "How tenant networks are carried between hosts: `vlan`, `vxlan`, or `geneve`."},
 					"vnid_range":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The VLAN/VNI segmentation ID range (e.g. `1000:2000`)."},
 				},
 			},

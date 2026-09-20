@@ -28,9 +28,12 @@ resource "pcd_cluster_blueprint" "region" {
   name            = var.blueprint_name
   dns_domain_name = var.dns_domain_name
 
+  # Tenant networks are Geneve overlays carried over the host's tunneling
+  # interface, each with an ID from vnid_range, so they need no
+  # physical-network label and no VLANs on the switch.
   virtual_networking = {
     enabled       = true
-    underlay_type = "vlan"
+    underlay_type = "geneve"
     vnid_range    = "1000:2000"
   }
 

@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+
+- **The Community Edition example's tenant networks boot.** Its blueprint used a VLAN underlay,
+  which makes every tenant network a VLAN on the physical-network label of the tunneling
+  interface. resmgr keeps a label after the host configuration that defined it is deleted and
+  gives the VLAN range to only one of the labels it has on the tunnel bridge, so in a region where
+  another host configuration had come and gone, tenant networks landed on a label the host did not
+  map and instances failed with `PortBindingFailed`. The example now sets
+  `underlay_type = "geneve"`: tenant networks are overlays on the tunneling interface and need no
+  label and no VLANs on the switch. The guide explains both underlays.
+- `pcd_cluster_blueprint`: `underlay_type` lists the values resmgr accepts (`vlan`, `vxlan`,
+  `geneve`); it said `vlan` or `other`.
+
 ## [0.1.12] - 2026-09-17
 
 ### Added
