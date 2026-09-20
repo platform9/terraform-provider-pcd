@@ -32,5 +32,18 @@ deleted image's backing volume (`image-<id>`, in the service project) still
 exists, so delete that volume with `pcdctl volume delete` between runs; and it
 refuses the cluster and the host-configuration unassignment while a role's
 deauthorization is still landing (`HostClusterDeleteFailed`,
-`HostInAuthState`). The guide's Destroy section walks through it. The host
-stays authorized and can be onboarded again.
+`HostInAuthState`). The guide's Destroy section walks through it.
+
+The host stays authorized, but it is not back to the state the first apply
+found: two things a destroy leaves on the host refuse the next onboarding.
+Delete the OVS bridges the roles left behind and re-apply the host's network
+configuration (`sudo ovs-vsctl --if-exists del-br <bridge>` for each bridge
+`sudo ovs-vsctl list-br` prints, then `sudo netplan apply`), so the management
+address returns from `br-tun` to the interface; without it the next
+`pcd_host_config_assignment` is refused with `404 HostIntfIpNotFound: Interface
+enp1s0 is missing an IP`. Then re-enable the volume service the storage
+deauthorization disabled, `pcdctl volume service set --enable
+<host-uuid>@nfs-primary cinder-volume`; without it every volume lands in `error`
+and the apply hangs on `pcd_images_image.cirros` for the provider's
+thirty-minute image timeout. The guide's "Before onboarding the host again"
+section has the checks and the cleanup a hung apply needs.
