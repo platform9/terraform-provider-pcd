@@ -36,6 +36,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -187,10 +188,23 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 
+	plan.ID = types.StringValue(img.ID)
+	// Glance holds the image from here on, before any data is loaded into it, so
+	// record it now. A failed or interrupted upload, import, or wait then returns
+	// its error with the image in state, Terraform marks it tainted, and the next
+	// apply or a destroy deletes it instead of leaving it behind and creating
+	// another. The attributes Glance has not reported yet are saved as null; the
+	// next refresh reads them.
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	// Load image data, then wait for it to become active.
 	if localPath != "" {
 		if err := r.uploadLocalFile(ctx, client, img.ID, localPath, plan.VerifyChecksum.ValueBool()); err != nil {
-			_ = images.Delete(ctx, client, img.ID).ExtractErr()
+			deleteCreatedImage(ctx, client, img.ID, resp)
 			resp.Diagnostics.AddError("images: uploading image data", err.Error())
 			return
 		}
@@ -199,7 +213,7 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 			Name: imageimport.WebDownloadMethod,
 			URI:  sourceURL,
 		}).ExtractErr(); err != nil {
-			_ = images.Delete(ctx, client, img.ID).ExtractErr()
+			deleteCreatedImage(ctx, client, img.ID, resp)
 			resp.Diagnostics.AddError("images: starting web-download import", err.Error())
 			return
 		}
@@ -216,6 +230,17 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 
 	resp.Diagnostics.Append(r.flatten(ctx, img, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+// deleteCreatedImage removes an image Create made but could not load data into,
+// and takes it back out of state when Glance confirms it is gone. A delete that
+// fails leaves the state in place: the image is still in Glance, so Terraform
+// taints it and a destroy retries the deletion rather than orphaning it.
+func deleteCreatedImage(ctx context.Context, client *gophercloud.ServiceClient, id string, resp *resource.CreateResponse) {
+	err := images.Delete(ctx, client, id).ExtractErr()
+	if err == nil || gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+		resp.State.RemoveResource(ctx)
+	}
 }
 
 func (r *imageResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
