@@ -217,7 +217,7 @@ func settleForChildDelete(ctx context.Context, client *gophercloud.ServiceClient
 	}
 	if status == lbError {
 		diags.AddWarning("Load balancer in ERROR provisioning status",
-			fmt.Sprintf("Load balancer %s is in ERROR provisioning status. Octavia will likely refuse to delete "+
+			fmt.Sprintf("Load balancer %s is in ERROR provisioning status. Octavia will refuse to delete "+
 				"the %s while the load balancer remains in this state. Repair or delete the load balancer and "+
 				"retry the destroy.", lbID, child))
 	}
