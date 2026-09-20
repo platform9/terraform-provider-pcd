@@ -43,6 +43,7 @@ type networkDataSourceModel struct {
 	External     types.Bool   `tfsdk:"external"`
 	PortSecurity types.Bool   `tfsdk:"port_security_enabled"`
 	DNSDomain    types.String `tfsdk:"dns_domain"`
+	MTU          types.Int64  `tfsdk:"mtu"`
 	TenantID     types.String `tfsdk:"tenant_id"`
 	Region       types.String `tfsdk:"region"`
 }
@@ -64,6 +65,7 @@ func (d *networkDataSource) Schema(_ context.Context, _ datasource.SchemaRequest
 			"external":              schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether the network is external."},
 			"port_security_enabled": schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether port security is enforced on ports of this network. `false` on a Layer 2 / \"Simple\" network."},
 			"dns_domain":            schema.StringAttribute{Computed: true, MarkdownDescription: "The Designate zone the network's ports publish records to; `\"\"` when none."},
+			"mtu":                   schema.Int64Attribute{Computed: true, MarkdownDescription: "The network's MTU, as PCD assigned or as it was set. Compare it with the host interface's MTU: a network claiming more than the interface carries drops large packets silently."},
 			"tenant_id":             schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Filter by (and report) the owning project."},
 			"region":                schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region."},
 		},
@@ -130,6 +132,7 @@ func (d *networkDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	data.External = types.BoolValue(n.External)
 	data.PortSecurity = types.BoolValue(n.PortSecurityEnabled)
 	data.DNSDomain = types.StringValue(n.DNSDomain)
+	data.MTU = types.Int64Value(int64(n.MTU))
 	data.TenantID = types.StringValue(n.TenantID)
 	if data.Region.IsNull() || data.Region.IsUnknown() {
 		data.Region = types.StringValue(d.config.Region)

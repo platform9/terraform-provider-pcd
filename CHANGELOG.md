@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`mtu` on `pcd_networking_network`**, and as a computed attribute of the matching data source, so a
+  configuration can state the MTU a network should have instead of accepting the one PCD derives. PCD gives a
+  network created through its API an MTU from the region's own Neutron configuration — on Community Edition
+  2026.4, 9000 for flat and VLAN networks and 8942 for Geneve, values no PCD setting can change per region —
+  while the PCD UI sends an MTU of its own, so the same network made in the UI differs. When the host's
+  interface carries less than that, the mismatch is silent: instances lease addresses, answer ping and serve
+  ordinary TCP, while larger datagrams are dropped on the way out of the host with nothing in any log.
+  Measured on a Community Edition 2026.4 lab whose NIC runs at 1500: a guest configured by DHCP at MTU 9000
+  reached another instance on the same host at every size up to 8000 bytes, but off the host it lost 100% of
+  packets from 1473 bytes upward while 1472 passed, and the hypervisor logged
+  `enp1s0: dropped over-mtu packet: 8028 > 1500`. Leaving the attribute unset keeps PCD's default, so existing
+  configurations are unaffected. An MTU cannot be cleared back to that default once set, and instances already
+  attached keep the MTU they booted with until they are hard rebooted. The Community Edition example takes a
+  `network_mtu` variable (unset by default) and its guide explains how to compare the two values.
+
 ### Fixed
 
 - `pcd_compute_instance`: an instance whose build fails after Nova accepts it (status `ERROR`,
@@ -29,6 +46,16 @@ All notable changes to this project are documented here. The format is based on
   `pcd_images_image` for its full thirty-minute timeout. The section gives the commands for both,
   how to confirm they took, and the orphans a hung apply leaves outside Terraform state. Verified
   on a Community Edition 2026.4 lab.
+- **The Community Edition example's tenant networks boot.** Its blueprint used a VLAN underlay,
+  which makes every tenant network a VLAN on the physical-network label of the tunneling
+  interface. resmgr keeps a label after the host configuration that defined it is deleted and
+  gives the VLAN range to only one of the labels it has on the tunnel bridge, so in a region where
+  another host configuration had come and gone, tenant networks landed on a label the host did not
+  map and instances failed with `PortBindingFailed`. The example now sets
+  `underlay_type = "geneve"`: tenant networks are overlays on the tunneling interface and need no
+  label and no VLANs on the switch. The guide explains both underlays.
+- `pcd_cluster_blueprint`: `underlay_type` lists the values resmgr accepts (`vlan`, `vxlan`,
+  `geneve`); it said `vlan` or `other`.
 
 ## [0.1.13] - 2026-09-19
 
