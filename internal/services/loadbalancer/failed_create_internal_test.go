@@ -684,3 +684,185 @@ func TestMonitorDeleteReportsNoErrorWhenRootGoesErrorAfterASuccessfulDelete(t *t
 		t.Fatalf("delete succeeded against Octavia but was reported as failed: %v", resp.Diagnostics)
 	}
 }
+
+// The following two tests drive Create down the path
+// TestLoadBalancerCreateKeepsALoadBalancerThatFailedToBuild doesn't reach: the
+// status wait succeeds (ACTIVE), and the read-back that follows it is what
+// fails. readInto returns without touching its model argument on both a 404
+// and a non-404 error, so a Create that unconditionally sets state from the
+// plan afterward would write back the plan's own unknown values on top of the
+// clean, fully-known row RecordCreated already wrote -- a state Terraform
+// refuses. The guard must instead: on a 404, report the error and remove the
+// resource (nothing is left to keep); on any other error, report it and leave
+// the recorded row in place (the load balancer still exists).
+
+// A load balancer create whose status wait reaches ACTIVE, but whose
+// read-back then finds the load balancer already gone, must report the error
+// and drop it from state.
+func TestLoadBalancerCreateDropsStateWhenReadBackAfterActive404s(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	gets := 0
+	octavia := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v2.0/lbaas/loadbalancers":
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"loadbalancer": {"id": "lb-1", "provisioning_status": "PENDING_CREATE"}}`)
+		case "GET /v2.0/lbaas/loadbalancers/lb-1":
+			gets++
+			if gets == 1 {
+				// Satisfies waitForLoadBalancerActive on the very first poll.
+				fmt.Fprint(w, `{"loadbalancer": {"id": "lb-1", "name": "tf-lb-gone", "description": "",
+					"admin_state_up": true, "vip_subnet_id": "subnet-1", "vip_network_id": "",
+					"vip_address": "10.0.0.5", "vip_port_id": "port-1", "flavor_id": "",
+					"provider": "ovn", "provisioning_status": "ACTIVE", "operating_status": "ONLINE",
+					"tags": []}}`)
+				return
+			}
+			// The read-back that immediately follows the wait finds it gone.
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer octavia.Close()
+
+	r := &loadBalancerResource{config: fakeConfig(octavia.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+	s := sch.Schema
+
+	planned := loadBalancerModel{
+		ID:                 types.StringUnknown(),
+		Name:               types.StringValue("tf-lb-gone"),
+		Description:        types.StringUnknown(),
+		AdminStateUp:       types.BoolValue(true),
+		VipSubnetID:        types.StringValue("subnet-1"),
+		VipNetworkID:       types.StringUnknown(),
+		VipAddress:         types.StringUnknown(),
+		VipPortID:          types.StringUnknown(),
+		FlavorID:           types.StringUnknown(),
+		Provider:           types.StringValue("ovn"),
+		Tags:               types.SetUnknown(types.StringType),
+		ProvisioningStatus: types.StringUnknown(),
+		OperatingStatus:    types.StringUnknown(),
+		Region:             types.StringUnknown(),
+	}
+	plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+	if d := plan.Set(ctx, &planned); d.HasError() {
+		t.Fatalf("building the plan: %v", d)
+	}
+
+	createResp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+	r.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("create succeeded; want the post-ACTIVE 404 read-back reported")
+	}
+	if !createResp.State.Raw.IsNull() {
+		t.Fatal("create left a row in state for a load balancer a 404 read-back confirmed gone: " +
+			"a genuine 404 right after ACTIVE means there is nothing left to keep")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gets < 2 {
+		t.Fatalf("GET called %d times; want the wait's ACTIVE poll and the read-back poll", gets)
+	}
+}
+
+// A load balancer create whose status wait reaches ACTIVE, but whose
+// read-back then fails with a server error (not a 404), must report the
+// error and leave the row RecordCreated wrote in place: the load balancer
+// still exists, and dropping it would recreate the orphan this change
+// removes.
+func TestLoadBalancerCreateKeepsStateWhenReadBackAfterActiveFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	gets := 0
+	octavia := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v2.0/lbaas/loadbalancers":
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"loadbalancer": {"id": "lb-1", "provisioning_status": "PENDING_CREATE"}}`)
+		case "GET /v2.0/lbaas/loadbalancers/lb-1":
+			gets++
+			if gets == 1 {
+				// Satisfies waitForLoadBalancerActive on the very first poll.
+				fmt.Fprint(w, `{"loadbalancer": {"id": "lb-1", "name": "tf-lb-flaky", "description": "",
+					"admin_state_up": true, "vip_subnet_id": "subnet-1", "vip_network_id": "",
+					"vip_address": "10.0.0.5", "vip_port_id": "port-1", "flavor_id": "",
+					"provider": "ovn", "provisioning_status": "ACTIVE", "operating_status": "ONLINE",
+					"tags": []}}`)
+				return
+			}
+			// The read-back that immediately follows the wait hits a transient
+			// server error; the load balancer itself is still there.
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"faultstring": "octavia temporarily unavailable"}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer octavia.Close()
+
+	r := &loadBalancerResource{config: fakeConfig(octavia.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+	s := sch.Schema
+
+	planned := loadBalancerModel{
+		ID:                 types.StringUnknown(),
+		Name:               types.StringValue("tf-lb-flaky"),
+		Description:        types.StringUnknown(),
+		AdminStateUp:       types.BoolValue(true),
+		VipSubnetID:        types.StringValue("subnet-1"),
+		VipNetworkID:       types.StringUnknown(),
+		VipAddress:         types.StringUnknown(),
+		VipPortID:          types.StringUnknown(),
+		FlavorID:           types.StringUnknown(),
+		Provider:           types.StringValue("ovn"),
+		Tags:               types.SetUnknown(types.StringType),
+		ProvisioningStatus: types.StringUnknown(),
+		OperatingStatus:    types.StringUnknown(),
+		Region:             types.StringUnknown(),
+	}
+	plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+	if d := plan.Set(ctx, &planned); d.HasError() {
+		t.Fatalf("building the plan: %v", d)
+	}
+
+	createResp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+	r.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("create succeeded; want the post-ACTIVE 500 read-back reported")
+	}
+	if createResp.State.Raw.IsNull() {
+		t.Fatal("create dropped lb-1 from state even though the load balancer still exists behind the failed read-back")
+	}
+	if !createResp.State.Raw.IsFullyKnown() {
+		t.Fatalf("create state holds unknown values, which Terraform refuses: %v", createResp.State.Raw)
+	}
+	var got loadBalancerModel
+	if d := createResp.State.Get(ctx, &got); d.HasError() {
+		t.Fatalf("reading the create state: %v", d)
+	}
+	if got.ID.ValueString() != "lb-1" {
+		t.Fatalf("create state id = %s, want lb-1: a row without one names nothing a destroy could delete", got.ID)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gets < 2 {
+		t.Fatalf("GET called %d times; want the wait's ACTIVE poll and the failed read-back poll", gets)
+	}
+}

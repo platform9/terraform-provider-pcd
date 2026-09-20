@@ -415,3 +415,349 @@ func TestWaitForZoneDeletedTimesOutRatherThanWedgingOnPersistentError(t *testing
 		t.Fatalf("waitForZoneDeleted returned after %s, before its own 2s timeout elapsed", elapsed)
 	}
 }
+
+// The following four tests drive Create down the path neither test above
+// reaches: the status wait succeeds (ACTIVE), and the read-back that follows
+// it is what fails. readInto returns without touching its model argument on
+// both a 404 and a non-404 error, so a Create that unconditionally sets state
+// from the plan afterward would write back the plan's own unknown values on
+// top of the clean, fully-known row RecordCreated already wrote -- a state
+// Terraform refuses. The guard must instead: on a 404, report the error and
+// remove the resource (nothing is left to keep); on any other error, report
+// it and leave the recorded row in place (the object still exists).
+
+// A recordset create whose status wait reaches ACTIVE, but whose read-back
+// then finds the recordset already gone, must report the error and drop the
+// recordset from state.
+func TestRecordSetCreateDropsStateWhenReadBackAfterActive404s(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	gets := 0
+	designate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v2/zones/zone-1/recordsets":
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprint(w, `{"id": "rr-1", "zone_id": "zone-1", "name": "www.tf-acc-gone.example.com.",
+				"type": "A", "records": ["10.1.0.1"], "ttl": 300, "status": "PENDING",
+				"action": "CREATE", "description": ""}`)
+		case "GET /v2/zones/zone-1/recordsets/rr-1":
+			gets++
+			if gets == 1 {
+				// Satisfies waitForRecordSetActive on the very first poll.
+				fmt.Fprint(w, `{"id": "rr-1", "zone_id": "zone-1", "name": "www.tf-acc-gone.example.com.",
+					"type": "A", "records": ["10.1.0.1"], "ttl": 300, "status": "ACTIVE",
+					"action": "CREATE", "description": ""}`)
+				return
+			}
+			// The read-back that immediately follows the wait finds it gone.
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer designate.Close()
+
+	r := &recordSetResource{config: fakeConfig(designate.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+	s := sch.Schema
+
+	records, d := types.SetValueFrom(ctx, types.StringType, []string{"10.1.0.1"})
+	if d.HasError() {
+		t.Fatalf("building the records set: %v", d)
+	}
+	planned := recordSetModel{
+		ID:          types.StringUnknown(),
+		ZoneID:      types.StringValue("zone-1"),
+		Name:        types.StringValue("www.tf-acc-gone.example.com."),
+		Type:        types.StringValue("A"),
+		Records:     records,
+		TTL:         types.Int64Unknown(),
+		Description: types.StringUnknown(),
+		Status:      types.StringUnknown(),
+		Region:      types.StringUnknown(),
+	}
+	plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+	if d := plan.Set(ctx, &planned); d.HasError() {
+		t.Fatalf("building the plan: %v", d)
+	}
+
+	createResp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+	r.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("create succeeded; want the post-ACTIVE 404 read-back reported")
+	}
+	if !createResp.State.Raw.IsNull() {
+		t.Fatal("create left a row in state for a recordset a 404 read-back confirmed gone: " +
+			"a genuine 404 right after ACTIVE means there is nothing left to keep")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gets < 2 {
+		t.Fatalf("GET called %d times; want the wait's ACTIVE poll and the read-back poll", gets)
+	}
+}
+
+// A recordset create whose status wait reaches ACTIVE, but whose read-back
+// then fails with a server error (not a 404), must report the error and
+// leave the row RecordCreated wrote in place: the recordset still exists,
+// and dropping it would recreate the orphan this change removes.
+func TestRecordSetCreateKeepsStateWhenReadBackAfterActiveFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	gets := 0
+	designate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v2/zones/zone-1/recordsets":
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprint(w, `{"id": "rr-1", "zone_id": "zone-1", "name": "www.tf-acc-flaky.example.com.",
+				"type": "A", "records": ["10.1.0.1"], "ttl": 300, "status": "PENDING",
+				"action": "CREATE", "description": ""}`)
+		case "GET /v2/zones/zone-1/recordsets/rr-1":
+			gets++
+			if gets == 1 {
+				// Satisfies waitForRecordSetActive on the very first poll.
+				fmt.Fprint(w, `{"id": "rr-1", "zone_id": "zone-1", "name": "www.tf-acc-flaky.example.com.",
+					"type": "A", "records": ["10.1.0.1"], "ttl": 300, "status": "ACTIVE",
+					"action": "CREATE", "description": ""}`)
+				return
+			}
+			// The read-back that immediately follows the wait hits a transient
+			// server error; the recordset itself is still there.
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"error": "designate temporarily unavailable"}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer designate.Close()
+
+	r := &recordSetResource{config: fakeConfig(designate.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+	s := sch.Schema
+
+	records, d := types.SetValueFrom(ctx, types.StringType, []string{"10.1.0.1"})
+	if d.HasError() {
+		t.Fatalf("building the records set: %v", d)
+	}
+	planned := recordSetModel{
+		ID:          types.StringUnknown(),
+		ZoneID:      types.StringValue("zone-1"),
+		Name:        types.StringValue("www.tf-acc-flaky.example.com."),
+		Type:        types.StringValue("A"),
+		Records:     records,
+		TTL:         types.Int64Unknown(),
+		Description: types.StringUnknown(),
+		Status:      types.StringUnknown(),
+		Region:      types.StringUnknown(),
+	}
+	plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+	if d := plan.Set(ctx, &planned); d.HasError() {
+		t.Fatalf("building the plan: %v", d)
+	}
+
+	createResp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+	r.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("create succeeded; want the post-ACTIVE 500 read-back reported")
+	}
+	if createResp.State.Raw.IsNull() {
+		t.Fatal("create dropped rr-1 from state even though the recordset still exists behind the failed read-back")
+	}
+	if !createResp.State.Raw.IsFullyKnown() {
+		t.Fatalf("create state holds unknown values, which Terraform refuses: %v", createResp.State.Raw)
+	}
+	var got recordSetModel
+	if d := createResp.State.Get(ctx, &got); d.HasError() {
+		t.Fatalf("reading the create state: %v", d)
+	}
+	if got.ID.ValueString() != "rr-1" {
+		t.Fatalf("create state id = %s, want rr-1: a row without one names nothing a destroy could delete", got.ID)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gets < 2 {
+		t.Fatalf("GET called %d times; want the wait's ACTIVE poll and the failed read-back poll", gets)
+	}
+}
+
+// A zone create whose status wait reaches ACTIVE, but whose read-back then
+// finds the zone already gone, must report the error and drop the zone from
+// state.
+func TestZoneCreateDropsStateWhenReadBackAfterActive404s(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	gets := 0
+	designate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v2/zones":
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprint(w, `{"id": "zone-1", "name": "tf-acc-gone.example.com.",
+				"status": "PENDING", "action": "CREATE"}`)
+		case "GET /v2/zones/zone-1":
+			gets++
+			if gets == 1 {
+				// Satisfies waitForZoneActive on the very first poll.
+				fmt.Fprint(w, `{"id": "zone-1", "name": "tf-acc-gone.example.com.",
+					"email": "dns@example.com", "type": "PRIMARY", "ttl": 3600,
+					"description": "", "status": "ACTIVE", "action": "CREATE", "serial": 1,
+					"pool_id": "pool-1", "project_id": "proj-1", "attributes": {}, "masters": []}`)
+				return
+			}
+			// The read-back that immediately follows the wait finds it gone.
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer designate.Close()
+
+	r := &zoneResource{config: fakeConfig(designate.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+	s := sch.Schema
+
+	planned := zoneModel{
+		ID:          types.StringUnknown(),
+		Name:        types.StringValue("tf-acc-gone.example.com."),
+		Type:        types.StringValue("PRIMARY"),
+		Email:       types.StringValue("dns@example.com"),
+		TTL:         types.Int64Unknown(),
+		Description: types.StringUnknown(),
+		Masters:     types.ListUnknown(types.StringType),
+		Attributes:  types.MapUnknown(types.StringType),
+		Serial:      types.Int64Unknown(),
+		Status:      types.StringUnknown(),
+		PoolID:      types.StringUnknown(),
+		ProjectID:   types.StringUnknown(),
+		Region:      types.StringUnknown(),
+	}
+	plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+	if d := plan.Set(ctx, &planned); d.HasError() {
+		t.Fatalf("building the plan: %v", d)
+	}
+
+	createResp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+	r.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("create succeeded; want the post-ACTIVE 404 read-back reported")
+	}
+	if !createResp.State.Raw.IsNull() {
+		t.Fatal("create left a row in state for a zone a 404 read-back confirmed gone: " +
+			"a genuine 404 right after ACTIVE means there is nothing left to keep")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gets < 2 {
+		t.Fatalf("GET called %d times; want the wait's ACTIVE poll and the read-back poll", gets)
+	}
+}
+
+// A zone create whose status wait reaches ACTIVE, but whose read-back then
+// fails with a server error (not a 404), must report the error and leave the
+// row RecordCreated wrote in place: the zone still exists, and dropping it
+// would recreate the orphan this change removes.
+func TestZoneCreateKeepsStateWhenReadBackAfterActiveFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	gets := 0
+	designate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v2/zones":
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprint(w, `{"id": "zone-1", "name": "tf-acc-flaky.example.com.",
+				"status": "PENDING", "action": "CREATE"}`)
+		case "GET /v2/zones/zone-1":
+			gets++
+			if gets == 1 {
+				// Satisfies waitForZoneActive on the very first poll.
+				fmt.Fprint(w, `{"id": "zone-1", "name": "tf-acc-flaky.example.com.",
+					"email": "dns@example.com", "type": "PRIMARY", "ttl": 3600,
+					"description": "", "status": "ACTIVE", "action": "CREATE", "serial": 1,
+					"pool_id": "pool-1", "project_id": "proj-1", "attributes": {}, "masters": []}`)
+				return
+			}
+			// The read-back that immediately follows the wait hits a transient
+			// server error; the zone itself is still there.
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"error": "designate temporarily unavailable"}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer designate.Close()
+
+	r := &zoneResource{config: fakeConfig(designate.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+	s := sch.Schema
+
+	planned := zoneModel{
+		ID:          types.StringUnknown(),
+		Name:        types.StringValue("tf-acc-flaky.example.com."),
+		Type:        types.StringValue("PRIMARY"),
+		Email:       types.StringValue("dns@example.com"),
+		TTL:         types.Int64Unknown(),
+		Description: types.StringUnknown(),
+		Masters:     types.ListUnknown(types.StringType),
+		Attributes:  types.MapUnknown(types.StringType),
+		Serial:      types.Int64Unknown(),
+		Status:      types.StringUnknown(),
+		PoolID:      types.StringUnknown(),
+		ProjectID:   types.StringUnknown(),
+		Region:      types.StringUnknown(),
+	}
+	plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+	if d := plan.Set(ctx, &planned); d.HasError() {
+		t.Fatalf("building the plan: %v", d)
+	}
+
+	createResp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+	r.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("create succeeded; want the post-ACTIVE 500 read-back reported")
+	}
+	if createResp.State.Raw.IsNull() {
+		t.Fatal("create dropped zone-1 from state even though the zone still exists behind the failed read-back")
+	}
+	if !createResp.State.Raw.IsFullyKnown() {
+		t.Fatalf("create state holds unknown values, which Terraform refuses: %v", createResp.State.Raw)
+	}
+	var got zoneModel
+	if d := createResp.State.Get(ctx, &got); d.HasError() {
+		t.Fatalf("reading the create state: %v", d)
+	}
+	if got.ID.ValueString() != "zone-1" {
+		t.Fatalf("create state id = %s, want zone-1: a row without one names nothing a destroy could delete", got.ID)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gets < 2 {
+		t.Fatalf("GET called %d times; want the wait's ACTIVE poll and the failed read-back poll", gets)
+	}
+}
