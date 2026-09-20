@@ -484,7 +484,14 @@ func waitForImageActive(ctx context.Context, client *gophercloud.ServiceClient, 
 				"service, is a common cause", errImportFailed, id, stores, img.Status)
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timed out waiting for image %s to become active (last status %q)", id, img.Status)
+			// Naming the stores Glance is still working on separates a slow
+			// import from one that is not making progress at all.
+			progress := ""
+			if stores := imageProperty(img, "os_glance_importing_to_stores"); stores != "" {
+				progress = fmt.Sprintf(", still importing into store(s) %s", stores)
+			}
+			return nil, fmt.Errorf("timed out waiting for image %s to become active (last status %q%s)",
+				id, img.Status, progress)
 		}
 		select {
 		case <-ctx.Done():

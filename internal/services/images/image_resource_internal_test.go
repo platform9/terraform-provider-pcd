@@ -180,3 +180,47 @@ func TestWaitForImageActiveKilledIsNotAnImportFailure(t *testing.T) {
 		t.Fatalf("error %q does not mention the killed state", err)
 	}
 }
+
+// A timeout that says nothing but the status cannot be acted on. Glance keeps
+// the stores an import is working on in os_glance_importing_to_stores, which
+// separates a slow import from a wedged one.
+func TestWaitForImageActiveTimeoutReportsImportProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		extra map[string]string
+		want  string
+	}{
+		{
+			name: "nothing in flight",
+			want: `timed out waiting for image img-1 to become active (last status "queued")`,
+		},
+		{
+			name:  "still importing",
+			extra: map[string]string{"os_glance_importing_to_stores": "file"},
+			want:  `(last status "queued", still importing into store(s) file)`,
+		},
+		{
+			name:  "empty importing list reads as nothing in flight",
+			extra: map[string]string{"os_glance_importing_to_stores": ""},
+			want:  `timed out waiting for image img-1 to become active (last status "queued")`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, srv := newImageClient(t, imageBody("queued", tc.extra))
+
+			_, err := waitForImageActive(context.Background(), client, "img-1", 0)
+			if err == nil {
+				t.Fatal("got no error at a zero timeout")
+			}
+			if errors.Is(err, errImportFailed) {
+				t.Fatalf("a timeout reported as an import failure: Create would delete an image that may still be importing: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q does not contain %q", err, tc.want)
+			}
+			if got := srv.gets.Load(); got != 1 {
+				t.Fatalf("polled %d times at a zero timeout, want 1", got)
+			}
+		})
+	}
+}
