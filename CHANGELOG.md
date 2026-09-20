@@ -47,6 +47,18 @@ All notable changes to this project are documented here. The format is based on
   the error says so and names the image to remove. A create that times out still leaves the image
   in place, because the import may yet finish, and its message now names the stores Glance was
   still importing into.
+- `pcd_blockstorage_volume`, `pcd_blockstorage_snapshot`, `pcd_blockstorage_volume_backup`, and
+  `pcd_images_image`: an object the service accepts and then fails to finish (Cinder status
+  `error`, Glance status `killed`) now stays in state, and so does one whose create wait times out
+  or whose apply is interrupted. The apply still fails with the service's reason, and Terraform
+  marks the resource tainted, so the next apply deletes and recreates it and a destroy deletes it.
+  Before, the failed apply left no state: Terraform lost track of an object the service kept, the
+  next apply created a second one, and the first had to be deleted through the API. The attributes
+  the service had not reported yet are saved empty until the next refresh.
+- `pcd_images_image`: an apply interrupted while the image data is uploading no longer leaves a
+  `queued` image in Glance with nothing in state. When an upload or an import request fails, the
+  provider still deletes the image it created, but it now keeps the image in state if that
+  deletion fails, so a destroy retries it instead of the image being left behind.
 
 ### Documentation
 
