@@ -240,6 +240,10 @@ func deleteCreatedImage(ctx context.Context, client *gophercloud.ServiceClient, 
 	err := images.Delete(ctx, client, id).ExtractErr()
 	if err == nil || gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 		resp.State.RemoveResource(ctx)
+	} else {
+		resp.Diagnostics.AddWarning("Image left in Glance",
+			fmt.Sprintf("Image %s could not be deleted after its create failed and was left in Glance. "+
+				"It was kept in Terraform state so a destroy or the next apply retries the deletion.", id))
 	}
 }
 

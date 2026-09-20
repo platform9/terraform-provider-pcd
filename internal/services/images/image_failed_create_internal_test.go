@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -33,17 +35,17 @@ func fakeConfig(url string) *clients.Config {
 	}
 }
 
-// imagePlan builds the plan a configuration with image_source_url produces on a
-// first apply: everything the provider computes is still unknown.
-func imagePlan(ctx context.Context, t *testing.T, s schema.Schema) tfsdk.Plan {
-	t.Helper()
-	planned := imageModel{
+// baseImagePlan holds the fields common to a first apply regardless of image
+// source: everything the provider computes is still unknown. The caller sets
+// LocalFilePath xor ImageSourceURL, which Create requires.
+func baseImagePlan() imageModel {
+	return imageModel{
 		ID:              types.StringUnknown(),
 		Name:            types.StringValue("ubuntu-24.04"),
 		ContainerFormat: types.StringValue("bare"),
 		DiskFormat:      types.StringValue("qcow2"),
 		LocalFilePath:   types.StringNull(),
-		ImageSourceURL:  types.StringValue("https://example.invalid/ubuntu.qcow2"),
+		ImageSourceURL:  types.StringNull(),
 		MinDiskGB:       types.Int64Value(0),
 		MinRAMMB:        types.Int64Value(0),
 		Protected:       types.BoolValue(false),
@@ -60,11 +62,34 @@ func imagePlan(ctx context.Context, t *testing.T, s schema.Schema) tfsdk.Plan {
 		UpdatedAt:       types.StringUnknown(),
 		Region:          types.StringUnknown(),
 	}
+}
+
+// buildPlan sets planned onto a fresh tfsdk.Plan using s.
+func buildPlan(ctx context.Context, t *testing.T, s schema.Schema, planned imageModel) tfsdk.Plan {
+	t.Helper()
 	plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
 	if d := plan.Set(ctx, &planned); d.HasError() {
 		t.Fatalf("building the plan: %v", d)
 	}
 	return plan
+}
+
+// imagePlan builds the plan a configuration with image_source_url produces on
+// a first apply.
+func imagePlan(ctx context.Context, t *testing.T, s schema.Schema) tfsdk.Plan {
+	t.Helper()
+	planned := baseImagePlan()
+	planned.ImageSourceURL = types.StringValue("https://example.invalid/ubuntu.qcow2")
+	return buildPlan(ctx, t, s, planned)
+}
+
+// imagePlanLocalFile builds the plan a configuration with local_file_path
+// produces on a first apply.
+func imagePlanLocalFile(ctx context.Context, t *testing.T, s schema.Schema, path string) tfsdk.Plan {
+	t.Helper()
+	planned := baseImagePlan()
+	planned.LocalFilePath = types.StringValue(path)
+	return buildPlan(ctx, t, s, planned)
 }
 
 // An image whose import Glance gives up on stays in Glance with status "killed".
@@ -249,5 +274,63 @@ func TestImageCreateKeepsTheStateOfAnImageItCouldNotDelete(t *testing.T) {
 	}
 	if got.ID.ValueString() != "img-1" {
 		t.Fatalf("create state id = %s, want img-1", got.ID)
+	}
+}
+
+// When the local_file_path upload fails, Create deletes the image it created,
+// the same as the image_source_url import-failure path above. That delete
+// succeeds here, so nothing is left in Glance and nothing may be left in state
+// either. Every other test in this file drives image_source_url; this is the
+// only one that exercises the local-file branch of deleteCreatedImage.
+func TestImageCreateKeepsAnImageThatFailedToUpload(t *testing.T) {
+	ctx := context.Background()
+
+	localPath := filepath.Join(t.TempDir(), "ubuntu.qcow2")
+	if err := os.WriteFile(localPath, []byte("not a real qcow2, just test data"), 0o600); err != nil {
+		t.Fatalf("writing the local image file: %v", err)
+	}
+
+	var mu sync.Mutex
+	deleteCalled := false
+	glance := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v2/images":
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"id": "img-1", "name": "ubuntu-24.04", "status": "queued",
+				"container_format": "bare", "disk_format": "qcow2", "visibility": "shared",
+				"protected": false, "os_hidden": false, "tags": [], "min_disk": 0, "min_ram": 0,
+				"owner": "proj-1", "created_at": "2026-09-19T00:00:00Z", "updated_at": "2026-09-19T00:00:00Z"}`)
+		case "PUT /v2/images/img-1/file":
+			w.WriteHeader(http.StatusInternalServerError)
+		case "DELETE /v2/images/img-1":
+			deleteCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer glance.Close()
+
+	r := &imageResource{config: fakeConfig(glance.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+	plan := imagePlanLocalFile(ctx, t, sch.Schema, localPath)
+
+	createResp := resource.CreateResponse{State: tfsdk.State{Schema: sch.Schema, Raw: tftypes.NewValue(sch.Schema.Type().TerraformType(ctx), nil)}}
+	r.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("create succeeded; want the failed upload reported")
+	}
+	mu.Lock()
+	called := deleteCalled
+	mu.Unlock()
+	if !called {
+		t.Fatal("create never deleted the image it had created")
+	}
+	if !createResp.State.Raw.IsNull() {
+		t.Fatalf("create left state for an image it deleted: %v", createResp.State.Raw)
 	}
 }
