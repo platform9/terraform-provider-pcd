@@ -5,14 +5,22 @@ package resmgr
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
+
+	"github.com/platform9/terraform-provider-pcd/internal/clients"
 )
 
 func backendsList(names ...string) types.List {
@@ -30,6 +38,7 @@ func roleModel(hostCluster types.String, backends types.List) *hostClusterRoleMo
 		Role:        types.StringValue("hypervisor"),
 		HostCluster: hostCluster,
 		Backends:    backends,
+		Settings:    types.MapNull(types.StringType),
 	}
 }
 
@@ -173,5 +182,454 @@ func TestImportStateRejectsABadID(t *testing.T) {
 		if !resp.Diagnostics.HasError() {
 			t.Errorf("import id %q: no error, want <host_id>/<role> to be enforced", id)
 		}
+	}
+}
+
+func settingsMap(kv ...string) types.Map {
+	elems := map[string]attr.Value{}
+	for i := 0; i+1 < len(kv); i += 2 {
+		elems[kv[i]] = types.StringValue(kv[i+1])
+	}
+	return types.MapValueMust(types.StringType, elems)
+}
+
+// settings is written through resmgr v1, separately from the v2 assignment,
+// so a change to it must trigger that write and nothing else.
+func TestSettingsChanged(t *testing.T) {
+	base := func(s types.Map) *hostClusterRoleModel {
+		m := roleModel(types.StringNull(), types.ListNull(types.StringType))
+		m.Role = types.StringValue("dns")
+		m.Settings = s
+		return m
+	}
+	for _, tc := range []struct {
+		name        string
+		plan, state types.Map
+		want        bool
+	}{
+		{name: "both unset", plan: types.MapNull(types.StringType), state: types.MapNull(types.StringType)},
+		{name: "same", plan: settingsMap("listen", "[::]:5354"), state: settingsMap("listen", "[::]:5354")},
+		{name: "set", plan: settingsMap("listen", "[::]:5354"), state: types.MapNull(types.StringType), want: true},
+		{name: "value changed", plan: settingsMap("listen", "[::]:5354"), state: settingsMap("listen", "0.0.0.0:5354"), want: true},
+		{name: "key added", plan: settingsMap("listen", "[::]:5354", "debug", "True"), state: settingsMap("listen", "[::]:5354"), want: true},
+		{name: "removed entirely", plan: types.MapNull(types.StringType), state: settingsMap("listen", "[::]:5354"), want: true},
+		{name: "unknown plan", plan: types.MapUnknown(types.StringType), state: types.MapNull(types.StringType)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := settingsChanged(base(tc.plan), base(tc.state)); got != tc.want {
+				t.Fatalf("settingsChanged = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	// settings never makes the v2 assignment look changed.
+	if roleOptionsChanged(base(settingsMap("listen", "[::]:5354")), base(types.MapNull(types.StringType))) {
+		t.Fatalf("roleOptionsChanged = true for a settings-only change; the cluster role would be re-PUT")
+	}
+}
+
+// The v1 PUT replaces the whole settings object, and the uber-role expansion
+// computed most of it; the body must carry everything resmgr holds with only
+// the managed keys overwritten.
+func TestMergeSettings(t *testing.T) {
+	current := map[string]any{"listen": "0.0.0.0:5354", "debug": "False", "db_host": "10.0.0.1", "workers": float64(2)}
+	got := mergeSettings(current, map[string]string{"listen": "[::]:5354"})
+	if got["listen"] != "[::]:5354" {
+		t.Fatalf("listen not overwritten: %v", got)
+	}
+	if got["debug"] != "False" || got["db_host"] != "10.0.0.1" || got["workers"] != float64(2) {
+		t.Fatalf("unmanaged settings not preserved; designate would lose its configuration: %v", got)
+	}
+	if current["listen"] != "0.0.0.0:5354" {
+		t.Fatalf("mergeSettings mutated its input")
+	}
+}
+
+// State holds exactly the managed keys, as strings, so plan compares like
+// with like; a managed key resmgr dropped is absent, which plans a re-apply.
+func TestReadSettings(t *testing.T) {
+	current := map[string]any{"listen": "[::]:5354", "debug": true, "workers": float64(2), "db_host": "10.0.0.1"}
+	got := readSettings(current, map[string]string{"listen": "[::]:5354", "debug": "true", "workers": "2", "gone": "x"})
+	want := map[string]string{"listen": "[::]:5354", "debug": "true", "workers": "2"}
+	if len(got) != len(want) {
+		t.Fatalf("readSettings = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("readSettings[%s] = %q, want %q", k, got[k], v)
+		}
+	}
+	if _, ok := got["db_host"]; ok {
+		t.Fatalf("an unmanaged key leaked into state; every plan would show it as a change")
+	}
+}
+
+// After an import, settings is null in state, so the first apply with settings
+// configured reaches applySettings even when resmgr already holds them. A PUT
+// then is a real write (the host agent restarts designate-mdns), so
+// applySettings skips it on Update when every managed key already reads back
+// as configured, compared the way Read compares them.
+func TestSettingsApplied(t *testing.T) {
+	current := map[string]any{"listen": "[::]:5354", "debug": true, "workers": float64(2), "db_host": "10.0.0.1"}
+	for _, tc := range []struct {
+		name    string
+		managed map[string]string
+		want    bool
+	}{
+		{name: "equal", managed: map[string]string{"listen": "[::]:5354"}, want: true},
+		{name: "differing value", managed: map[string]string{"listen": "0.0.0.0:5354"}},
+		{name: "missing key", managed: map[string]string{"listen": "[::]:5354", "gone": "x"}},
+		{name: "non-string values that render equal", managed: map[string]string{"debug": "true", "workers": "2"}, want: true},
+		{name: "non-string value that renders differently", managed: map[string]string{"debug": "True"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := settingsApplied(current, tc.managed); got != tc.want {
+				if tc.want {
+					t.Fatalf("settingsApplied = false; applySettings would rewrite settings resmgr already holds and restart designate-mdns")
+				}
+				t.Fatalf("settingsApplied = true; applySettings would skip a write resmgr needs")
+			}
+		})
+	}
+}
+
+func TestSettingString(t *testing.T) {
+	for _, tc := range []struct {
+		in   any
+		want string
+	}{
+		{"[::]:5354", "[::]:5354"}, {true, "true"}, {float64(5354), "5354"}, {float64(1.5), "1.5"}, {nil, ""},
+		{[]any{"a"}, `["a"]`},
+	} {
+		if got := settingString(tc.in); got != tc.want {
+			t.Errorf("settingString(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// dnsModel is a dns role with the given settings, as a plan or state holds it.
+func dnsModel(settings types.Map) *hostClusterRoleModel {
+	m := roleModel(types.StringNull(), types.ListNull(types.StringType))
+	m.ID = types.StringValue("host-a/dns")
+	m.Role = types.StringValue("dns")
+	m.WaitUntilConverged = types.BoolValue(false)
+	m.Settings = settings
+	return m
+}
+
+// nullListen is `settings = { listen = null }`, which terraform validate
+// accepts and which cannot be decoded into the map the v1 PUT sends.
+func nullListen() types.Map {
+	return types.MapValueMust(types.StringType, map[string]attr.Value{"listen": types.StringNull()})
+}
+
+// failOnClientBuild turns the panic of a resmgr client built from a nil config
+// into a failure that says what happened. Deferred by tests whose resource has
+// no config, so any server call is caught.
+func failOnClientBuild(t *testing.T) {
+	t.Helper()
+	if r := recover(); r != nil {
+		t.Fatalf("a resmgr client was built before settings were decoded: %v", r)
+	}
+}
+
+func TestManagedSettingsRejectsANullElement(t *testing.T) {
+	var diags diag.Diagnostics
+	managedSettings(context.Background(), dnsModel(nullListen()), &diags)
+	if !diags.HasError() {
+		t.Fatal("managedSettings accepted a null element; Create and Update would have nothing to stop on")
+	}
+}
+
+// Create used to decode settings after the v2 PUT, so a decode failure left
+// the role assigned in resmgr and absent from state. It must fail before any
+// server call and record nothing.
+func TestCreateDecodesSettingsBeforeAssigning(t *testing.T) {
+	ctx := context.Background()
+	s := roleSchema(t)
+	plan := tfsdk.Plan{Schema: s, Raw: roleState(t, dnsModel(nullListen())).Raw}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+
+	defer failOnClientBuild(t)
+	(&hostClusterRoleResource{}).Create(ctx, resource.CreateRequest{Plan: plan}, &resp)
+
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("Create accepted settings with a null element")
+	}
+	if !resp.State.Raw.IsNull() {
+		t.Fatal("Create recorded state although nothing was assigned")
+	}
+}
+
+// Update must also decode settings before any write. The second case pairs
+// the null element with a host_cluster change: ValidateConfig keeps that pair
+// out of real configurations (settings is dns-only, host_cluster
+// hypervisor-only), but it is the one way to put the v2 PUT ahead of the
+// settings write, so it is the case that shows the decode comes first.
+func TestUpdateDecodesSettingsBeforeWriting(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		priorCluster, planCluster types.String
+	}{
+		{name: "settings only", priorCluster: types.StringNull(), planCluster: types.StringNull()},
+		{name: "with a v2 option change", priorCluster: types.StringValue("c1"), planCluster: types.StringValue("c2")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			prior := dnsModel(types.MapNull(types.StringType))
+			prior.HostCluster = tc.priorCluster
+			want := dnsModel(nullListen())
+			want.HostCluster = tc.planCluster
+
+			state := roleState(t, prior)
+			plan := tfsdk.Plan{Schema: state.Schema, Raw: roleState(t, want).Raw}
+			resp := resource.UpdateResponse{State: tfsdk.State{Schema: state.Schema, Raw: tftypes.NewValue(state.Schema.Type().TerraformType(ctx), nil)}}
+
+			defer failOnClientBuild(t)
+			(&hostClusterRoleResource{}).Update(ctx, resource.UpdateRequest{Plan: plan, State: state}, &resp)
+
+			if !resp.Diagnostics.HasError() {
+				t.Fatal("Update accepted settings with a null element")
+			}
+		})
+	}
+}
+
+// fakeResmgr answers the calls Create, Read and Update make for a dns role
+// with settings, on host-a: the v2 assignment PUT, the v2 host record (carrying
+// the dns role), the v1 host record (converged: role_status ok, pf9-designate
+// applied), the v1 per-role GET (answered with held), and the v1 per-role PUT,
+// whose bodies it records. It logs every call in order. Any other call fails
+// the test.
+type fakeResmgr struct {
+	held map[string]any
+
+	mu    sync.Mutex
+	puts  []map[string]any
+	calls []string
+}
+
+// Calls the tests look for in the log.
+const (
+	callAssign       = "PUT /v2/hosts/host-a/roles/dns"
+	callConvergence  = "GET /v1/hosts/host-a"
+	callSettingsRead = "GET /v1/hosts/host-a/roles/pf9-designate"
+	callSettingsPut  = "PUT /v1/hosts/host-a/roles/pf9-designate"
+)
+
+func newFakeResmgr(t *testing.T, held map[string]any) (*fakeResmgr, *clients.Config) {
+	t.Helper()
+	f := &fakeResmgr{held: held}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.calls = append(f.calls, r.Method+" "+r.URL.Path)
+		f.mu.Unlock()
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/v2/hosts/host-a/roles/dns":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && r.URL.Path == "/v2/hosts/host-a":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "host-a", "roles": []string{"dns"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/hosts/host-a":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":                   "host-a",
+				"role_status":          "ok",
+				"roles_status_details": map[string]string{"pf9-designate": "applied"},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/hosts/host-a/roles/pf9-designate":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(f.held)
+		case r.Method == http.MethodPut && r.URL.Path == "/v1/hosts/host-a/roles/pf9-designate":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("settings PUT body: %v", err)
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			f.mu.Lock()
+			f.puts = append(f.puts, body)
+			f.mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected resmgr call: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected call", http.StatusTeapot)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	cfg := &clients.Config{Provider: &gophercloud.ProviderClient{
+		EndpointLocator: func(gophercloud.EndpointOpts) (string, error) { return srv.URL + "/", nil },
+	}}
+	return f, cfg
+}
+
+// settingsPuts returns the bodies of the v1 settings PUTs received so far.
+func (f *fakeResmgr) settingsPuts() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]map[string]any(nil), f.puts...)
+}
+
+// count returns how many times call was received.
+func (f *fakeResmgr) count(call string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c == call {
+			n++
+		}
+	}
+	return n
+}
+
+// first returns the position of call's first occurrence in the log, or -1.
+func (f *fakeResmgr) first(call string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, c := range f.calls {
+		if c == call {
+			return i
+		}
+	}
+	return -1
+}
+
+// log returns the calls received so far, in order.
+func (f *fakeResmgr) log() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
+// resmgr keeps a host's pf9-designate settings after the dns role is removed,
+// and on a later assignment its per-role GET briefly returns those old values
+// before the expansion resets the role to its defaults; a settings write that
+// lands before the reset is lost to it. So Create waits for the role to
+// converge before it writes the settings, whether or not wait_until_converged
+// is set, and waits once when it is. It writes them even when resmgr already
+// reports the configured values, merged over what resmgr reports.
+func TestCreateWritesSettingsAfterConvergence(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wait bool
+	}{
+		{name: "wait_until_converged unset", wait: false},
+		{name: "wait_until_converged set", wait: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			fake, cfg := newFakeResmgr(t, map[string]any{"listen": "[::]:5354", "debug": "True"})
+			s := roleSchema(t)
+			m := dnsModel(settingsMap("listen", "[::]:5354"))
+			m.WaitUntilConverged = types.BoolValue(tc.wait)
+			plan := tfsdk.Plan{Schema: s, Raw: roleState(t, m).Raw}
+			resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+
+			(&hostClusterRoleResource{config: cfg}).Create(ctx, resource.CreateRequest{Plan: plan}, &resp)
+
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("Create: %v", resp.Diagnostics)
+			}
+			if got := fake.count(callConvergence); got != 1 {
+				t.Fatalf("Create polled the host's convergence %d times, want 1 (calls: %v)", got, fake.log())
+			}
+			assign, converged, put := fake.first(callAssign), fake.first(callConvergence), fake.first(callSettingsPut)
+			if assign < 0 || converged <= assign || put <= converged {
+				t.Fatalf("calls %v: want the assignment, then the convergence poll, then the settings write; "+
+					"a write before the role converges can be reset by the expansion", fake.log())
+			}
+			puts := fake.settingsPuts()
+			if len(puts) != 1 {
+				t.Fatalf("Create sent %d settings writes, want 1; a new assignment can report stale settings that the expansion then resets, so Create must not skip the write", len(puts))
+			}
+			if puts[0]["listen"] != "[::]:5354" || puts[0]["debug"] != "True" {
+				t.Fatalf("settings PUT body = %v, want the managed listen merged over what resmgr reports", puts[0])
+			}
+			var got hostClusterRoleModel
+			if diags := resp.State.Get(ctx, &got); diags.HasError() {
+				t.Fatalf("state: %v", diags)
+			}
+			if !got.Settings.Equal(settingsMap("listen", "[::]:5354")) {
+				t.Fatalf("settings in state = %v, want the planned value", got.Settings)
+			}
+		})
+	}
+}
+
+// Without settings, Create waits for convergence only when
+// wait_until_converged asks it to.
+func TestCreateWithoutSettingsDoesNotWait(t *testing.T) {
+	ctx := context.Background()
+	fake, cfg := newFakeResmgr(t, nil)
+	s := roleSchema(t)
+	plan := tfsdk.Plan{Schema: s, Raw: roleState(t, dnsModel(types.MapNull(types.StringType))).Raw}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+
+	(&hostClusterRoleResource{config: cfg}).Create(ctx, resource.CreateRequest{Plan: plan}, &resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("Create: %v", resp.Diagnostics)
+	}
+	if got := fake.log(); len(got) != 1 || got[0] != callAssign {
+		t.Fatalf("calls %v, want only the assignment", got)
+	}
+}
+
+// Update, unlike Create, may skip the write: the role was already on the host,
+// so what resmgr reports is current. The first apply after an import is the
+// case: state has no settings yet, and resmgr may already hold them.
+func TestUpdateWritesSettingsOnlyWhenTheyDiffer(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		held     string
+		wantPuts int
+	}{
+		{name: "already held", held: "[::]:5354"},
+		{name: "differs", held: "0.0.0.0:5354", wantPuts: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			fake, cfg := newFakeResmgr(t, map[string]any{"listen": tc.held, "debug": "True"})
+			state := roleState(t, dnsModel(types.MapNull(types.StringType)))
+			plan := tfsdk.Plan{Schema: state.Schema, Raw: roleState(t, dnsModel(settingsMap("listen", "[::]:5354"))).Raw}
+			resp := resource.UpdateResponse{State: tfsdk.State{Schema: state.Schema, Raw: tftypes.NewValue(state.Schema.Type().TerraformType(ctx), nil)}}
+
+			(&hostClusterRoleResource{config: cfg}).Update(ctx, resource.UpdateRequest{Plan: plan, State: state}, &resp)
+
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("Update: %v", resp.Diagnostics)
+			}
+			if got := len(fake.settingsPuts()); got != tc.wantPuts {
+				t.Fatalf("Update sent %d settings writes, want %d; a needless write restarts designate-mdns, a skipped one leaves the old value", got, tc.wantPuts)
+			}
+			// A settings-only change is written through v1 alone: re-PUTting
+			// the cluster role is a real write resmgr acts on.
+			if got := fake.count(callAssign); got != 0 {
+				t.Fatalf("Update sent %d cluster role PUTs for a settings-only change, want 0 (calls: %v)", got, fake.log())
+			}
+		})
+	}
+}
+
+// Read narrows settings to the managed keys and reports what resmgr holds for
+// them, so a managed key changed outside Terraform plans a re-apply and an
+// unmanaged key never reaches state.
+func TestReadReportsSettingsDrift(t *testing.T) {
+	ctx := context.Background()
+	_, cfg := newFakeResmgr(t, map[string]any{"listen": "0.0.0.0:5354", "debug": "True"})
+	state := roleState(t, dnsModel(settingsMap("listen", "[::]:5354")))
+	resp := resource.ReadResponse{State: roleState(t, dnsModel(settingsMap("listen", "[::]:5354")))}
+
+	(&hostClusterRoleResource{config: cfg}).Read(ctx, resource.ReadRequest{State: state}, &resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("Read: %v", resp.Diagnostics)
+	}
+	var got hostClusterRoleModel
+	if diags := resp.State.Get(ctx, &got); diags.HasError() {
+		t.Fatalf("state: %v", diags)
+	}
+	if !got.Settings.Equal(settingsMap("listen", "0.0.0.0:5354")) {
+		t.Fatalf("settings after Read = %v, want only listen, at the value resmgr holds (0.0.0.0:5354)", got.Settings)
 	}
 }

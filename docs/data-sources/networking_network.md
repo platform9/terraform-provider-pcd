@@ -32,6 +32,7 @@ data "pcd_networking_network" "example" {
 
 - `admin_state_up` (Boolean) The administrative state.
 - `description` (String) The network description.
+- `dns_domain` (String) The Designate zone the network's ports publish records to; `""` when none.
 - `external` (Boolean) Whether the network is external.
 - `id` (String) The network ID.
 - `mtu` (Number) The network's MTU, as PCD assigned or as it was set. Compare it with the host interface's MTU: a network claiming more than the interface carries drops large packets silently.

@@ -548,8 +548,68 @@ still depends on that role. On the lab a full teardown took three runs of
    host-configuration assignment, the host configuration, the blueprint
    (deleted from PCD since provider v0.1.10), and the volume type.
 
-The host stays authorized, with no roles, and can be onboarded again with the
-same configuration.
+The host stays authorized, with no roles, but it is not back to the state the
+first apply found. A destroy leaves two things standing on the host that refuse
+the next onboarding, neither of them visible from Terraform. Clear both before
+applying the configuration again; on the lab, a re-apply failed twice before it
+worked.
+
+### Before onboarding the host again
+
+**Put the management address back on the host's interface.** Removing the roles
+does not remove the OVS bridges PCD built on the host: `br-int` and `br-tun`
+stay, with the management address on `br-tun` and the physical interface bare.
+The host configuration names that interface for management, VM console, host
+liveness, and image-library traffic — and, on a non-VLAN underlay, for tunneling
+— and the resource manager resolves each of those by name against the inventory
+the host agent reports. With no address on the interface, the next apply's
+`pcd_host_config_assignment` is refused with `404 HostIntfIpNotFound: Interface
+enp1s0 is missing an IP. IP required if interface used for Virtual network
+tunnel, Management, VM console, Image lib I/O or Host liveness checks`. On the
+host, delete the leftover bridges and re-apply its network configuration:
+
+```shell
+for b in $(sudo ovs-vsctl list-br); do sudo ovs-vsctl --if-exists del-br "$b"; done
+sudo netplan apply                 # Ubuntu; whatever re-applies the host's network
+ip -br addr show                   # the address is back on enp1s0, no br-* left
+```
+
+The resource manager answers from its own inventory, not from the host, so give
+the host agent a minute or two to re-report before applying again:
+`extensions.interfaces.data.iface_ip` in `GET /resmgr/v1/hosts/<host-uuid>` (the
+[Importing guide](importing.md) shows how to get a token) names the interface
+once it has an address again.
+
+**Re-enable the volume service.** Removing the `persistent-storage` role
+disables the host's `cinder-volume` service, and assigning the role again does
+not re-enable it: after a destroy, `cinder-volume <host-uuid>@nfs-primary` is
+still listed and up, but its status is disabled, with `disabled_reason` `Pf9
+disabling service cinder-volume ... due to requested deauth`. Nothing fails
+outright — the next apply strands instead. Every volume it creates goes to
+`error`, the image's web-download import never finishes, and the apply sits in
+`pcd_images_image.cirros: Still creating...` for the provider's full
+thirty-minute image timeout, with nothing in the log to say why. Enable the
+service before applying:
+
+```shell
+pcdctl volume service list                                               # status disabled
+pcdctl volume service set --enable <host-uuid>@nfs-primary cinder-volume
+```
+
+If an apply already hung that way, it left resources behind that never reached
+Terraform state, and they have to go before the next run: the `queued` image,
+its `image-<id>` backing volume in the service project, and the `workload-data`
+volume.
+
+```shell
+pcdctl image list                      # cirros, queued
+pcdctl image delete <image-id>
+pcdctl volume list --all-projects      # image-<id> and workload-data
+pcdctl volume delete <volume-id>
+```
+
+With the interface carrying its address and the volume service enabled, the same
+configuration applies again from scratch.
 
 ## Already have a region?
 

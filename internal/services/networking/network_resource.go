@@ -11,8 +11,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/gophercloud/gophercloud/v2"
+	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/dns"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/external"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/mtu"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/portsecurity"
@@ -26,6 +29,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
@@ -33,9 +37,10 @@ import (
 )
 
 var (
-	_ resource.Resource                = (*networkResource)(nil)
-	_ resource.ResourceWithConfigure   = (*networkResource)(nil)
-	_ resource.ResourceWithImportState = (*networkResource)(nil)
+	_ resource.Resource                   = (*networkResource)(nil)
+	_ resource.ResourceWithConfigure      = (*networkResource)(nil)
+	_ resource.ResourceWithImportState    = (*networkResource)(nil)
+	_ resource.ResourceWithValidateConfig = (*networkResource)(nil)
 )
 
 // NewNetworkResource is the factory registered with the provider.
@@ -59,6 +64,7 @@ type networkModel struct {
 	Region       types.String `tfsdk:"region"`
 	Segments     types.List   `tfsdk:"segments"`
 	PortSecurity types.Bool   `tfsdk:"port_security_enabled"`
+	DNSDomain    types.String `tfsdk:"dns_domain"`
 	MTU          types.Int64  `tfsdk:"mtu"`
 }
 
@@ -74,6 +80,7 @@ type networkExtended struct {
 	networks.Network
 	external.NetworkExternalExt
 	portsecurity.PortSecurityExt
+	dns.NetworkDNSExt
 	mtu.NetworkMTUExt
 }
 
@@ -105,6 +112,20 @@ func (r *networkResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				MarkdownDescription: "Whether port security (security groups and anti-spoofing) is enforced on ports of this network. " +
 					"Defaults to `true`. Set `false` for a Layer 2 / \"Simple\" network, where the VM manages its own addressing and " +
 					"security groups do not apply — mirrors the PCD UI's Simple Network option.",
+			},
+			"dns_domain": schema.StringAttribute{
+				Optional: true, Computed: true, Default: stringdefault.StaticString(""),
+				MarkdownDescription: "The Designate zone that ports on this network publish DNS records to, as a fully " +
+					"qualified name ending in a dot (typically `pcd_dns_zone.example.name`), in lowercase: Neutron stores " +
+					"the value lower-cased, so a mixed-case literal is refused at plan time. A label may also be one of the " +
+					"keywords `<project_id>`, `<project_name>`, `<user_id>` or `<user_name>`, which Neutron fills in from " +
+					"the project and user that create the port when it publishes a record. A network maps to at most one " +
+					"zone, which must already exist. Defaults to `\"\"`, which is also how an association is removed: omit " +
+					"the attribute and the next apply clears it, so add it to the configuration of any network whose zone " +
+					"was set outside Terraform. Which fixed IPs get records depends on the subnets' `dns_publish_fixed_ip` " +
+					"and on whether the network is external; the DNS guide explains the rules. Neutron publishes a record " +
+					"when it creates a port, or when a port's `dns_name` or `dns_domain` changes; never retroactively, so " +
+					"set this before booting instances.",
 			},
 			"mtu": schema.Int64Attribute{
 				Optional: true, Computed: true,
@@ -172,23 +193,10 @@ func (o segmentsCreateOptsExt) ToNetworkCreateMap() (map[string]any, error) {
 	return base, nil
 }
 
-func (r *networkResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	r.config = configureClient(req.ProviderData, &resp.Diagnostics)
-}
-
-func (r *networkResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan networkModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	client, err := r.config.NetworkV2Client()
-	if err != nil {
-		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
-		return
-	}
-
+// networkCreateOpts builds the create body: the base options, then each
+// extension the plan uses wrapped around it. Kept apart from Create so the
+// wire body can be unit-tested without a lab.
+func networkCreateOpts(ctx context.Context, plan *networkModel, diags *diag.Diagnostics) networks.CreateOptsBuilder {
 	adminUp := plan.AdminStateUp.ValueBool()
 	base := networks.CreateOpts{
 		Name:         plan.Name.ValueString(),
@@ -215,9 +223,9 @@ func (r *networkResource) Create(ctx context.Context, req resource.CreateRequest
 	}
 	if !plan.Segments.IsNull() && !plan.Segments.IsUnknown() {
 		var segs []segmentModel
-		resp.Diagnostics.Append(plan.Segments.ElementsAs(ctx, &segs, false)...)
-		if resp.Diagnostics.HasError() {
-			return
+		diags.Append(plan.Segments.ElementsAs(ctx, &segs, false)...)
+		if diags.HasError() {
+			return createOpts
 		}
 		providerSegs := make([]provider.Segment, 0, len(segs))
 		for _, s := range segs {
@@ -228,6 +236,140 @@ func (r *networkResource) Create(ctx context.Context, req resource.CreateRequest
 			})
 		}
 		createOpts = segmentsCreateOptsExt{CreateOptsBuilder: createOpts, segments: providerSegs}
+	}
+	// The dns extension, only when a zone is named: "" is the server default.
+	// gophercloud's NetworkCreateOptsExt already leaves an empty dns_domain out
+	// of the body; the guard just keeps the wrapper off the chain when there is
+	// nothing to send.
+	if v := plan.DNSDomain.ValueString(); v != "" {
+		createOpts = dns.NetworkCreateOptsExt{CreateOptsBuilder: createOpts, DNSDomain: v}
+	}
+	return createOpts
+}
+
+// networkUpdateOpts builds the update body from what changed between plan and
+// state. dns_domain is sent whenever it differs, including a change to "",
+// which is how the association with a zone is removed.
+func networkUpdateOpts(plan, state *networkModel) networks.UpdateOptsBuilder {
+	name := plan.Name.ValueString()
+	description := plan.Description.ValueString()
+	adminUp := plan.AdminStateUp.ValueBool()
+	base := networks.UpdateOpts{Name: &name, Description: &description, AdminStateUp: &adminUp}
+	if !plan.Shared.IsNull() && !plan.Shared.IsUnknown() {
+		shared := plan.Shared.ValueBool()
+		base.Shared = &shared
+	}
+
+	var updateOpts networks.UpdateOptsBuilder = base
+	if !plan.External.Equal(state.External) && !plan.External.IsNull() && !plan.External.IsUnknown() {
+		ext := plan.External.ValueBool()
+		updateOpts = external.UpdateOptsExt{UpdateOptsBuilder: updateOpts, External: &ext}
+	}
+	if !plan.PortSecurity.Equal(state.PortSecurity) && !plan.PortSecurity.IsNull() && !plan.PortSecurity.IsUnknown() {
+		ps := plan.PortSecurity.ValueBool()
+		updateOpts = portsecurity.NetworkUpdateOptsExt{UpdateOptsBuilder: updateOpts, PortSecurityEnabled: &ps}
+	}
+	if !plan.DNSDomain.Equal(state.DNSDomain) && !plan.DNSDomain.IsUnknown() {
+		v := plan.DNSDomain.ValueString()
+		updateOpts = dns.NetworkUpdateOptsExt{UpdateOptsBuilder: updateOpts, DNSDomain: &v}
+	}
+	// The extension omits the key when MTU is 0, so an MTU cannot be cleared
+	// back to the deployment's default once set; Neutron keeps the last value.
+	if !plan.MTU.Equal(state.MTU) && !plan.MTU.IsNull() && !plan.MTU.IsUnknown() {
+		updateOpts = mtu.UpdateOptsExt{UpdateOptsBuilder: updateOpts, MTU: int(plan.MTU.ValueInt64())}
+	}
+	return updateOpts
+}
+
+// dnsLabel is the ordinary-label half of neutron-lib's DNS_LABEL_REGEX; the
+// other half is dnsKeywordLabels. Neutron applies it after lower-casing the
+// value, so uppercase never reaches it there.
+var dnsLabel = regexp.MustCompile(`^[a-z0-9-]{1,63}$`)
+
+// dnsKeywordLabels are the whole labels neutron-lib's DNS_LABEL_REGEX also
+// accepts (its DNS_LABEL_KEYWORDS in angle brackets). The dns_domain_keywords
+// extension driver fills them in from the request's project and user when it
+// publishes a port's record.
+var dnsKeywordLabels = map[string]bool{
+	"<project_id>":   true,
+	"<project_name>": true,
+	"<user_id>":      true,
+	"<user_name>":    true,
+}
+
+// invalidDNSDomain reports why s is not an acceptable dns_domain, or "" when
+// it is. It applies the rules of neutron-lib's validate_dns_domain, plus one
+// of its own: Neutron lower-cases the value before storing it, which Terraform
+// would report as "inconsistent result after apply", so mixed case is refused
+// here with the value the user should write. A bad value therefore fails at
+// plan time with a message that names the attribute, not as a 400 mid-apply.
+func invalidDNSDomain(s string) string {
+	if s == "" {
+		return ""
+	}
+	if lower := strings.ToLower(s); lower != s {
+		return fmt.Sprintf("Neutron stores dns_domain lower-cased; write %q.", lower)
+	}
+	if !strings.HasSuffix(s, ".") {
+		return fmt.Sprintf("%q must be a fully qualified domain name ending in a dot, for example %q.", s, s+".")
+	}
+	// neutron-lib caps the value two short of the 255-character FQDN size so a
+	// record name can still be prefixed.
+	if len(s) > 253 {
+		return fmt.Sprintf("%q is longer than 253 characters.", s)
+	}
+	labels := strings.Split(strings.TrimSuffix(s, "."), ".")
+	for _, label := range labels {
+		switch {
+		case label == "":
+			return fmt.Sprintf("%q has an empty label.", s)
+		case dnsKeywordLabels[label]:
+			// A keyword label; the ordinary-label rules below do not apply.
+		case strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-"):
+			return fmt.Sprintf("label %q of %q must not start or end with a hyphen.", label, s)
+		case !dnsLabel.MatchString(label):
+			return fmt.Sprintf("label %q of %q must be 1 to 63 characters, each a lowercase letter, a digit or a hyphen.", label, s)
+		}
+	}
+	// Ordinary labels only: a keyword label is never all numeric.
+	if last := labels[len(labels)-1]; len(labels) > 1 && strings.Trim(last, "0123456789") == "" {
+		return fmt.Sprintf("the top-level label %q of %q must not be all numeric.", last, s)
+	}
+	return ""
+}
+
+// ValidateConfig rejects a dns_domain Neutron would reject, at plan time.
+func (r *networkResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var cfg networkModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() || cfg.DNSDomain.IsNull() || cfg.DNSDomain.IsUnknown() {
+		return
+	}
+	if msg := invalidDNSDomain(cfg.DNSDomain.ValueString()); msg != "" {
+		resp.Diagnostics.AddAttributeError(path.Root("dns_domain"), "Invalid dns_domain", msg)
+	}
+}
+
+func (r *networkResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+	r.config = configureClient(req.ProviderData, &resp.Diagnostics)
+}
+
+func (r *networkResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan networkModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	client, err := r.config.NetworkV2Client()
+	if err != nil {
+		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
+		return
+	}
+
+	createOpts := networkCreateOpts(ctx, &plan, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	n, err := networks.Create(ctx, client, createOpts).Extract()
@@ -294,29 +436,7 @@ func (r *networkResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	name := plan.Name.ValueString()
-	description := plan.Description.ValueString()
-	adminUp := plan.AdminStateUp.ValueBool()
-	base := networks.UpdateOpts{Name: &name, Description: &description, AdminStateUp: &adminUp}
-	if !plan.Shared.IsNull() && !plan.Shared.IsUnknown() {
-		shared := plan.Shared.ValueBool()
-		base.Shared = &shared
-	}
-
-	var updateOpts networks.UpdateOptsBuilder = base
-	if !plan.External.Equal(state.External) && !plan.External.IsNull() && !plan.External.IsUnknown() {
-		ext := plan.External.ValueBool()
-		updateOpts = external.UpdateOptsExt{UpdateOptsBuilder: updateOpts, External: &ext}
-	}
-	if !plan.PortSecurity.Equal(state.PortSecurity) && !plan.PortSecurity.IsNull() && !plan.PortSecurity.IsUnknown() {
-		ps := plan.PortSecurity.ValueBool()
-		updateOpts = portsecurity.NetworkUpdateOptsExt{UpdateOptsBuilder: updateOpts, PortSecurityEnabled: &ps}
-	}
-	// The extension omits the key when MTU is 0, so an MTU cannot be cleared
-	// back to the deployment's default once set; Neutron keeps the last value.
-	if !plan.MTU.Equal(state.MTU) && !plan.MTU.IsNull() && !plan.MTU.IsUnknown() {
-		updateOpts = mtu.UpdateOptsExt{UpdateOptsBuilder: updateOpts, MTU: int(plan.MTU.ValueInt64())}
-	}
+	updateOpts := networkUpdateOpts(&plan, &state)
 
 	if _, err := networks.Update(ctx, client, plan.ID.ValueString(), updateOpts).Extract(); err != nil {
 		resp.Diagnostics.AddError("networking: updating network", err.Error())
@@ -387,6 +507,7 @@ func (r *networkResource) readInto(ctx context.Context, client *gophercloud.Serv
 	m.External = types.BoolValue(n.External)
 	m.PortSecurity = types.BoolValue(n.PortSecurityEnabled)
 	m.TenantID = types.StringValue(n.TenantID)
+	m.DNSDomain = types.StringValue(n.DNSDomain)
 	m.MTU = types.Int64Value(int64(n.MTU))
 
 	tagVals := n.Tags

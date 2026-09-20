@@ -25,6 +25,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- The [Community Edition guide](docs/guides/community-edition.md) and the example's README now say
+  what a destroy leaves behind on the host, in a new "Before onboarding the host again" section:
+  the OVS bridges that keep the management address on `br-tun` and leave the interface bare, so the
+  resource manager — which resolves the host configuration's interfaces by name in its own
+  inventory — refuses the next `pcd_host_config_assignment` with `404 HostIntfIpNotFound`; and the
+  `cinder-volume` service that the persistent-storage deauthorization disables and re-assignment
+  does not re-enable, which sends every new volume to `error` and strands the next apply on
+  `pcd_images_image` for its full thirty-minute timeout. The section gives the commands for both,
+  how to confirm they took, and the orphans a hung apply leaves outside Terraform state. Verified
+  on a Community Edition 2026.4 lab.
 - **The Community Edition example's tenant networks boot.** Its blueprint used a VLAN underlay,
   which makes every tenant network a VLAN on the physical-network label of the tunneling
   interface. resmgr keeps a label after the host configuration that defined it is deleted and
@@ -35,6 +45,44 @@ All notable changes to this project are documented here. The format is based on
   label and no VLANs on the switch. The guide explains both underlays.
 - `pcd_cluster_blueprint`: `underlay_type` lists the values resmgr accepts (`vlan`, `vxlan`,
   `geneve`); it said `vlan` or `other`.
+
+## [0.1.13] - 2026-09-19
+
+### Added
+
+- `pcd_networking_network` gains `dns_domain` (PCD-9926): the Designate zone that ports on the
+  network publish records to. It defaults to `""`, so omitting it removes an association: add the
+  attribute to the configuration of any network whose zone was set outside Terraform before the
+  first apply with this version, or that apply clears it. The `pcd_networking_network` data source
+  reports it.
+- `pcd_networking_subnet` gains `dns_publish_fixed_ip` (PCD-9945), the per-subnet opt-in that
+  publishes fixed IPs into the network's zone on tenant and external networks; a network with
+  `external = true` publishes nothing until at least one subnet sets it, and a provider network
+  that is not external publishes without it. It defaults to `false`, so omitting it turns
+  publishing off: add the attribute to the configuration of any subnet whose flag was set outside
+  Terraform (the PCD UI has the checkbox) before the first apply with this version, or that apply
+  clears it. The data source reports it.
+- New `pcd_dns_pools_config` data source (PCD-9943): renders a Designate `pools.yaml` from typed
+  attributes and validates it when Terraform reads it, at plan time for inputs known at plan (NS
+  names end in a dot, hosts are IP literals, ports are in range, bind9 and pdns4 options match the
+  target type), replacing the page of variable validation a pool configuration otherwise needs.
+  `yaml` is sensitive (pdns4 API tokens), and so is `id`, its SHA-256; `id` changes with the
+  content, so it can trigger delivery to the hosts that carry the `dns` role. It warns about master
+  addresses longer than 32 characters, which Designate 2024.1 cannot store for zones (PCD-9946).
+  PCD offers no API for pool targets, so the file still has to reach the host; the DNS guide shows
+  a delivery.
+- `pcd_host_cluster_role` gains `settings` for the `dns` role (PCD-9948): overrides for
+  `pf9-designate`'s settings, such as `listen = "[::]:5354"` to serve zone transfers over IPv6,
+  applied through the resource-manager v1 role API after the cluster role is assigned and again
+  whenever it is re-assigned. Only the listed keys are managed. A create with `settings` waits for
+  the role to converge before writing them, whether or not `wait_until_converged` is set.
+
+### Documentation
+
+- A [DNS guide](docs/guides/dns.md) and a runnable example under `examples/complete/dns/`: the
+  `dns` role, a BIND9 pool rendered by `pcd_dns_pools_config` and delivered to the host, a zone, a
+  network bound to it, a subnet that publishes, and an instance whose record appears in the zone.
+  Validated end to end on a Community Edition 2026.4 lab.
 
 ## [0.1.12] - 2026-09-17
 
