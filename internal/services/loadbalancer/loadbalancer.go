@@ -129,11 +129,16 @@ func waitForLoadBalancerActive(ctx context.Context, client *gophercloud.ServiceC
 	return nil
 }
 
-// waitForLoadBalancerDeleted blocks until the load balancer is gone (404). Used
-// after a cascade delete of the root load balancer.
+// waitForLoadBalancerDeleted blocks until the load balancer is gone: a GET that
+// answers 404 and a provisioning status of DELETED both count as gone. A load
+// balancer a failed create wait abandoned in ERROR is still deletable, and
+// Octavia can still report ERROR on the first poll after the DELETE is accepted,
+// so ERROR counts as a delete failure only once the load balancer has been seen
+// leaving it. Used after a cascade delete of the root load balancer.
 func waitForLoadBalancerDeleted(ctx context.Context, client *gophercloud.ServiceClient, lbID string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	lastStatus, seenNonError := "", false
 	err := gophercloud.WaitFor(ctx, func(ctx context.Context) (bool, error) {
 		lb, err := loadbalancers.Get(ctx, client, lbID).Extract()
 		if err != nil {
@@ -142,13 +147,21 @@ func waitForLoadBalancerDeleted(ctx context.Context, client *gophercloud.Service
 			}
 			return false, err
 		}
-		if lb.ProvisioningStatus == lbError {
+		lastStatus = lb.ProvisioningStatus
+		if lb.ProvisioningStatus == lbDeleted {
+			return true, nil
+		}
+		if lb.ProvisioningStatus != lbError {
+			seenNonError = true
+			return false, nil
+		}
+		if seenNonError {
 			return false, fmt.Errorf("load balancer %s entered ERROR provisioning status during delete", lbID)
 		}
 		return false, nil
 	})
 	if err != nil {
-		return fmt.Errorf("waiting for load balancer %s to delete: %w", lbID, err)
+		return fmt.Errorf("waiting for load balancer %s to delete (last status %q): %w", lbID, lastStatus, err)
 	}
 	return nil
 }

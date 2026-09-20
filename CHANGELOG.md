@@ -77,6 +77,22 @@ All notable changes to this project are documented here. The format is based on
   destroy reported an error and kept the zone in state. It now polls through an `ERROR` the delete
   inherited and reports one the zone enters while being deleted, and a delete that times out names
   the last status it saw.
+- `pcd_lb_loadbalancer`: a load balancer Octavia accepts and then fails to build (provisioning
+  status `ERROR`) now stays in state, and so does one whose create wait times out or whose apply is
+  interrupted while it builds. The apply still fails with Octavia's reason, and Terraform marks the
+  load balancer tainted, so the next apply deletes and recreates it and a destroy deletes it.
+  Before, the failed apply left no state: Terraform lost track of a load balancer Octavia kept, the
+  next apply created a second one, and the first had to be deleted through the API. The attributes
+  Octavia had not reported yet are saved empty until the next refresh. Destroying such a load
+  balancer also used to fail: the delete waiter treated the `ERROR` status the create had abandoned
+  it in as a delete failure and gave up on its first poll, every time, so the only way out was
+  `terraform state rm`. It now polls past that status, and reports a delete failure only once the
+  load balancer has been seen leaving `ERROR` — the case where Octavia really did fail the delete
+  still fails fast, with the same message. A load balancer Octavia reports as `DELETED` rather than
+  answering 404 is now taken as deleted instead of polled for the full ten minutes. A create wait
+  that times out leaves the load balancer in `PENDING_CREATE`, which Octavia refuses to delete;
+  because the load balancer is now tainted, that refusal blocks the next apply, not only a destroy,
+  until Octavia settles it.
 
 ### Documentation
 

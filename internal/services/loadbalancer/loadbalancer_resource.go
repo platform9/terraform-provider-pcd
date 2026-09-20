@@ -26,6 +26,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -140,13 +141,31 @@ func (r *loadBalancerResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
+	// Octavia keeps a load balancer whose build fails (provisioning status
+	// ERROR), so record it before the wait below can return without it.
+	plan.ID = types.StringValue(lb.ID)
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
+
 	if err := waitForLoadBalancerActive(ctx, client, lb.ID, defaultLBTimeout); err != nil {
 		resp.Diagnostics.AddError("loadbalancer: waiting for load balancer to become active", err.Error())
 		return
 	}
 
-	_, readDiags := r.readInto(ctx, client, lb.ID, &plan)
+	notFound, readDiags := r.readInto(ctx, client, lb.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("loadbalancer: reading load balancer after create",
+			fmt.Sprintf("Load balancer %s no longer exists.", lb.ID))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		// The load balancer exists and is recorded; it just could not be read
+		// back. Leave the row RecordCreated wrote so Terraform taints it.
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
