@@ -24,6 +24,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -131,7 +132,7 @@ func (r *volumeResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 
 	plan.ID = types.StringValue(vol.ID)
-	if !recordCreated(ctx, resp, &plan) {
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
 		return
 	}
 
