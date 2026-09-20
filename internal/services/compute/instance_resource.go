@@ -30,11 +30,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-go/tftypes"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -516,7 +515,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	// leaving it behind and booting another. The attributes Nova has not
 	// reported yet are saved as null; the next refresh reads them.
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	resp.Diagnostics.Append(nullUnknowns(&resp.State)...)
+	resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -781,23 +780,6 @@ func (r *instanceResource) flatten(ctx context.Context, server *servers.Server, 
 		m.Region = types.StringValue(r.config.Region)
 	}
 	return diags
-}
-
-// nullUnknowns replaces every unknown value in state with null. Terraform
-// refuses unknown values in state, and Create saves the planned instance before
-// Nova has reported its computed attributes.
-func nullUnknowns(state *tfsdk.State) diag.Diagnostics {
-	raw, err := tftypes.Transform(state.Raw, func(_ *tftypes.AttributePath, v tftypes.Value) (tftypes.Value, error) {
-		if v.IsKnown() {
-			return v, nil
-		}
-		return tftypes.NewValue(v.Type(), nil), nil
-	})
-	if err != nil {
-		return diag.Diagnostics{diag.NewErrorDiagnostic("compute: preparing instance state", err.Error())}
-	}
-	state.Raw = raw
-	return nil
 }
 
 func networksFromList(ctx context.Context, l types.List, diags *diag.Diagnostics) []servers.Network {
