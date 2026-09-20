@@ -143,3 +143,106 @@ func TestVolumeCreateKeepsAVolumeThatFailedToBuild(t *testing.T) {
 		t.Fatalf("delete returned after %d polls; want it to wait out the error status until Cinder answers 404", getsAfterDelete)
 	}
 }
+
+// A snapshot whose creation ends in "error" stays in Cinder. Create must return
+// the error with the snapshot in state, and the refresh and delete a destroy
+// runs must remove it even though Cinder reports "error".
+func TestSnapshotCreateKeepsASnapshotThatFailed(t *testing.T) {
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	deleteCalled, getsAfterDelete := false, 0
+	cinder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "POST /snapshots":
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprint(w, `{"snapshot": {"id": "snap-1", "status": "creating"}}`)
+		case "GET /snapshots/snap-1":
+			if deleteCalled {
+				getsAfterDelete++
+				if getsAfterDelete > 1 {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+			}
+			fmt.Fprint(w, `{"snapshot": {"id": "snap-1", "name": "nightly", "volume_id": "vol-1",
+				"status": "error", "description": "", "size": 1, "metadata": {}}}`)
+		case "DELETE /snapshots/snap-1":
+			deleteCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer cinder.Close()
+
+	r := &snapshotResource{config: fakeConfig(cinder.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+	s := sch.Schema
+
+	planned := snapshotModel{
+		ID:          types.StringUnknown(),
+		VolumeID:    types.StringValue("vol-1"),
+		Name:        types.StringValue("nightly"),
+		Description: types.StringUnknown(),
+		Force:       types.BoolValue(false),
+		Metadata:    types.MapUnknown(types.StringType),
+		Size:        types.Int64Unknown(),
+		Status:      types.StringUnknown(),
+		Region:      types.StringUnknown(),
+	}
+	plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+	if d := plan.Set(ctx, &planned); d.HasError() {
+		t.Fatalf("building the plan: %v", d)
+	}
+
+	createResp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+	r.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("create succeeded; want the error status reported")
+	}
+	if createResp.State.Raw.IsNull() {
+		t.Fatal("create returned no state: Terraform forgets snap-1 and the next apply creates a second snapshot")
+	}
+	if !createResp.State.Raw.IsFullyKnown() {
+		t.Fatalf("create state holds unknown values, which Terraform refuses: %v", createResp.State.Raw)
+	}
+	var got snapshotModel
+	if d := createResp.State.Get(ctx, &got); d.HasError() {
+		t.Fatalf("reading the create state: %v", d)
+	}
+	if got.ID.ValueString() != "snap-1" || got.VolumeID.ValueString() != "vol-1" || got.Name.ValueString() != "nightly" {
+		t.Fatalf("create state id=%s volume_id=%s name=%s; want snap-1, vol-1, nightly",
+			got.ID, got.VolumeID, got.Name)
+	}
+
+	readResp := resource.ReadResponse{State: createResp.State}
+	r.Read(ctx, resource.ReadRequest{State: createResp.State}, &readResp)
+	if readResp.Diagnostics.HasError() {
+		t.Fatalf("refresh of the failed snapshot: %v", readResp.Diagnostics)
+	}
+	if d := readResp.State.Get(ctx, &got); d.HasError() {
+		t.Fatalf("reading the refreshed state: %v", d)
+	}
+	if got.Status.ValueString() != "error" {
+		t.Fatalf("refreshed status = %s, want error", got.Status)
+	}
+
+	deleteResp := resource.DeleteResponse{State: readResp.State}
+	r.Delete(ctx, resource.DeleteRequest{State: readResp.State}, &deleteResp)
+	if deleteResp.Diagnostics.HasError() {
+		t.Fatalf("delete of a snapshot in error: %v", deleteResp.Diagnostics)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !deleteCalled {
+		t.Fatal("delete never called DELETE /snapshots/snap-1")
+	}
+	if getsAfterDelete < 2 {
+		t.Fatalf("delete returned after %d polls; want it to wait out the error status until Cinder answers 404", getsAfterDelete)
+	}
+}
