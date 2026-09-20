@@ -24,6 +24,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -113,13 +114,29 @@ func (r *recordSetResource) Create(ctx context.Context, req resource.CreateReque
 		resp.Diagnostics.AddError("dns: creating recordset", err.Error())
 		return
 	}
+
+	plan.ID = types.StringValue(rr.ID)
+	// Designate holds the recordset from here on, whatever the wait does next.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
+
 	if err := waitForRecordSetActive(ctx, client, zoneID, rr.ID, defaultDNSTimeout); err != nil {
 		resp.Diagnostics.AddError("dns: waiting for recordset to become active", err.Error())
 		return
 	}
 
-	_, readDiags := r.readInto(ctx, client, zoneID, rr.ID, &plan)
+	notFound, readDiags := r.readInto(ctx, client, zoneID, rr.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("dns: reading recordset after create",
+			fmt.Sprintf("Recordset %s no longer exists.", rr.ID))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
