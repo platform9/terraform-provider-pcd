@@ -65,6 +65,15 @@ All notable changes to this project are documented here. The format is based on
   go active, the provider still deletes the image it created, but it now keeps the image in state
   if that deletion fails, so a destroy or the next apply retries it instead of the image being left
   behind.
+- `pcd_dns_recordset`: a recordset whose create wait fails now stays in state. Designate keeps
+  a recordset that reaches `ERROR`, and it keeps one abandoned by a ten-minute timeout or an
+  interrupted apply. The apply still fails with Designate's reason, and Terraform marks the
+  recordset tainted, so the next apply deletes and recreates it and a destroy deletes it.
+  Before, the failed apply left no state: Terraform lost track of a recordset Designate kept,
+  the next apply posted a second one with the same name and type, and Designate refused it as
+  a duplicate until the first was deleted through the API by hand. The attributes Designate had
+  not reported yet — `ttl`, `description`, `status`, and `region` — are saved empty until the
+  next refresh.
 - `pcd_dns_zone`: a zone whose create wait gives up now stays in state. Designate keeps a zone
   whose build fails (status `ERROR`), and it keeps one abandoned in `PENDING` by a ten-minute
   timeout or an interrupted apply. The apply still fails with the Designate status, and Terraform
@@ -77,6 +86,15 @@ All notable changes to this project are documented here. The format is based on
   destroy reported an error and kept the zone in state. It now polls through an `ERROR` the delete
   inherited and reports one the zone enters while being deleted, and a delete that times out names
   the last status it saw.
+- `pcd_keymanager_secret`: a secret Barbican accepts and then never brings to `ACTIVE` now
+  stays in state, and so does one whose apply is interrupted while the provider waits for it.
+  The apply still fails with Barbican's reason, and Terraform marks the secret tainted, so the
+  next apply deletes and recreates it and a destroy deletes it. Before, the failed apply left no
+  state: Terraform lost track of a secret Barbican kept, the next apply created a second one,
+  and the first had to be deleted through the API by hand. A secret created without a payload is
+  never waited on, but it is now recorded as soon as Barbican returns its reference, so an apply
+  that fails before the read-back no longer loses it either. The attributes Barbican had not
+  reported yet are saved empty until the next refresh.
 - `pcd_lb_loadbalancer`: a load balancer Octavia accepts and then fails to build (provisioning
   status `ERROR`) now stays in state, and so does one whose create wait times out or whose apply is
   interrupted while it builds. The apply still fails with Octavia's reason, and Terraform marks the
@@ -93,6 +111,21 @@ All notable changes to this project are documented here. The format is based on
   that times out leaves the load balancer in `PENDING_CREATE`, which Octavia refuses to delete;
   because the load balancer is now tainted, that refusal blocks the next apply, not only a destroy,
   until Octavia settles it.
+- `pcd_lb_listener`, `pcd_lb_pool`, `pcd_lb_member`, and `pcd_lb_monitor`: destroying one of
+  these no longer treats the root load balancer's own status as the child's failure. Each
+  delete waited for the root to reach `ACTIVE`, both before and after issuing its own delete,
+  and failed immediately — before the child's `DELETE` was ever sent — if the root was already
+  in `ERROR`; the same wait also reported a delete as failed if the root moved to `ERROR` only
+  after that delete had already succeeded, leaving a resource in state that Octavia had already
+  removed. Both waits now stop once the root leaves its transient `PENDING_*` statuses, treating
+  `ACTIVE`, `ERROR`, `DELETED`, and a 404 as settled. Octavia still refuses a child's `DELETE`
+  while the root remains in `ERROR` — that has not changed, and cannot from this side — but the
+  refusal is now reported by the child's own delete call, a 409 naming the load balancer to
+  repair or delete before retrying the destroy, rather than a delete that failed earlier without
+  Octavia ever seeing it. A pool, member, or monitor whose parent load balancer had already been
+  cascade-deleted could also never leave state before: resolving the parent 404ed and the delete
+  failed before it discovered the child was already gone. That parent lookup now treats a 404 as
+  the parent being gone and lets the child's own delete proceed.
 
 ### Documentation
 
