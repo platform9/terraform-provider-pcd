@@ -26,6 +26,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -150,6 +151,13 @@ func (r *secretResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 	id := refToID(secret.SecretRef)
+	plan.ID = types.StringValue(id)
+	plan.SecretRef = types.StringValue(secret.SecretRef)
+	// Barbican holds the secret from here on, whether or not a payload was sent,
+	// so record it before anything else can fail.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
 	// A secret created with a payload is briefly PENDING; wait for ACTIVE. A
 	// secret created without a payload stays PENDING, so do not wait in that case.
@@ -160,8 +168,17 @@ func (r *secretResource) Create(ctx context.Context, req resource.CreateRequest,
 		}
 	}
 
-	_, readDiags := r.readInto(ctx, client, id, &plan)
+	notFound, readDiags := r.readInto(ctx, client, id, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("keymanager: reading secret after create",
+			fmt.Sprintf("Secret %s no longer exists.", id))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
