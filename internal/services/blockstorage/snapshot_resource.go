@@ -107,6 +107,11 @@ func (r *snapshotResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
+	plan.ID = types.StringValue(snap.ID)
+	if !recordCreated(ctx, resp, &plan) {
+		return
+	}
+
 	final, err := waitForSnapshotStatus(ctx, client, snap.ID, "available", 20*time.Minute)
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: waiting for snapshot to become available", err.Error())
