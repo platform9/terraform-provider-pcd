@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+
+- The [Community Edition guide](docs/guides/community-edition.md) and the example's README now say
+  what a destroy leaves behind on the host, in a new "Before onboarding the host again" section:
+  the OVS bridges that keep the management address on `br-tun` and leave the interface bare, so the
+  resource manager — which resolves the host configuration's interfaces by name in its own
+  inventory — refuses the next `pcd_host_config_assignment` with `404 HostIntfIpNotFound`; and the
+  `cinder-volume` service that the persistent-storage deauthorization disables and re-assignment
+  does not re-enable, which sends every new volume to `error` and strands the next apply on
+  `pcd_images_image` for its full thirty-minute timeout. The section gives the commands for both,
+  how to confirm they took, and the orphans a hung apply leaves outside Terraform state. Verified
+  on a Community Edition 2026.4 lab.
+
 ## [0.1.13] - 2026-09-19
 
 ### Added
