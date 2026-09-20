@@ -39,12 +39,16 @@ CLAUDE.md
 PCD-Terraform-Provider-Validation-Status.md
 DECISIONS.md
 docs/compatibility/ce-2026.4.md
+# Agent-authored implementation plans and design specs. Working notes, not provider
+# documentation: the registry never served them, and they carried about three quarters
+# of the weight of docs/ into every release tarball.
+docs/superpowers/
 
 # Generated registry docs (docs/index.md, docs/resources/, docs/data-sources/, docs/guides/)
 # ARE committed: the Terraform Registry renders provider documentation from the docs/ tree at
 # the release tag, so it must be in the repo. Regenerate with `make generate` (tfplugindocs)
-# and commit the result. Only the maintainer-internal docs/compatibility/ note above stays
-# untracked.
+# and commit the result. The maintainer-internal notes listed above — docs/compatibility/ and
+# docs/superpowers/ — are the only parts of docs/ that stay untracked.
 
 # Editors / OS
 .idea/
