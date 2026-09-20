@@ -21,3 +21,18 @@ resource "pcd_networking_subnet" "example" {
 
   tags = ["env:dev"]
 }
+
+# A subnet whose fixed IPs are published to the network's DNS zone. The
+# network names the zone (dns_domain); the subnet opts in. On an external
+# network this is required before any record is created; see the DNS guide.
+resource "pcd_networking_network" "app" {
+  name       = "app-net"
+  dns_domain = "app.example.com."
+}
+
+resource "pcd_networking_subnet" "app" {
+  network_id           = pcd_networking_network.app.id
+  name                 = "app-subnet"
+  cidr                 = "10.1.0.0/24"
+  dns_publish_fixed_ip = true
+}
