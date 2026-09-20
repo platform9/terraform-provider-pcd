@@ -22,11 +22,14 @@ import (
 // last one once the list runs out, and counts the requests it saw so a test can
 // assert both how often the wait polled and whether it cleaned up. The counters
 // are atomic because the handler runs on the server's goroutine and the test
-// reads them from its own.
+// reads them from its own. deleteStatus overrides the DELETE response code; a
+// test sets it from its own goroutine before triggering a delete, so it is also
+// atomic. Zero means "answer 204 as before".
 type imageServer struct {
-	bodies  []string
-	gets    atomic.Int64
-	deletes atomic.Int64
+	bodies       []string
+	gets         atomic.Int64
+	deletes      atomic.Int64
+	deleteStatus atomic.Int64
 }
 
 func newImageClient(t *testing.T, bodies ...string) (*gophercloud.ServiceClient, *imageServer) {
@@ -35,7 +38,17 @@ func newImageClient(t *testing.T, bodies ...string) (*gophercloud.ServiceClient,
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			s.deletes.Add(1)
-			w.WriteHeader(http.StatusNoContent)
+			status := int(s.deleteStatus.Load())
+			if status == 0 {
+				status = http.StatusNoContent
+			}
+			if status != http.StatusNoContent {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_, _ = fmt.Fprintf(w, `{"error": %q}`, http.StatusText(status))
+				return
+			}
+			w.WriteHeader(status)
 			return
 		}
 		i := int(s.gets.Add(1)) - 1
@@ -280,5 +293,45 @@ func TestWaitForNewImageReturnsTheActiveImage(t *testing.T) {
 	}
 	if img == nil || img.ID != "img-1" {
 		t.Fatalf("img = %+v, want the image Create will flatten into state", img)
+	}
+}
+
+// A protected image (or a transient 5xx, or a policy refusal) makes Glance
+// refuse the delete. That must not be swallowed: the caller still needs to
+// know the import failed, and now also that the orphan is still there.
+func TestWaitForNewImageReportsARefusedDelete(t *testing.T) {
+	client, srv := newImageClient(t, imageBody("queued", map[string]string{
+		"os_glance_failed_import": "file",
+	}))
+	srv.deleteStatus.Store(http.StatusForbidden)
+
+	_, err := waitForNewImage(context.Background(), client, "img-1", 30*time.Minute)
+	if err == nil {
+		t.Fatal("got no error; a refused delete must not be silently accepted")
+	}
+	if !errors.Is(err, errImportFailed) {
+		t.Fatalf("errors.Is(%v, errImportFailed) = false; the sentinel must survive the wrap", err)
+	}
+	if !strings.Contains(err.Error(), "could not be removed") {
+		t.Fatalf("error %q does not say the image could not be removed", err)
+	}
+}
+
+// The ordinary case: the delete Glance already accepts must still say so, so
+// the user knows the orphan is gone and the apply can simply be retried.
+func TestWaitForNewImageReportsASuccessfulDelete(t *testing.T) {
+	client, _ := newImageClient(t, imageBody("queued", map[string]string{
+		"os_glance_failed_import": "file",
+	}))
+
+	_, err := waitForNewImage(context.Background(), client, "img-1", 30*time.Minute)
+	if err == nil {
+		t.Fatal("got no error")
+	}
+	if !errors.Is(err, errImportFailed) {
+		t.Fatalf("errors.Is(%v, errImportFailed) = false; the sentinel must survive the wrap", err)
+	}
+	if !strings.Contains(err.Error(), "has been deleted") {
+		t.Fatalf("error %q does not say the image has been deleted", err)
 	}
 }

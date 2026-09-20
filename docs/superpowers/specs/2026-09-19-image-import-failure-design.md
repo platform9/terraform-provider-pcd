@@ -63,7 +63,10 @@ reason is, and leaves no orphaned image behind.
 - Reading the import task through `GET /v2/tasks`. Admin-gated by default and the task ID is
   no longer on the image once the import has failed.
 - Changing the schema, the thirty-minute timeout, or its configurability.
-- Touching the local-upload path's behavior, the data sources, or any other resource.
+- Changing the data sources or any other resource, which stay untouched. The local-upload path
+  shares `waitForNewImage` with the web-download path (see section 4), but cannot trigger the new
+  branch: `local_file_path` uses `imagedata.Upload` (`PUT /v2/images/{id}/file`), which never runs
+  the staging/import flow, so Glance does not set `os_glance_failed_import` on it.
 
 ## Design
 
@@ -125,7 +128,10 @@ A wrapper gives both source paths in `Create` one call site and keeps the cleanu
 func waitForNewImage(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*images.Image, error) {
     img, err := waitForImageActive(ctx, client, id, timeout)
     if errors.Is(err, errImportFailed) {
-        _ = images.Delete(ctx, client, id).ExtractErr()
+        if derr := images.Delete(ctx, client, id).ExtractErr(); derr != nil {
+            return img, fmt.Errorf("%w. The image could not be removed either (%v); delete it before retrying", err, derr)
+        }
+        return img, fmt.Errorf("%w. The image has been deleted, so the apply can be retried once the store is fixed", err)
     }
     return img, err
 }
@@ -138,12 +144,19 @@ A timeout deliberately does **not** delete: the import may still be running, and
 of transfer should not be thrown away on the provider's initiative. `killed` deliberately does
 not delete either — it is the upload path's existing behavior and out of scope here.
 
-### 5. `Create` must not nil-dereference
+The delete's own error is not discarded: it is folded into the returned message alongside the
+import failure, so the message always states what the provider did about the image — deleted it,
+or tried and was refused (a `protected` image, a transient 5xx, a policy rule) and names it for
+manual removal instead.
+
+### 5. `Create` keeps `img` pointing at the created image
 
 Line 207 currently reads `img, err = waitForImageActive(ctx, client, img.ID, 30*time.Minute)`,
 which overwrites `img` with `nil` when the wait fails. Today the error branch only formats a
-diagnostic, so that is harmless; the new branch needs the image ID. The result therefore goes
-into a new variable and is assigned to `img` only on success.
+diagnostic, so that is harmless, but assigning straight into `img` is not something to rely on:
+`waitForNewImage` returns a nil image on every failure path, and `img` should not be clobbered
+with it. The result therefore goes into a new variable and is assigned to `img` only on success —
+defensive discipline, not a correctness requirement of the code as it stands today.
 
 ## Testing
 
@@ -168,7 +181,10 @@ Over `waitForImageActive`:
 - A non-string property value is treated as absent.
 
 Over `waitForNewImage`: the test server records a `DELETE` on import failure, and none on
-`killed` or on timeout.
+`killed` or on timeout. A refused delete (403) still returns an error for which
+`errors.Is(err, errImportFailed)` holds, and whose message says the image could not be removed;
+a successful delete returns an error for which `errors.Is(err, errImportFailed)` holds, and whose
+message says the image has been deleted.
 
 Unit tests only. Reproducing this end to end on the lab needs a deliberately broken import, and
 the lab holds a standing region.

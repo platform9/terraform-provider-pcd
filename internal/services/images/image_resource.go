@@ -205,8 +205,8 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 		}
 	}
 
-	// The result goes into its own variable: the wait returns a nil image on
-	// failure, and img.ID is still needed to clean up after one.
+	// waitForNewImage returns nil on failure, so keep img pointing at the
+	// created image until the wait has succeeded.
 	active, err := waitForNewImage(ctx, client, img.ID, 30*time.Minute)
 	if err != nil {
 		resp.Diagnostics.AddError("images: waiting for active image", err.Error())
@@ -512,7 +512,10 @@ func waitForImageActive(ctx context.Context, client *gophercloud.ServiceClient, 
 func waitForNewImage(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*images.Image, error) {
 	img, err := waitForImageActive(ctx, client, id, timeout)
 	if errors.Is(err, errImportFailed) {
-		_ = images.Delete(ctx, client, id).ExtractErr()
+		if derr := images.Delete(ctx, client, id).ExtractErr(); derr != nil {
+			return img, fmt.Errorf("%w. The image could not be removed either (%v); delete it before retrying", err, derr)
+		}
+		return img, fmt.Errorf("%w. The image has been deleted, so the apply can be retried once the store is fixed", err)
 	}
 	return img, err
 }
