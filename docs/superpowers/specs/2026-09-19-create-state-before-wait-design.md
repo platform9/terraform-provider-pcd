@@ -17,7 +17,7 @@ abandoned in `ERROR` by a failed create can still be deleted), their tests, and 
 
 Four resources call their service's create, then wait for a target status, and return the wait's
 error without saving state. They are the four this change fixes, not the only resources with this
-problem — six more have it too (see **Other resources with the same gap** near the end):
+problem — four more have it too (see **Other resources with the same gap** near the end):
 
 | Resource | Wait call in `Create` | Wait |
 | --- | --- | --- |
@@ -211,21 +211,22 @@ improvement: Terraform at least knows the load balancer exists.
 
 ## Other resources with the same gap
 
-Six more resources call their service's create and then wait for a target status without saving
+Four more resources call their service's create and then wait for a target status without saving
 state first — the same gap the **Problem** section above describes for the four resources this
-change fixes. None of the six are touched by this change; fixing them is separate follow-up work.
+change fixes. `pcd_dns_recordset` and `pcd_keymanager_secret`, both listed here originally, were
+fixed by `pushkar/create-state-remaining-eight`; the four load balancer children below are the
+only ones left, and that same branch found they cannot simply be ported — see its design doc.
+None of the four are touched by this change; fixing them is separate follow-up work.
 
-- `pcd_dns_recordset` — `internal/services/dns/recordset_resource.go:116`
-- `pcd_loadbalancer_listener` — `internal/services/loadbalancer/listener_resource.go:161` (the wait
+- `pcd_lb_listener` — `internal/services/loadbalancer/listener_resource.go:161` (the wait
   after `listeners.Create`; `Create` also waits for the parent load balancer at line 125, before the
   listener exists, which is not this gap)
-- `pcd_loadbalancer_pool` — `internal/services/loadbalancer/pool_resource.go:171` (likewise; line 143
+- `pcd_lb_pool` — `internal/services/loadbalancer/pool_resource.go:171` (likewise; line 143
   is the pre-create wait for the parent load balancer)
-- `pcd_loadbalancer_member` — `internal/services/loadbalancer/member_resource.go:146` (likewise; line
+- `pcd_lb_member` — `internal/services/loadbalancer/member_resource.go:146` (likewise; line
   117 is the pre-create wait)
-- `pcd_loadbalancer_monitor` — `internal/services/loadbalancer/monitor_resource.go:153` (likewise;
+- `pcd_lb_monitor` — `internal/services/loadbalancer/monitor_resource.go:153` (likewise;
   line 118 is the pre-create wait)
-- `pcd_keymanager_secret` — `internal/services/keymanager/secret_resource.go:157`
 
 ## Changelog
 

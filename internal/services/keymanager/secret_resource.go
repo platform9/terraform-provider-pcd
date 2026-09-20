@@ -160,7 +160,7 @@ func (r *secretResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 
 	// A secret created with a payload is briefly PENDING; wait for ACTIVE. A
-	// secret created without a payload stays PENDING, so do not wait in that case.
+	// secret created without a payload is already ACTIVE, so do not wait in that case.
 	if payloadSet {
 		if err := waitForSecretActive(ctx, client, id, defaultKeyManagerTimeout); err != nil {
 			resp.Diagnostics.AddError("keymanager: waiting for secret to become active", err.Error())

@@ -135,13 +135,24 @@ one-line fix; call it out in review.
 ### The load balancer children's delete path
 
 A new `waitForLoadBalancerSettled` returns when the root leaves its transient `PENDING_*` statuses and
-reports what it settled on, treating `ACTIVE`, `ERROR`, `DELETED` and a 404 as settled. Octavia ties
-its 409 immutability to `PENDING_*`, so `ERROR` is settled and still accepts a child delete. Enumerate
-the settled set exactly as the existing switch does — do not use a `PENDING_` prefix test, which relies
-on a naming convention Octavia never promised.
+reports what it settled on, treating `ACTIVE`, `ERROR`, `DELETED` and a 404 as settled. **This waiter
+does not make Octavia accept a child delete while the root is in `ERROR` — it only stops the wait
+itself from being the failure.** The lab gate below checked the opposite assumption this section
+originally made and found it false: reading the source of the lab's deployed Octavia 15.0.1.dev10,
+`octavia/common/constants.py:249-250` defines `MUTABLE_STATUSES = (ACTIVE,)` and
+`DELETABLE_STATUSES = (ACTIVE, ERROR)`, and `octavia/db/repositories.py:744-748` checks a mutation
+against `DELETABLE_STATUSES` only when its target status is `PENDING_DELETE`, against `MUTABLE_STATUSES`
+otherwise, raising `ImmutableObject` (HTTP 409) when the load balancer's current status is not in the
+chosen set. Every child controller (e.g. `octavia/api/v2/controllers/listener.py:102`) requests
+`PENDING_UPDATE`, not `PENDING_DELETE`, as the load balancer's target status when deleting a child, so a
+child delete is always checked against `MUTABLE_STATUSES = (ACTIVE,)` — a root in `ERROR` answers a
+child's `DELETE` with 409, every time. Enumerate the settled set exactly as the existing switch does —
+do not use a `PENDING_` prefix test, which relies on a naming convention Octavia never promised.
 
 A `settleBeforeDelete` wrapper keeps each call site to two lines, warns rather than fails when the root
-is in `ERROR`, and deletes anyway. **Both** of each child's waits move to it, not just the pre-delete
+is in `ERROR`, and deletes anyway — the delete call itself then reports Octavia's 409, naming the load
+balancer to repair or delete, rather than the wait failing first with a generic "did not reach ACTIVE"
+that never even attempted the delete. **Both** of each child's waits move to it, not just the pre-delete
 one: the post-delete wait exists so the next resource in the destroy does not hit a 409, and today it
 turns a `DELETE` that succeeded into a reported failure. Its diagnostic must name which of the two
 sites failed rather than hard-coding "before".
@@ -162,7 +173,10 @@ recording state is what makes it reachable. Each of those three sites returns cl
 The record goes immediately after `id := refToID(secret.SecretRef)` and **before** the
 `if payloadSet {` block, not inside it. Barbican holds the secret from the moment `secrets.Create`
 returns whether or not a payload was sent, so the no-payload path can lose it too — via a transient
-`readInto` failure or an interrupted apply — and one record site is better than two.
+`readInto` failure or an interrupted apply — and one record site is better than two. (The no-payload
+path's resting status is `ACTIVE`, confirmed on the CE lab — not `PENDING`, as the pre-existing code
+comment above `if payloadSet` claims. That claim is corrected in the comment itself; it changes no
+behavior here, since `payloadSet` already decides whether to wait either way.)
 
 ### The guarded tail, in all eight
 
@@ -190,10 +204,10 @@ that if a relaxation proves wrong on the lab nothing has regressed.
 | 2 | `pcd_keymanager_secret` | 0 |
 | 3 | **LB child delete path only** — `waitForLoadBalancerSettled`, `settleBeforeDelete`, the eight wait swaps, the three 404 short-circuits. No `Create` changes. **Lab gate.** | 0 |
 | 4 | `pcd_lb_loadbalancer` (root) + transition-aware `waitForLoadBalancerDeleted` + `DELETED` success | 0 |
-| 5 | The four LB children's create record | 3 verified, 4 |
+| 5 | ~~The four LB children's create record~~ — **dropped.** The lab gate below found Octavia refuses a child `DELETE` while the root is in `ERROR`, always; recording these four would produce tainted resources that can never be destroyed, which is worse than the orphan this design exists to remove. | 3 verified, 4 |
 | 6 | Changelog and corrections to the 2026-09-19 design doc | all |
 
-Order: 0, then {1, 2, 4} in parallel, then 3, then 5, then 6.
+Order: 0, then {1, 2, 4} in parallel, then 3, then 6. Task 5 did not run — see the lab gate below.
 
 Do the DNS **recordset before the zone**: it proves the Designate fake against the resource that needs
 no waiter change, and the zone reuses it. Do not "apply the same change to both DNS resources" — the
@@ -209,18 +223,32 @@ two DNS halves of Task 1.
 root into `ERROR`, and confirm a `terraform destroy` of a listener, pool, member or monitor still issues
 its `DELETE` and Octavia accepts it.
 
-Nothing in this tree proves that Octavia accepts a child `DELETE` while the root is in `ERROR`. The
-package doc (`loadbalancer.go:7-11`) ties the 409 to `PENDING_*` only, and upstream Octavia's
-immutability check lists only the `PENDING_*` statuses, but that is inference. If Octavia refuses with
-409, **stop**: Task 5 is dropped and the four children move to the known gaps below. The relaxation
-itself cannot be worse than what it replaces — a 409 from the delete is the same user-visible outcome
-as today's pre-wait failure, with a better message.
+**The gate could not be run end to end, and the answer it gave is the opposite of this design's
+assumption.** No load balancer can be created on the lab at all: `POST /v2.0/lbaas/loadbalancers`
+returns `400 "Provider 'amphora' is not enabled."` The gate was instead answered by reading the source
+of the lab's deployed Octavia 15.0.1.dev10 directly: `octavia/common/constants.py` defines
+`MUTABLE_STATUSES = (ACTIVE,)` and `DELETABLE_STATUSES = (ACTIVE, ERROR)`, and
+`octavia/db/repositories.py:744-748` checks a child's delete (which every child controller issues with
+target status `PENDING_UPDATE`, not `PENDING_DELETE`) against `MUTABLE_STATUSES` — so a root in `ERROR`
+always answers a child's `DELETE` with 409. Per the rule this section set out to apply, **Task 5 is
+dropped** and the four children move to the known gaps below. The relaxation done in Task 3 is kept
+regardless: a 409 from the delete is the same user-visible outcome as today's pre-wait failure, with a
+better message, and the fix to the post-delete wait — not turning an already-successful child delete
+into a reported failure when the root is later seen in `ERROR` — is a real, independent improvement
+that does not depend on this assumption.
 
 Two smaller server-side claims are also unverified and safe either way: that Designate accepts a
 `DELETE` on a zone in `ERROR`, and that Barbican accepts one on a secret in `ERROR`.
 
 ## Known gaps, deliberately not fixed
 
+- **The four load balancer children — `pcd_lb_listener`, `pcd_lb_pool`, `pcd_lb_member`, and
+  `pcd_lb_monitor` — do not record state on a failed create.** This is Task 5, dropped at the lab gate
+  above: Octavia refuses a child's `DELETE` while the root load balancer is in `ERROR`
+  (`MUTABLE_STATUSES = (ACTIVE,)`, verified against the lab's deployed Octavia 15.0.1.dev10), so
+  recording a child abandoned in that condition would produce a tainted resource whose destroy can
+  never succeed — worse than the silent orphan this design exists to remove. These four keep today's
+  behavior: a failed create wait returns the error with no state, exactly as before this design.
 - **`PENDING` / `PENDING_CREATE` abandonment.** A load balancer abandoned by a timeout or a Ctrl-C sits
   in `PENDING_CREATE`, which Octavia treats as immutable, so the cascade delete returns 409 until it
   settles. Same shape as the Cinder `creating` gap already recorded. A DNS zone abandoned that way sits
