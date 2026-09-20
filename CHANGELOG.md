@@ -42,11 +42,12 @@ All notable changes to this project are documented here. The format is based on
   the `glance-api` log. Observed on Community Edition 2026.4 with the Cinder service disabled,
   where the store could not create a volume and the apply spent half an hour printing
   `Still creating...`. The image a failed create made is now deleted, matching what the provider
-  already does when the upload or the import request itself fails, so a retry no longer needs a
-  manual `openstack image delete`; if that delete is itself refused — a `protected` image, say —
-  the error says so and names the image to remove. A create that times out still leaves the image
-  in place, because the import may yet finish, and its message now names the stores Glance was
-  still importing into.
+  already does when the upload or the import request itself fails, and dropped from Terraform
+  state along with it, so a retry no longer needs a manual `openstack image delete`. If that delete
+  is itself refused — a `protected` image, say — the image stays in state instead, tainted so the
+  next apply or a destroy retries the deletion. A create that times out still leaves the image in
+  place, because the import may yet finish, and its message now names the stores Glance was still
+  importing into.
 - `pcd_blockstorage_volume`, `pcd_blockstorage_snapshot`, `pcd_blockstorage_volume_backup`, and
   `pcd_images_image`: an object the service accepts and then fails to finish (Cinder status
   `error`, Glance status `killed`) now stays in state, and so does one whose create wait times out
@@ -59,9 +60,11 @@ All notable changes to this project are documented here. The format is based on
   object is now tainted, that refusal blocks the next apply, not only a destroy, until it is
   cleared by hand — the correct behavior for a tainted resource, not a regression.
 - `pcd_images_image`: an apply interrupted while the image data is uploading no longer leaves a
-  `queued` image in Glance with nothing in state. When an upload or an import request fails, the
-  provider still deletes the image it created, but it now keeps the image in state if that
-  deletion fails, so a destroy retries it instead of the image being left behind.
+  `queued` image in Glance with nothing in state. When an upload or an import request fails, or
+  when Glance later reports the import itself failed while `Create` was waiting for the image to
+  go active, the provider still deletes the image it created, but it now keeps the image in state
+  if that deletion fails, so a destroy or the next apply retries it instead of the image being left
+  behind.
 
 ### Documentation
 
