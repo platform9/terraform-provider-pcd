@@ -156,8 +156,10 @@ Over `waitForImageActive`:
 - `os_glance_failed_import: "file"` on a `queued` image returns on the first poll, not after
   thirty minutes; `errors.Is(err, errImportFailed)` holds, and the message carries the store
   name and the status.
-- `os_glance_failed_import: ""` is not a failure: polling continues and a following `active`
-  response returns the image.
+- `os_glance_failed_import: ""` is not a failure: a zero timeout over a `queued` image with the
+  key present and empty returns the timeout error, not `errImportFailed`. Asserted this way
+  rather than by letting the loop poll through to `active`, which would make the test sleep
+  through the three-second interval for no extra coverage.
 - Comma-joined stores appear in the message.
 - `active` with `os_glance_failed_import` set still succeeds — the partial multi-store case.
 - `killed` keeps its existing error and is **not** `errImportFailed`.
