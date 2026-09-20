@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `pcd_images_image`: a create with `image_source_url` now fails as soon as Glance reports the
+  web-download import failed, instead of polling for the full 30 minutes and reporting only a
+  timeout. A failed import leaves the image in `queued`, not `killed`, and records the stores it
+  could not write in the image's `os_glance_failed_import` property; the provider reads that
+  property and reports the store names, the status Glance left the image in, and where the
+  underlying reason is recorded — the Glance import task and the `glance-api` log, both of which
+  need the admin role to read. Observed on Community Edition 2026.4 with the Cinder service
+  disabled, where the store could not create a volume and the apply spent half an hour printing
+  `Still creating...`. The image a failed create made is now deleted, matching what the provider
+  already does when the upload or the import request itself fails, so a retry no longer needs a
+  manual `openstack image delete`. A create that times out still leaves the image in place,
+  because the import may yet finish, and its message now names the stores Glance was still
+  importing into.
+
 ## [0.1.13] - 2026-09-19
 
 ### Added
