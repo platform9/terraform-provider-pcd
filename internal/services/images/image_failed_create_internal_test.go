@@ -277,6 +277,72 @@ func TestImageCreateKeepsTheStateOfAnImageItCouldNotDelete(t *testing.T) {
 	}
 }
 
+// A web-download import Glance accepts can still fail asynchronously: Glance
+// reverts the image to "queued" and records the store in
+// os_glance_failed_import. waitForNewImage deletes the image for that case, and
+// Create must drop it from state too — the reconciliation between the two
+// changes this test file otherwise covers (state recorded before the wait; the
+// wait's own delete on a failed import). The fake answers the second delete
+// with 404, the same as real Glance would for an image waitForNewImage already
+// removed, to exercise deleteCreatedImage's idempotent path.
+func TestImageCreateDropsTheStateOfAnImageWhoseImportFailedAsync(t *testing.T) {
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	deleteCount := 0
+	glance := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v2/images":
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"id": "img-1", "name": "ubuntu-24.04", "status": "queued",
+				"container_format": "bare", "disk_format": "qcow2", "visibility": "shared",
+				"protected": false, "os_hidden": false, "tags": [], "min_disk": 0, "min_ram": 0,
+				"owner": "proj-1", "created_at": "2026-09-19T00:00:00Z", "updated_at": "2026-09-19T00:00:00Z"}`)
+		case "POST /v2/images/img-1/import":
+			w.WriteHeader(http.StatusAccepted)
+		case "GET /v2/images/img-1":
+			fmt.Fprint(w, `{"id": "img-1", "name": "ubuntu-24.04", "status": "queued",
+				"container_format": "bare", "disk_format": "qcow2", "visibility": "shared",
+				"protected": false, "os_hidden": false, "tags": [], "min_disk": 0, "min_ram": 0,
+				"owner": "proj-1", "created_at": "2026-09-19T00:00:00Z", "updated_at": "2026-09-19T00:00:00Z",
+				"os_glance_failed_import": "store1"}`)
+		case "DELETE /v2/images/img-1":
+			deleteCount++
+			if deleteCount > 1 {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer glance.Close()
+
+	r := &imageResource{config: fakeConfig(glance.URL)}
+	var sch resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sch)
+	plan := imagePlan(ctx, t, sch.Schema)
+
+	createResp := resource.CreateResponse{State: tfsdk.State{Schema: sch.Schema, Raw: tftypes.NewValue(sch.Schema.Type().TerraformType(ctx), nil)}}
+	r.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("create succeeded; want the failed import reported")
+	}
+	mu.Lock()
+	count := deleteCount
+	mu.Unlock()
+	if count < 1 {
+		t.Fatal("create never deleted the image whose import failed")
+	}
+	if !createResp.State.Raw.IsNull() {
+		t.Fatalf("create left state for an image whose failed import was deleted: %v", createResp.State.Raw)
+	}
+}
+
 // When the local_file_path upload fails, Create deletes the image it created,
 // the same as the image_source_url import-failure path above. That delete
 // succeeds here, so nothing is left in Glance and nothing may be left in state

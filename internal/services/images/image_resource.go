@@ -223,6 +223,16 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 	// created image until the wait has succeeded.
 	active, err := waitForNewImage(ctx, client, img.ID, 30*time.Minute)
 	if err != nil {
+		if errors.Is(err, errImportFailed) {
+			// waitForNewImage already deleted the image; take it out of state too,
+			// through the same guarded path the upload/import cleanup uses above.
+			// The delete it issues is idempotent with the one waitForNewImage just
+			// made: a second delete on an already-deleted image answers 404, which
+			// deleteCreatedImage also treats as gone. If that first delete was
+			// refused instead (a protected image, say), this one is refused the
+			// same way, and the state stays with a warning naming the image.
+			deleteCreatedImage(ctx, client, img.ID, resp)
+		}
 		resp.Diagnostics.AddError("images: waiting for active image", err.Error())
 		return
 	}
@@ -232,10 +242,14 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-// deleteCreatedImage removes an image Create made but could not load data into,
-// and takes it back out of state when Glance confirms it is gone. A delete that
-// fails leaves the state in place: the image is still in Glance, so Terraform
-// taints it and a destroy retries the deletion rather than orphaning it.
+// deleteCreatedImage removes an image Create has abandoned — because it could
+// not load data into it, or because waitForNewImage found Glance had already
+// failed the import — and takes it back out of state when Glance confirms the
+// image is gone. That confirmation includes a 404, so calling this after
+// waitForNewImage has already deleted the image is safe: the second delete
+// just reports the image is already gone. A delete that fails leaves the state
+// in place: the image is still in Glance, so Terraform taints it and a destroy
+// retries the deletion rather than orphaning it.
 func deleteCreatedImage(ctx context.Context, client *gophercloud.ServiceClient, id string, resp *resource.CreateResponse) {
 	err := images.Delete(ctx, client, id).ExtractErr()
 	if err == nil || gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
@@ -534,10 +548,13 @@ func waitForImageActive(ctx context.Context, client *gophercloud.ServiceClient, 
 }
 
 // waitForNewImage waits for a freshly created image to become active. An image
-// whose import Glance reports as failed is deleted: it holds no data, Create is
-// about to fail without recording it in state, and the orphan blocks the retry.
-// This matches what Create already does when the upload or the import request
-// itself fails. A timeout is left alone, because the import may still finish.
+// whose import Glance reports as failed is deleted here, before Create's own
+// error return: it holds no data, and leaving it in Glance would orphan it
+// once Create removes the image from state (Create does so right after this
+// call returns, through the same guarded deleteCreatedImage path, since this
+// delete can itself be refused). This matches what Create already does when
+// the upload or the import request itself fails. A timeout is left alone,
+// because the import may still finish.
 func waitForNewImage(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*images.Image, error) {
 	img, err := waitForImageActive(ctx, client, id, timeout)
 	if errors.Is(err, errImportFailed) {
