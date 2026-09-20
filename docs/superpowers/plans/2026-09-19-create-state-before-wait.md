@@ -295,10 +295,12 @@ one copy rather than five."
 
 **Files:**
 - Create: `internal/services/blockstorage/failed_create_internal_test.go`
+- Modify: `internal/services/blockstorage/blockstorage.go` (add `recordCreated`)
 - Modify: `internal/services/blockstorage/volume_resource.go` (`Create`, around lines 127-136)
 
 **Interfaces:**
 - Consumes: `tfstate.NullUnknowns(state *tfsdk.State) diag.Diagnostics` from Task 1.
+- Produces: `recordCreated(ctx context.Context, resp *resource.CreateResponse, plan any) bool` in `internal/services/blockstorage/blockstorage.go` — Tasks 3 and 4 call it. It writes the plan to state, nulls the unknowns, and reports whether `Create` should keep going.
 - Produces: `fakeConfig(url string) *clients.Config` in `package blockstorage`'s internal test files — Tasks 3 and 4 reuse it rather than redefining it.
 
 - [ ] **Step 1: Write the failing test**
@@ -458,15 +460,41 @@ func TestVolumeCreateKeepsAVolumeThatFailedToBuild(t *testing.T) {
 Run: `go test ./internal/services/blockstorage/ -run TestVolumeCreateKeepsAVolumeThatFailedToBuild -v`
 Expected: FAIL at `create returned no state: Terraform forgets vol-1 and the next apply creates a second volume`.
 
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 3: Add the shared `recordCreated` helper**
 
-In `internal/services/blockstorage/volume_resource.go`, add the import in the group that holds `internal/clients`:
+All three Cinder resources record their object the same way, so the three lines live in one place. Add to `internal/services/blockstorage/blockstorage.go`:
 
 ```go
+// recordCreated saves a just-created object to state before Create waits for it
+// to become available. Cinder keeps an object whose build fails (status
+// "error"), so a failed or interrupted wait has to return its error with the
+// object in state: Terraform then marks the resource tainted, and the next apply
+// or a destroy deletes it instead of leaving it behind and creating another. The
+// attributes Cinder has not reported yet are saved as null, since Terraform
+// refuses unknown values in state, and the next refresh reads them. It reports
+// whether Create should carry on.
+func recordCreated(ctx context.Context, resp *resource.CreateResponse, plan any) bool {
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+	resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
+	return !resp.Diagnostics.HasError()
+}
+```
+
+`blockstorage.go` currently imports only `fmt`, `diag`, and `internal/clients`. Add the three it now needs:
+
+```go
+	"context"
+
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+
 	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 ```
 
-Then in `Create`, insert the block between the create call and the wait. Before:
+Note the parameter is `plan any` and the call sites pass `&plan`: `resp.State.Set` needs the pointer, and the helper cannot name the three different model types.
+
+- [ ] **Step 4: Use it in `volume_resource.go`**
+
+In `Create`, insert the call between the create call and the wait. `volume_resource.go` needs no new import — the helper is in its own package. Before:
 
 ```go
 	vol, err := volumes.Create(ctx, client, createOpts, nil).Extract()
@@ -488,15 +516,7 @@ After:
 	}
 
 	plan.ID = types.StringValue(vol.ID)
-	// Cinder keeps a volume whose build fails (status "error"), so record it
-	// before waiting. A failed or interrupted wait then returns its error with
-	// the volume in state, Terraform marks it tainted, and the next apply or a
-	// destroy deletes it instead of leaving it behind and creating another. The
-	// attributes Cinder has not reported yet are saved as null; the next refresh
-	// reads them.
-	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
-	if resp.Diagnostics.HasError() {
+	if !recordCreated(ctx, resp, &plan) {
 		return
 	}
 
@@ -505,20 +525,20 @@ After:
 
 Nothing else in `Create` changes: the success path still does its own `volumes.Get`, `flatten`, and `resp.State.Set`.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [ ] **Step 5: Run the test to verify it passes**
 
 Run: `go test ./internal/services/blockstorage/ -run TestVolumeCreateKeepsAVolumeThatFailedToBuild -v`
 Expected: PASS. It takes about 3 seconds, because the delete waiter sleeps 3 seconds between its two polls.
 
-- [ ] **Step 5: Run the full unit suite**
+- [ ] **Step 6: Run the full unit suite**
 
 Run: `go test ./internal/... -timeout 120s`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add internal/services/blockstorage/volume_resource.go internal/services/blockstorage/failed_create_internal_test.go
+git add internal/services/blockstorage/blockstorage.go internal/services/blockstorage/volume_resource.go internal/services/blockstorage/failed_create_internal_test.go
 git commit -m "fix(blockstorage): keep a pcd_blockstorage_volume that fails to build in state
 
 A volume whose build ends in \"error\" stays in Cinder, but Create returned the
@@ -545,7 +565,7 @@ then refreshes and deletes the resulting state."
 - Modify: `internal/services/blockstorage/snapshot_resource.go` (`Create`, around lines 104-110)
 
 **Interfaces:**
-- Consumes: `tfstate.NullUnknowns` from Task 1; `fakeConfig(url string) *clients.Config` from Task 2.
+- Consumes: `recordCreated(ctx context.Context, resp *resource.CreateResponse, plan any) bool` and `fakeConfig(url string) *clients.Config`, both from Task 2.
 - Produces: nothing new.
 
 - [ ] **Step 1: Write the failing test**
@@ -664,13 +684,7 @@ Expected: FAIL at `create returned no state: Terraform forgets snap-1 and the ne
 
 - [ ] **Step 3: Write the implementation**
 
-In `internal/services/blockstorage/snapshot_resource.go`, add the import in the group that holds `internal/clients`:
-
-```go
-	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
-```
-
-Then in `Create`, insert the block between the create call and the wait. Before:
+In `internal/services/blockstorage/snapshot_resource.go`, insert the `recordCreated` call between the create call and the wait. No new import is needed — Task 2 put the helper in this package. Before:
 
 ```go
 	if err != nil {
@@ -690,15 +704,7 @@ After:
 	}
 
 	plan.ID = types.StringValue(snap.ID)
-	// Cinder keeps a snapshot whose creation fails (status "error"), so record it
-	// before waiting. A failed or interrupted wait then returns its error with
-	// the snapshot in state, Terraform marks it tainted, and the next apply or a
-	// destroy deletes it instead of leaving it behind and creating another. The
-	// attributes Cinder has not reported yet are saved as null; the next refresh
-	// reads them.
-	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
-	if resp.Diagnostics.HasError() {
+	if !recordCreated(ctx, resp, &plan) {
 		return
 	}
 
@@ -744,7 +750,7 @@ then refreshes and deletes the resulting state."
 - Modify: `internal/services/blockstorage/backup_resource.go` (`Create`, around lines 107-113)
 
 **Interfaces:**
-- Consumes: `tfstate.NullUnknowns` from Task 1; `fakeConfig(url string) *clients.Config` from Task 2.
+- Consumes: `recordCreated(ctx context.Context, resp *resource.CreateResponse, plan any) bool` and `fakeConfig(url string) *clients.Config`, both from Task 2.
 - Produces: nothing new.
 
 - [ ] **Step 1: Write the failing test**
@@ -867,13 +873,7 @@ Expected: FAIL at `create returned no state: Terraform forgets bkp-1 and the nex
 
 - [ ] **Step 3: Write the implementation**
 
-In `internal/services/blockstorage/backup_resource.go`, add the import in the group that holds `internal/clients`:
-
-```go
-	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
-```
-
-Then in `Create`, insert the block between the create call and the wait. Before:
+In `internal/services/blockstorage/backup_resource.go`, insert the `recordCreated` call between the create call and the wait. No new import is needed — Task 2 put the helper in this package. Before:
 
 ```go
 	if err != nil {
@@ -893,15 +893,7 @@ After:
 	}
 
 	plan.ID = types.StringValue(backup.ID)
-	// Cinder keeps a backup whose run fails (status "error"), so record it before
-	// waiting. A failed or interrupted wait then returns its error with the
-	// backup in state, Terraform marks it tainted, and the next apply or a
-	// destroy deletes it instead of leaving it behind and creating another. The
-	// attributes Cinder has not reported yet are saved as null; the next refresh
-	// reads them.
-	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
-	if resp.Diagnostics.HasError() {
+	if !recordCreated(ctx, resp, &plan) {
 		return
 	}
 
@@ -951,6 +943,8 @@ then refreshes and deletes the resulting state."
 **Interfaces:**
 - Consumes: `tfstate.NullUnknowns` from Task 1.
 - Produces: nothing later tasks use.
+
+`package images` has one such call site, so it calls `tfstate.NullUnknowns` inline rather than growing a helper. Task 2's `recordCreated` is unexported and lives in `package blockstorage`, which has three; this package cannot reach it and does not need it.
 
 This task covers two coupled changes. The image is recorded right after `images.Create`, **before** the data upload, because Glance has the image from that moment and an apply interrupted mid-upload orphans a `queued` image today. That puts the record ahead of the two existing paths that delete the image and fail, so those paths must clear the state — but only when the delete actually worked.
 
