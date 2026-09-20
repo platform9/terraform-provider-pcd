@@ -141,6 +141,24 @@ exists on the host once that role has converged, and the image depends on the
 image-library role because the upload goes to the image-library host. Neither
 dependency is visible in the resources' own attributes, so both are explicit.
 
+**Set `network_mtu` to your host's MTU.** PCD gives a network created through
+its API — which is what Terraform uses — an MTU from the region's own Neutron
+configuration: on Community Edition 2026.4 that is 9000 for a flat network and
+8942 for a Geneve one. The PCD UI sends an MTU of its own instead, so the same
+network made in the UI differs. If your host's interface carries the usual 1500,
+a network claiming 9000 breaks quietly — instances answer ping, lease addresses
+and serve ordinary TCP, while anything large is dropped on the way out of the
+host, so bulk transfers and big UDP replies hang with nothing in any log.
+Compare the two and set the variable when they differ:
+
+```shell
+ip link show enp1s0                                  # on the host: mtu 1500
+openstack network show workload-net -f value -c mtu  # 9000 unless you set it
+```
+
+Instances already attached keep the MTU they booted with until they are hard
+rebooted, because the tap device's MTU is fixed when the port is plugged.
+
 ## Day 2: the workload
 
 `app.tf` boots the instance and attaches a volume to it.

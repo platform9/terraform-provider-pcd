@@ -17,6 +17,7 @@ import (
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/dns"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/external"
+	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/mtu"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/portsecurity"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/provider"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/networks"
@@ -64,6 +65,7 @@ type networkModel struct {
 	Segments     types.List   `tfsdk:"segments"`
 	PortSecurity types.Bool   `tfsdk:"port_security_enabled"`
 	DNSDomain    types.String `tfsdk:"dns_domain"`
+	MTU          types.Int64  `tfsdk:"mtu"`
 }
 
 type segmentModel struct {
@@ -79,6 +81,7 @@ type networkExtended struct {
 	external.NetworkExternalExt
 	portsecurity.PortSecurityExt
 	dns.NetworkDNSExt
+	mtu.NetworkMTUExt
 }
 
 func (r *networkResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -123,6 +126,16 @@ func (r *networkResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 					"and on whether the network is external; the DNS guide explains the rules. Neutron publishes a record " +
 					"when it creates a port, or when a port's `dns_name` or `dns_domain` changes; never retroactively, so " +
 					"set this before booting instances.",
+			},
+			"mtu": schema.Int64Attribute{
+				Optional: true, Computed: true,
+				MarkdownDescription: "The network's MTU. Left unset, PCD assigns one from the region's own Neutron configuration, " +
+					"which on Community Edition 2026.4 is 9000 for flat and VLAN networks and 8942 for Geneve — the PCD UI, which " +
+					"sends an MTU of its own, produces different values for the same network. That default can exceed what the host's " +
+					"interface actually carries, and the mismatch is silent: small packets and ordinary TCP work while large datagrams " +
+					"are dropped on the way out of the host. Compare it with the interface (`ip link show <iface>`) and set this " +
+					"explicitly when they differ. Neutron rejects a value above the deployment's maximum. Instances already attached " +
+					"to the network keep the old MTU until their ports are re-attached (a hard reboot).",
 			},
 			"segments": schema.ListNestedAttribute{
 				Optional: true,
@@ -205,6 +218,9 @@ func networkCreateOpts(ctx context.Context, plan *networkModel, diags *diag.Diag
 		ps := plan.PortSecurity.ValueBool()
 		createOpts = portsecurity.NetworkCreateOptsExt{CreateOptsBuilder: createOpts, PortSecurityEnabled: &ps}
 	}
+	if !plan.MTU.IsNull() && !plan.MTU.IsUnknown() {
+		createOpts = mtu.CreateOptsExt{CreateOptsBuilder: createOpts, MTU: int(plan.MTU.ValueInt64())}
+	}
 	if !plan.Segments.IsNull() && !plan.Segments.IsUnknown() {
 		var segs []segmentModel
 		diags.Append(plan.Segments.ElementsAs(ctx, &segs, false)...)
@@ -256,6 +272,11 @@ func networkUpdateOpts(plan, state *networkModel) networks.UpdateOptsBuilder {
 	if !plan.DNSDomain.Equal(state.DNSDomain) && !plan.DNSDomain.IsUnknown() {
 		v := plan.DNSDomain.ValueString()
 		updateOpts = dns.NetworkUpdateOptsExt{UpdateOptsBuilder: updateOpts, DNSDomain: &v}
+	}
+	// The extension omits the key when MTU is 0, so an MTU cannot be cleared
+	// back to the deployment's default once set; Neutron keeps the last value.
+	if !plan.MTU.Equal(state.MTU) && !plan.MTU.IsNull() && !plan.MTU.IsUnknown() {
+		updateOpts = mtu.UpdateOptsExt{UpdateOptsBuilder: updateOpts, MTU: int(plan.MTU.ValueInt64())}
 	}
 	return updateOpts
 }
@@ -487,6 +508,7 @@ func (r *networkResource) readInto(ctx context.Context, client *gophercloud.Serv
 	m.PortSecurity = types.BoolValue(n.PortSecurityEnabled)
 	m.TenantID = types.StringValue(n.TenantID)
 	m.DNSDomain = types.StringValue(n.DNSDomain)
+	m.MTU = types.Int64Value(int64(n.MTU))
 
 	tagVals := n.Tags
 	if tagVals == nil {

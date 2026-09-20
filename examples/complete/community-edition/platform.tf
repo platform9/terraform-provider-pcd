@@ -10,6 +10,11 @@ resource "pcd_networking_network" "workload" {
   shared   = true
   external = true
 
+  # PCD gives a network created through the API an MTU from its own Neutron
+  # configuration, which can be larger than the host's interface carries. See
+  # network_mtu in variables.tf.
+  mtu = var.network_mtu
+
   segments = [{
     network_type     = "flat"
     physical_network = "physnet1"
