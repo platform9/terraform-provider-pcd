@@ -85,6 +85,11 @@ network_cidr          = "192.168.1.0/24"
 network_gateway       = "192.168.1.1"
 allocation_pool_start = "192.168.1.200"
 allocation_pool_end   = "192.168.1.220"
+
+# The MTU instances should use. Set it to the host NIC's MTU (ip link show
+# <iface>) unless your network carries jumbo frames; PCD's own default is
+# larger, and instances silently lose large packets when it exceeds the NIC's.
+# network_mtu = 1500
 ```
 
 ## The provider
@@ -154,9 +159,12 @@ resource "pcd_cluster_blueprint" "region" {
   name            = var.blueprint_name
   dns_domain_name = var.dns_domain_name
 
+  # Tenant networks are Geneve overlays carried over the host's tunneling
+  # interface, each with an ID from vnid_range, so they need no
+  # physical-network label and no VLANs on the switch.
   virtual_networking = {
     enabled       = true
-    underlay_type = "vlan"
+    underlay_type = "geneve"
     vnid_range    = "1000:2000"
   }
 
@@ -265,7 +273,16 @@ resource "pcd_host_cluster_role" "storage" {
 }
 ```
 
-Three things in this file are worth understanding before you change it.
+Four things in this file are worth understanding before you change it.
+
+**How tenant networks travel.** `virtual_networking` decides what a network
+created without `segments` (a tenant network) becomes. With `underlay_type =
+"geneve"`, each one is an overlay tunneled over the host configuration's
+`tunneling_interface`, with an ID from `vnid_range`, so it needs no
+physical-network label and no VLANs on the switch. With `"vlan"`, each one is
+instead a VLAN from `vnid_range` on the physical-network label the host
+configuration puts on its tunneling interface (`physnet1` here), and the switch
+ports between hosts must carry those VLANs.
 
 **Three names, and what each becomes.** `storage_backends_json` has two levels
 of keys. The top-level key (`nfs`) is the backend name: on the host it becomes
@@ -316,6 +333,11 @@ resource "pcd_networking_network" "workload" {
   name     = "workload-net"
   shared   = true
   external = true
+
+  # PCD gives a network created through the API an MTU from its own Neutron
+  # configuration, which can be larger than the host's interface carries. See
+  # network_mtu in variables.tf.
+  mtu = var.network_mtu
 
   segments = [{
     network_type     = "flat"
@@ -390,6 +412,24 @@ The network depends on the hypervisor role because the `physnet1` label only
 exists on the host once that role has converged, and the image depends on the
 image-library role because the upload goes to the image-library host. Neither
 dependency is visible in the resources' own attributes, so both are explicit.
+
+**Set `network_mtu` to your host's MTU.** PCD gives a network created through
+its API — which is what Terraform uses — an MTU from the region's own Neutron
+configuration: on Community Edition 2026.4 that is 9000 for a flat network and
+8942 for a Geneve one. The PCD UI sends an MTU of its own instead, so the same
+network made in the UI differs. If your host's interface carries the usual 1500,
+a network claiming 9000 breaks quietly — instances answer ping, lease addresses
+and serve ordinary TCP, while anything large is dropped on the way out of the
+host, so bulk transfers and big UDP replies hang with nothing in any log.
+Compare the two and set the variable when they differ:
+
+```shell
+ip link show enp1s0                                  # on the host: mtu 1500
+openstack network show workload-net -f value -c mtu  # 9000 unless you set it
+```
+
+Instances already attached keep the MTU they booted with until they are hard
+rebooted, because the tap device's MTU is fixed when the port is plugged.
 
 ## Day 2: the workload
 
@@ -508,8 +548,68 @@ still depends on that role. On the lab a full teardown took three runs of
    host-configuration assignment, the host configuration, the blueprint
    (deleted from PCD since provider v0.1.10), and the volume type.
 
-The host stays authorized, with no roles, and can be onboarded again with the
-same configuration.
+The host stays authorized, with no roles, but it is not back to the state the
+first apply found. A destroy leaves two things standing on the host that refuse
+the next onboarding, neither of them visible from Terraform. Clear both before
+applying the configuration again; on the lab, a re-apply failed twice before it
+worked.
+
+### Before onboarding the host again
+
+**Put the management address back on the host's interface.** Removing the roles
+does not remove the OVS bridges PCD built on the host: `br-int` and `br-tun`
+stay, with the management address on `br-tun` and the physical interface bare.
+The host configuration names that interface for management, VM console, host
+liveness, and image-library traffic — and, on a non-VLAN underlay, for tunneling
+— and the resource manager resolves each of those by name against the inventory
+the host agent reports. With no address on the interface, the next apply's
+`pcd_host_config_assignment` is refused with `404 HostIntfIpNotFound: Interface
+enp1s0 is missing an IP. IP required if interface used for Virtual network
+tunnel, Management, VM console, Image lib I/O or Host liveness checks`. On the
+host, delete the leftover bridges and re-apply its network configuration:
+
+```shell
+for b in $(sudo ovs-vsctl list-br); do sudo ovs-vsctl --if-exists del-br "$b"; done
+sudo netplan apply                 # Ubuntu; whatever re-applies the host's network
+ip -br addr show                   # the address is back on enp1s0, no br-* left
+```
+
+The resource manager answers from its own inventory, not from the host, so give
+the host agent a minute or two to re-report before applying again:
+`extensions.interfaces.data.iface_ip` in `GET /resmgr/v1/hosts/<host-uuid>` (the
+[Importing guide](importing.md) shows how to get a token) names the interface
+once it has an address again.
+
+**Re-enable the volume service.** Removing the `persistent-storage` role
+disables the host's `cinder-volume` service, and assigning the role again does
+not re-enable it: after a destroy, `cinder-volume <host-uuid>@nfs-primary` is
+still listed and up, but its status is disabled, with `disabled_reason` `Pf9
+disabling service cinder-volume ... due to requested deauth`. Nothing fails
+outright — the next apply strands instead. Every volume it creates goes to
+`error`, the image's web-download import never finishes, and the apply sits in
+`pcd_images_image.cirros: Still creating...` for the provider's full
+thirty-minute image timeout, with nothing in the log to say why. Enable the
+service before applying:
+
+```shell
+pcdctl volume service list                                               # status disabled
+pcdctl volume service set --enable <host-uuid>@nfs-primary cinder-volume
+```
+
+If an apply already hung that way, it left resources behind that never reached
+Terraform state, and they have to go before the next run: the `queued` image,
+its `image-<id>` backing volume in the service project, and the `workload-data`
+volume.
+
+```shell
+pcdctl image list                      # cirros, queued
+pcdctl image delete <image-id>
+pcdctl volume list --all-projects      # image-<id> and workload-data
+pcdctl volume delete <volume-id>
+```
+
+With the interface carrying its address and the volume service enabled, the same
+configuration applies again from scratch.
 
 ## Already have a region?
 
