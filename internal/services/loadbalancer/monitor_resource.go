@@ -26,6 +26,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -154,9 +155,27 @@ func (r *monitorResource) Create(ctx context.Context, req resource.CreateRequest
 		resp.Diagnostics.AddError("loadbalancer: waiting after monitor create", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(mon.ID)
+	// Record the monitor only now that the load balancer is ACTIVE again.
+	// Octavia refuses a monitor's DELETE while the load balancer is in ERROR,
+	// so a monitor recorded before a wait that failed on ERROR would be tainted
+	// and impossible to destroy. A failed wait above still returns without
+	// state.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
-	_, readDiags := r.readInto(ctx, client, mon.ID, &plan)
+	notFound, readDiags := r.readInto(ctx, client, mon.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("loadbalancer: reading monitor after create",
+			fmt.Sprintf("Monitor %s no longer exists.", mon.ID))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -164,6 +183,9 @@ func (r *monitorResource) Read(ctx context.Context, req resource.ReadRequest, re
 	var state monitorModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "load balancer health monitor", state.Name.ValueString()) {
 		return
 	}
 
@@ -253,8 +275,16 @@ func (r *monitorResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	_, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
+	notFound, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("loadbalancer: reading monitor after update",
+			fmt.Sprintf("Monitor %s no longer exists.", plan.ID.ValueString()))
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -262,6 +292,9 @@ func (r *monitorResource) Delete(ctx context.Context, req resource.DeleteRequest
 	var state monitorModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "load balancer health monitor", state.Name.ValueString()) {
 		return
 	}
 
@@ -304,6 +337,13 @@ func (r *monitorResource) readInto(ctx context.Context, client *gophercloud.Serv
 			return true, diags
 		}
 		diags.AddError("loadbalancer: reading monitor", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a monitor that exists from state.
+	if mon == nil {
+		diags.AddError("loadbalancer: reading monitor",
+			fmt.Sprintf("The Load Balancer API answered without a healthmonitor object for ID %q.", id))
 		return false, diags
 	}
 

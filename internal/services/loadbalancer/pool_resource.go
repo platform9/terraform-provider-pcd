@@ -27,6 +27,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -172,9 +173,26 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 		resp.Diagnostics.AddError("loadbalancer: waiting after pool create", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(pool.ID)
+	// Record the pool only now that the load balancer is ACTIVE again. Octavia
+	// refuses a pool's DELETE while the load balancer is in ERROR, so a pool
+	// recorded before a wait that failed on ERROR would be tainted and
+	// impossible to destroy. A failed wait above still returns without state.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
-	_, readDiags := r.readInto(ctx, client, pool.ID, &plan)
+	notFound, readDiags := r.readInto(ctx, client, pool.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("loadbalancer: reading pool after create",
+			fmt.Sprintf("Pool %s no longer exists.", pool.ID))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -182,6 +200,9 @@ func (r *poolResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	var state poolModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "load balancer pool", state.Name.ValueString()) {
 		return
 	}
 
@@ -269,8 +290,16 @@ func (r *poolResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	_, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
+	notFound, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("loadbalancer: reading pool after update",
+			fmt.Sprintf("Pool %s no longer exists.", plan.ID.ValueString()))
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -278,6 +307,9 @@ func (r *poolResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	var state poolModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "load balancer pool", state.Name.ValueString()) {
 		return
 	}
 
@@ -331,6 +363,13 @@ func (r *poolResource) readInto(ctx context.Context, client *gophercloud.Service
 			return true, diags
 		}
 		diags.AddError("loadbalancer: reading pool", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a pool that exists from state.
+	if p == nil {
+		diags.AddError("loadbalancer: reading pool",
+			fmt.Sprintf("The Load Balancer API answered without a pool object for ID %q.", id))
 		return false, diags
 	}
 
