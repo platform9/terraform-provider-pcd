@@ -168,6 +168,11 @@ func (r *floatingIPResource) Read(ctx context.Context, req resource.ReadRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	// A floating IP has no name, so the warning names it by its address. A row
+	// with no ID holds one only when the config set it.
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "floating IP", state.Address.ValueString()) {
+		return
+	}
 
 	client, err := r.config.NetworkV2Client()
 	if err != nil {
@@ -294,6 +299,9 @@ func (r *floatingIPResource) Delete(ctx context.Context, req resource.DeleteRequ
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "floating IP", state.Address.ValueString()) {
+		return
+	}
 
 	client, err := r.config.NetworkV2Client()
 	if err != nil {
@@ -323,6 +331,13 @@ func (r *floatingIPResource) readInto(ctx context.Context, client *gophercloud.S
 			return true, diags
 		}
 		diags.AddError("networking: reading floating IP", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to an empty floating IP. It is not a
+	// not-found: that would drop a floating IP that exists from state.
+	if fip.ID == "" {
+		diags.AddError("networking: reading floating IP",
+			fmt.Sprintf("The Networking API answered without a floatingip object for ID %q.", id))
 		return false, diags
 	}
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -77,6 +78,28 @@ func floatingIPPlan(t *testing.T, r *floatingIPResource, tags []string) tfsdk.Pl
 		planned.Tags = set
 	}
 	return newPlan(t, schemaOf(t, r), &planned)
+}
+
+// floatingIPRowWithoutID is the row provider v0.1.14 left in state when the
+// read-back after a successful POST failed: Terraform saved the unknowns
+// Create returned as null, the ID among them. address is the configured
+// address, or null when the config left the choice to Neutron.
+func floatingIPRowWithoutID(t *testing.T, r *floatingIPResource, address types.String) tfsdk.State {
+	t.Helper()
+	return newState(t, schemaOf(t, r), &floatingIPModel{
+		ID:                types.StringNull(),
+		Pool:              types.StringValue(floatingIPPool),
+		FloatingNetworkID: types.StringNull(),
+		Description:       types.StringNull(),
+		Address:           address,
+		PortID:            types.StringNull(),
+		FixedIP:           types.StringNull(),
+		TenantID:          types.StringNull(),
+		Status:            types.StringNull(),
+		RouterID:          types.StringNull(),
+		Tags:              types.SetNull(types.StringType),
+		Region:            types.StringNull(),
+	})
 }
 
 // floatingIPPortChange returns the state of fip-1, unassociated, and the plan
@@ -237,6 +260,57 @@ func TestFloatingIPCreateDropsStateWhenReadBack404s(t *testing.T) {
 	}
 }
 
+// The row v0.1.14 left has no ID. Read used to send GET for an empty ID, which
+// reaches the collection URL; Neutron answers that with the list, which
+// gophercloud decodes to an empty floating IP, and Read saved it as id "".
+// Read must drop the row with a warning that names the configured address,
+// without sending anything.
+func TestFloatingIPReadDropsARowWithNoID(t *testing.T) {
+	t.Parallel()
+	routes := floatingIPRoutes()
+	routes["GET "+floatingIPCollectionPath+"/"] = reply(http.StatusOK, `{"floatingips": [`+floatingIPJSON+`]}`)
+	neutron := newFakeNeutron(t, routes)
+	r := &floatingIPResource{config: neutron.config}
+
+	resp := runRead(r, floatingIPRowWithoutID(t, r, types.StringValue(floatingIPAddress)))
+	if sent := neutron.received(); len(sent) != 0 {
+		t.Fatalf("refresh of a row with no ID sent %v; it names nothing to read", sent)
+	}
+	if resp.Diagnostics.HasError() || resp.Diagnostics.WarningsCount() != 1 {
+		t.Fatalf("diagnostics = %v, want exactly one warning", resp.Diagnostics)
+	}
+	if detail := resp.Diagnostics[0].Detail(); !strings.Contains(detail, `"203.0.113.10"`) {
+		t.Fatalf("warning detail %q does not name the address to look for", detail)
+	}
+	if !resp.State.Raw.IsNull() {
+		t.Fatalf("refresh kept a row with no ID: %v", resp.State.Raw)
+	}
+}
+
+// A 200 for the floating IP's own URL whose body holds no floatingip object
+// makes gophercloud return an empty floating IP and no error. readInto must
+// report that as an error, and not as not-found: that would drop a real
+// floating IP from state.
+func TestFloatingIPReadIntoRefusesAnAnswerWithoutTheFloatingIP(t *testing.T) {
+	t.Parallel()
+	routes := floatingIPRoutes()
+	routes["GET "+floatingIPItemPath] = reply(http.StatusOK, `{"floatingips": [`+floatingIPJSON+`]}`)
+	r := &floatingIPResource{config: newFakeNeutron(t, routes).config}
+	client, err := r.config.NetworkV2Client()
+	if err != nil {
+		t.Fatalf("building the fake Neutron client: %v", err)
+	}
+
+	m := floatingIPModel{Region: types.StringNull()}
+	notFound, diags := r.readInto(context.Background(), client, floatingIPID, &m)
+	if notFound {
+		t.Fatal("readInto reported fip-1 not found; the next refresh would drop a floating IP that exists")
+	}
+	if !diags.HasError() {
+		t.Fatalf("readInto accepted an answer without the floating IP: diagnostics %v", diags)
+	}
+}
+
 // An update whose read-back fails must return the error and keep the prior
 // state, which the next plan compares against. Update used to write the plan,
 // including the fixed_ip, router_id and status ModifyPlan marks unknown when
@@ -279,5 +353,30 @@ func TestFloatingIPUpdateKeepsStateWhenReadBack404s(t *testing.T) {
 	}
 	if !resp.State.Raw.Equal(priorState.Raw) {
 		t.Fatalf("update state = %v, want the prior state %v", resp.State.Raw, priorState.Raw)
+	}
+}
+
+// terraform destroy -refresh=false reaches Delete without Read dropping the
+// v0.1.14 row first. Delete used to send DELETE for an empty ID, which reaches
+// the collection URL, and Neutron refuses that. Delete must warn and send
+// nothing, so Terraform forgets the row. With no configured address, the
+// warning has nothing to name the floating IP by: the pool is the external
+// network's name, not the floating IP's.
+func TestFloatingIPDeleteSkipsARowWithNoID(t *testing.T) {
+	t.Parallel()
+	routes := floatingIPRoutes()
+	routes["DELETE "+floatingIPCollectionPath+"/"] = reply(http.StatusMethodNotAllowed, "")
+	neutron := newFakeNeutron(t, routes)
+	r := &floatingIPResource{config: neutron.config}
+
+	resp := runDelete(r, floatingIPRowWithoutID(t, r, types.StringNull()))
+	if sent := neutron.received(); len(sent) != 0 {
+		t.Fatalf("delete of a row with no ID sent %v; it names nothing to delete", sent)
+	}
+	if resp.Diagnostics.HasError() || resp.Diagnostics.WarningsCount() != 1 {
+		t.Fatalf("diagnostics = %v, want exactly one warning", resp.Diagnostics)
+	}
+	if detail := resp.Diagnostics[0].Detail(); strings.Contains(detail, `"public"`) {
+		t.Fatalf("warning detail %q names the pool, which is the external network, not the floating IP", detail)
 	}
 }
