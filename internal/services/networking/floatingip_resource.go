@@ -26,6 +26,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -128,6 +129,12 @@ func (r *floatingIPResource) Create(ctx context.Context, req resource.CreateRequ
 		resp.Diagnostics.AddError("networking: creating floating IP", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(fip.ID)
+	// Neutron keeps the floating IP, with its address allocated, whatever fails
+	// next, so record it before the tags step.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
 	if !plan.Tags.IsNull() && !plan.Tags.IsUnknown() {
 		var tags []string
@@ -141,8 +148,17 @@ func (r *floatingIPResource) Create(ctx context.Context, req resource.CreateRequ
 		}
 	}
 
-	_, readDiags := r.readInto(ctx, client, fip.ID, &plan)
+	notFound, readDiags := r.readInto(ctx, client, fip.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("networking: reading floating IP after create",
+			fmt.Sprintf("Floating IP %s no longer exists.", fip.ID))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -259,8 +275,16 @@ func (r *floatingIPResource) Update(ctx context.Context, req resource.UpdateRequ
 		}
 	}
 
-	_, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
+	notFound, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("networking: reading floating IP after update",
+			fmt.Sprintf("Floating IP %s no longer exists.", plan.ID.ValueString()))
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
