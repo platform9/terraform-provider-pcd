@@ -15,6 +15,7 @@ import (
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/layer3/routers"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/ports"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -23,6 +24,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -101,9 +103,20 @@ func (r *routerInterfaceResource) Create(ctx context.Context, req resource.Creat
 	}
 
 	plan.ID = types.StringValue(info.PortID)
-	if r.readInto(ctx, client, info.PortID, &plan) {
-		resp.Diagnostics.AddError("networking: reading router interface", "interface port disappeared immediately after creation")
+	// Neutron keeps the interface if the read-back fails, so record it first.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
 		return
+	}
+
+	notFound, diags := r.readInto(ctx, client, info.PortID, &plan)
+	resp.Diagnostics.Append(diags...)
+	if notFound {
+		resp.Diagnostics.AddError("networking: reading router interface", "interface port disappeared immediately after creation")
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -114,6 +127,9 @@ func (r *routerInterfaceResource) Read(ctx context.Context, req resource.ReadReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "router interface", "") {
+		return
+	}
 
 	client, err := r.config.NetworkV2Client()
 	if err != nil {
@@ -121,10 +137,15 @@ func (r *routerInterfaceResource) Read(ctx context.Context, req resource.ReadReq
 		return
 	}
 
-	if r.readInto(ctx, client, state.ID.ValueString(), &state) {
+	notFound, diags := r.readInto(ctx, client, state.ID.ValueString(), &state)
+	if notFound {
 		resp.Diagnostics.AddWarning("Router interface not found",
 			fmt.Sprintf("Router interface %s no longer exists and was removed from state.", state.ID.ValueString()))
 		resp.State.RemoveResource(ctx)
+		return
+	}
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -167,11 +188,23 @@ func (r *routerInterfaceResource) ImportState(ctx context.Context, req resource.
 }
 
 // readInto loads the interface port and derives router_id/subnet_id from it.
-// Returns true when the port no longer exists.
-func (r *routerInterfaceResource) readInto(ctx context.Context, client *gophercloud.ServiceClient, portID string, m *routerInterfaceModel) (notFound bool) {
+// It reports notFound when the port no longer exists, and any other failure as
+// an error.
+func (r *routerInterfaceResource) readInto(ctx context.Context, client *gophercloud.ServiceClient, portID string, m *routerInterfaceModel) (notFound bool, diags diag.Diagnostics) {
 	port, err := ports.Get(ctx, client, portID).Extract()
 	if err != nil {
-		return gophercloud.ResponseCodeIs(err, http.StatusNotFound)
+		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+			return true, diags
+		}
+		diags.AddError("networking: reading router interface", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to a zeroed port. It is not a
+	// not-found: that would drop an interface that exists from state.
+	if port.ID == "" {
+		diags.AddError("networking: reading router interface",
+			fmt.Sprintf("The Networking API answered without a port object for ID %q.", portID))
+		return false, diags
 	}
 
 	m.ID = types.StringValue(port.ID)
@@ -183,5 +216,5 @@ func (r *routerInterfaceResource) readInto(ctx context.Context, client *gophercl
 	if m.Region.IsNull() || m.Region.IsUnknown() {
 		m.Region = types.StringValue(r.config.Region)
 	}
-	return false
+	return false, diags
 }
