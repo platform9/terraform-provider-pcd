@@ -158,6 +158,9 @@ func (r *zoneResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "DNS zone", state.Name.ValueString()) {
+		return
+	}
 
 	client, err := r.config.DNSV2Client()
 	if err != nil {
@@ -216,8 +219,16 @@ func (r *zoneResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	_, readDiags := r.readInto(ctx, client, id, &plan)
+	notFound, readDiags := r.readInto(ctx, client, id, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("dns: reading zone after update",
+			fmt.Sprintf("Zone %s no longer exists.", id))
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -225,6 +236,9 @@ func (r *zoneResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	var state zoneModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "DNS zone", state.Name.ValueString()) {
 		return
 	}
 
@@ -258,6 +272,14 @@ func (r *zoneResource) readInto(ctx context.Context, client *gophercloud.Service
 			return true, diags
 		}
 		diags.AddError("dns: reading zone", err.Error())
+		return false, diags
+	}
+	// Extract decodes the whole body, so a 200 without the zone decodes to one
+	// with every field empty, or to nil for a JSON null. Neither is a
+	// not-found: that would drop a zone that exists from state.
+	if zone == nil || zone.ID == "" {
+		diags.AddError("dns: reading zone",
+			fmt.Sprintf("The DNS API answered without a zone object for ID %q.", id))
 		return false, diags
 	}
 
