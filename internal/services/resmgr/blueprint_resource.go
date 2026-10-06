@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -147,6 +148,15 @@ func (r *blueprintResource) Create(ctx context.Context, req resource.CreateReque
 		resp.Diagnostics.AddError("resmgr: creating blueprint", err.Error())
 		return
 	}
+	// resmgr keeps the blueprint whatever fails next, so record it before the
+	// vnc_floating_ip PUT and the read-back. The attributes resmgr has not
+	// reported yet are saved as null; the next refresh reads them. The Required
+	// name is the key, so there is no id to set first.
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	// resmgr silently discards vncFloatingIp on POST and only persists it on
 	// PUT (verified against 2026.4: identical body, POST stores null, PUT stores
@@ -162,7 +172,12 @@ func (r *blueprintResource) Create(ctx context.Context, req resource.CreateReque
 		}
 	}
 
-	r.refresh(ctx, client, &plan, "blueprint created", &resp.Diagnostics)
+	if !r.refresh(ctx, client, &plan, "blueprint created", &resp.Diagnostics) {
+		// Leave the row recorded after the POST in place, untainted: an error
+		// here would make the next apply delete and re-create the blueprint
+		// over one failed read.
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -214,8 +229,14 @@ func (r *blueprintResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	r.refresh(ctx, client, &plan, "blueprint updated", &resp.Diagnostics)
+	refreshed := r.refresh(ctx, client, &plan, "blueprint updated", &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	if !refreshed {
+		// A virtual_networking block that leaves a leaf unset plans that leaf
+		// unknown, and Terraform refuses unknown values in state. Save it as
+		// null; the next refresh reads it.
+		resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
+	}
 }
 
 // refresh reconciles state after a write. It reads the server object but keeps
@@ -223,16 +244,18 @@ func (r *blueprintResource) Update(ctx context.Context, req resource.UpdateReque
 // or normalization of a configured attribute (notably the storage_backends_json
 // JSON blob) cannot trip "inconsistent result after apply"; only attributes the
 // user left unknown are taken from the server. A read-back failure is a warning,
-// not an error, so a successful write is never reported as a failed apply.
-func (r *blueprintResource) refresh(ctx context.Context, client *gophercloud.ServiceClient, plan *blueprintResourceModel, what string, diags *diag.Diagnostics) {
+// not an error, so a successful write is never reported as a failed apply;
+// refresh then reports false and leaves plan as it was, unknowns included.
+func (r *blueprintResource) refresh(ctx context.Context, client *gophercloud.ServiceClient, plan *blueprintResourceModel, what string, diags *diag.Diagnostics) bool {
 	saved := *plan
 	if readDiags := r.readInto(ctx, client, plan.Name.ValueString(), plan); readDiags.HasError() {
 		diags.AddWarning("resmgr: "+what+" but read-back failed",
 			"The write was applied; state reflects the plan and reconciles on the next refresh.")
 		*plan = saved
-		return
+		return false
 	}
 	restoreKnown(plan, &saved)
+	return true
 }
 
 // restoreKnown puts the user-configured (known) values from saved back over the
