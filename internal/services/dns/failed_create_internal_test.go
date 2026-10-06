@@ -29,10 +29,14 @@ import (
 // so it answers for every service type and availability. EndpointOverrides is
 // deliberately left empty: applyOverride clears the client's ResourceBase, which
 // would drop the "v2/" prefix NewDNSV2 sets and make every path below a miss.
+// Its client gets a transport of its own, not http.DefaultTransport: every
+// httptest.Server.Close closes the default transport's idle connections,
+// which can cut a request another parallel test is sending.
 func fakeConfig(url string) *clients.Config {
 	return &clients.Config{
 		Region: "region-one",
 		Provider: &gophercloud.ProviderClient{
+			HTTPClient:      http.Client{Transport: &http.Transport{}},
 			EndpointLocator: func(gophercloud.EndpointOpts) (string, error) { return url + "/", nil },
 		},
 	}

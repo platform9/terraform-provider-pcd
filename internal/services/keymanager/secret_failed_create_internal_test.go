@@ -27,10 +27,14 @@ import (
 // "v1/" to the endpoint, so the fake serves /v1/secrets, not /secrets. An
 // EndpointOverrides entry would blank that prefix (internal/clients/config.go
 // applyOverride), so the locator is the only wiring this test uses.
+// Its client gets a transport of its own, not http.DefaultTransport: every
+// httptest.Server.Close closes the default transport's idle connections,
+// which can cut a request another parallel test is sending.
 func fakeConfig(url string) *clients.Config {
 	return &clients.Config{
 		Region: "region-one",
 		Provider: &gophercloud.ProviderClient{
+			HTTPClient:      http.Client{Transport: &http.Transport{}},
 			EndpointLocator: func(gophercloud.EndpointOpts) (string, error) { return url + "/", nil },
 		},
 	}

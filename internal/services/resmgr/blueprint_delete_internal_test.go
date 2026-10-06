@@ -22,7 +22,7 @@ func TestDeleteBlueprintCallsTheAPI(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	client := &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{}, Endpoint: srv.URL + "/"}
+	client := &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{HTTPClient: http.Client{Transport: &http.Transport{}}}, Endpoint: srv.URL + "/"}
 
 	if err := deleteBlueprint(context.Background(), client, "ts-bp"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -53,7 +53,7 @@ func TestDeleteBlueprintStatusHandling(t *testing.T) {
 				w.WriteHeader(tc.status)
 			}))
 			defer srv.Close()
-			client := &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{}, Endpoint: srv.URL + "/"}
+			client := &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{HTTPClient: http.Client{Transport: &http.Transport{}}}, Endpoint: srv.URL + "/"}
 
 			err := deleteBlueprint(context.Background(), client, "ts-bp")
 			if tc.wantErr && err == nil {

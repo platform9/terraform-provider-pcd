@@ -457,6 +457,7 @@ func newFakeResmgr(t *testing.T, held map[string]any) (*fakeResmgr, *clients.Con
 	}))
 	t.Cleanup(srv.Close)
 	cfg := &clients.Config{Provider: &gophercloud.ProviderClient{
+		HTTPClient:      http.Client{Transport: &http.Transport{}},
 		EndpointLocator: func(gophercloud.EndpointOpts) (string, error) { return srv.URL + "/", nil },
 	}}
 	return f, cfg

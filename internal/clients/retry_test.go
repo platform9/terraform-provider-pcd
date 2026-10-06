@@ -169,10 +169,14 @@ func (l *waitLog) sleep(_ context.Context, d time.Duration) error {
 // the retry policy max_retries installs, waiting through sleep. Like the
 // networking tests' fakeConfig, it reaches the fake through EndpointLocator
 // and leaves EndpointOverrides empty, so each client keeps its version prefix.
+// Its client gets a transport of its own, not http.DefaultTransport: every
+// httptest.Server.Close closes the default transport's idle connections,
+// which can cut a request another parallel test is sending.
 func retryingConfig(url string, maxRetries int, sleep func(context.Context, time.Duration) error) *Config {
 	return &Config{
 		Region: "region-one",
 		Provider: &gophercloud.ProviderClient{
+			HTTPClient:      http.Client{Transport: &http.Transport{}},
 			EndpointLocator: func(gophercloud.EndpointOpts) (string, error) { return url + "/", nil },
 			RetryFunc:       newRetryFunc(maxRetries, sleep),
 		},

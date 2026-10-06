@@ -23,10 +23,14 @@ import (
 // fakeConfig points a clients.Config at a test server, so the Cinder client the
 // resources build resolves to it. The locator ignores the endpoint options, so
 // it answers for every service type and availability.
+// Its client gets a transport of its own, not http.DefaultTransport: every
+// httptest.Server.Close closes the default transport's idle connections,
+// which can cut a request another parallel test is sending.
 func fakeConfig(url string) *clients.Config {
 	return &clients.Config{
 		Region: "region-one",
 		Provider: &gophercloud.ProviderClient{
+			HTTPClient:      http.Client{Transport: &http.Transport{}},
 			EndpointLocator: func(gophercloud.EndpointOpts) (string, error) { return url + "/", nil },
 		},
 	}

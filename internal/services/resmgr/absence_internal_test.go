@@ -48,7 +48,7 @@ func TestGetJSONTreatsANullBodyAsAbsent(t *testing.T) {
 			defer srv.Close()
 
 			client := &gophercloud.ServiceClient{
-				ProviderClient: &gophercloud.ProviderClient{},
+				ProviderClient: &gophercloud.ProviderClient{HTTPClient: http.Client{Transport: &http.Transport{}}},
 				Endpoint:       srv.URL + "/",
 			}
 
@@ -105,7 +105,7 @@ func hostList(t *testing.T, first, then string) *gophercloud.ServiceClient {
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	return &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{}, Endpoint: srv.URL + "/"}
+	return &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{HTTPClient: http.Client{Transport: &http.Transport{}}}, Endpoint: srv.URL + "/"}
 }
 
 const twoHosts = `[{"id":"host-a","hostconfig_id":"hc-1"},{"id":"host-b","hostconfig_id":"hc-2"}]`
@@ -144,7 +144,7 @@ func TestHostsAssignedToSurfacesAFailedCheck(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	client := &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{}, Endpoint: srv.URL + "/"}
+	client := &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{HTTPClient: http.Client{Transport: &http.Transport{}}}, Endpoint: srv.URL + "/"}
 	// The delete guard is fail-closed, so this error has to reach it rather than read as
 	// "no hosts are assigned".
 	if _, err := hostsAssignedTo(context.Background(), client, "hc-1"); err == nil {
@@ -191,7 +191,7 @@ func windowed(t *testing.T, perHostStatus int, perHost, list string) *gopherclou
 		_, _ = w.Write([]byte(perHost))
 	}))
 	t.Cleanup(srv.Close)
-	return &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{}, Endpoint: srv.URL + "/"}
+	return &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{HTTPClient: http.Client{Transport: &http.Transport{}}}, Endpoint: srv.URL + "/"}
 }
 
 // A host being deauthorised 404s on its per-host endpoint for minutes while the list still
@@ -234,7 +234,7 @@ func TestHostRecordDoesNotBelieveThePostDeauthWindow(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		}))
 		defer srv.Close()
-		client := &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{}, Endpoint: srv.URL + "/"}
+		client := &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{HTTPClient: http.Client{Transport: &http.Transport{}}}, Endpoint: srv.URL + "/"}
 		if _, known, err := hostRecord(context.Background(), client, "host-a"); err == nil || known {
 			t.Fatal("an unverified 404 must surface as an error, not as an absence")
 		}
@@ -271,7 +271,7 @@ func TestHostRecordDoesNotBelieveThePostDeauthWindow(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":"host-a","roles":["hypervisor"],"hostconfig_id":"hc-1"}`))
 		}))
 		defer srv.Close()
-		client := &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{}, Endpoint: srv.URL + "/"}
+		client := &gophercloud.ServiceClient{ProviderClient: &gophercloud.ProviderClient{HTTPClient: http.Client{Transport: &http.Transport{}}}, Endpoint: srv.URL + "/"}
 		if _, known, err := hostRecord(context.Background(), client, "host-a"); err != nil || !known {
 			t.Fatalf("known=%v err=%v", known, err)
 		}

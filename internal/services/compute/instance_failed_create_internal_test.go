@@ -61,7 +61,7 @@ func TestCreateKeepsAServerThatFailedToBoot(t *testing.T) {
 
 	r := &instanceResource{config: &clients.Config{
 		Region: "region-one",
-		Provider: &gophercloud.ProviderClient{EndpointLocator: func(gophercloud.EndpointOpts) (string, error) {
+		Provider: &gophercloud.ProviderClient{HTTPClient: http.Client{Transport: &http.Transport{}}, EndpointLocator: func(gophercloud.EndpointOpts) (string, error) {
 			return nova.URL + "/", nil
 		}},
 	}}
