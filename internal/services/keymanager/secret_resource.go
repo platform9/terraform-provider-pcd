@@ -188,6 +188,9 @@ func (r *secretResource) Read(ctx context.Context, req resource.ReadRequest, res
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "key manager secret", state.Name.ValueString()) {
+		return
+	}
 
 	client, err := r.config.KeyManagerV1Client()
 	if err != nil {
@@ -222,6 +225,9 @@ func (r *secretResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "key manager secret", state.Name.ValueString()) {
+		return
+	}
 
 	client, err := r.config.KeyManagerV1Client()
 	if err != nil {
@@ -252,6 +258,15 @@ func (r *secretResource) readInto(ctx context.Context, client *gophercloud.Servi
 			return true, diags
 		}
 		diags.AddError("keymanager: reading secret", err.Error())
+		return false, diags
+	}
+	// Extract decodes the whole body as the secret, so a 200 that holds no
+	// secret decodes to an empty one, without the secret_ref Barbican always
+	// sends. It is not a not-found: that would drop a secret that exists from
+	// state.
+	if secret == nil || secret.SecretRef == "" {
+		diags.AddError("keymanager: reading secret",
+			fmt.Sprintf("The Key Manager API answered without a secret object for ID %q.", id))
 		return false, diags
 	}
 

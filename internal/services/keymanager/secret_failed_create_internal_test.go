@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -357,5 +358,138 @@ func TestSecretCreateKeepsStateWhenReadBackAfterActiveFails(t *testing.T) {
 	defer mu.Unlock()
 	if gets < 2 {
 		t.Fatalf("GET called %d times; want the wait's ACTIVE poll and the failed read-back poll", gets)
+	}
+}
+
+// The tests below cover the rows provider v0.1.13 and earlier left in state.
+// Create records the secret before anything after the POST can fail, but such
+// a row still reaches Read and Delete.
+
+const (
+	secretsPath = "/v1/secrets"
+	secretPath  = secretsPath + "/sec-1"
+)
+
+// secretJSON is sec-1 as Barbican returns it: the body is the secret itself,
+// with no wrapping key.
+const secretJSON = `{"secret_ref": "http://barbican.invalid/v1/secrets/sec-1",
+	"name": "tf-acc-secret", "status": "ACTIVE", "secret_type": "passphrase",
+	"algorithm": "", "bit_length": 0, "mode": "", "creator_id": "user-1",
+	"content_types": {"default": "text/plain"},
+	"created": "2026-10-02T00:00:00", "updated": "2026-10-02T00:00:00"}`
+
+// secretListJSON is Barbican's answer for the collection URL: a page of
+// secrets, not a secret.
+const secretListJSON = `{"secrets": [` + secretJSON + `], "total": 1}`
+
+// secretRoutes answers the calls secretResource's Read and Delete make for
+// sec-1 the way Barbican does. Each test replaces or adds the route it
+// exercises.
+func secretRoutes() barbicanRoutes {
+	return barbicanRoutes{
+		"GET " + secretPath:    reply(http.StatusOK, secretJSON),
+		"DELETE " + secretPath: reply(http.StatusNoContent, ""),
+	}
+}
+
+// secretRowWithoutID is the row provider v0.1.13 and earlier left in state when
+// the read-back after a successful POST failed: Terraform saved the unknowns
+// Create returned as null, the ID among them. A later refresh of that row read
+// the collection URL, took the list for an empty secret and saved id "", so id
+// is null or empty. Read and Delete look only at the id.
+func secretRowWithoutID(t *testing.T, r *secretResource, id types.String) tfsdk.State {
+	t.Helper()
+	return newState(t, schemaOf(t, r), &secretModel{
+		ID:                     id,
+		Name:                   types.StringValue("tf-acc-secret"),
+		Algorithm:              types.StringNull(),
+		BitLength:              types.Int64Null(),
+		Mode:                   types.StringNull(),
+		SecretType:             types.StringValue("passphrase"),
+		Expiration:             types.StringNull(),
+		Payload:                types.StringValue("s3cr3t-passphrase"),
+		PayloadContentType:     types.StringValue("text/plain"),
+		PayloadContentEncoding: types.StringNull(),
+		SecretRef:              types.StringNull(),
+		Status:                 types.StringNull(),
+		CreatorID:              types.StringNull(),
+		ContentTypes:           types.MapNull(types.StringType),
+		CreatedAt:              types.StringNull(),
+		UpdatedAt:              types.StringNull(),
+		Region:                 types.StringNull(),
+	})
+}
+
+// Read used to send GET for an empty ID, which reaches the collection URL;
+// Barbican answers that with the list, which gophercloud decodes as an empty
+// secret, and Read saved it back as id "". Read must drop the row with a
+// warning that names the secret, without sending anything.
+func TestSecretReadDropsARowWithNoID(t *testing.T) {
+	t.Parallel()
+	routes := secretRoutes()
+	routes["GET "+secretsPath+"/"] = reply(http.StatusOK, secretListJSON)
+	barbican := newFakeBarbican(t, routes)
+	r := &secretResource{config: barbican.config}
+
+	for _, id := range []types.String{types.StringNull(), types.StringValue("")} {
+		resp := runRead(r, secretRowWithoutID(t, r, id))
+		if sent := barbican.received(); len(sent) != 0 {
+			t.Fatalf("id %s: refresh of a row with no ID sent %v; it names nothing to read", id, sent)
+		}
+		if resp.Diagnostics.HasError() || resp.Diagnostics.WarningsCount() != 1 {
+			t.Fatalf("id %s: diagnostics = %v, want exactly one warning", id, resp.Diagnostics)
+		}
+		if detail := resp.Diagnostics[0].Detail(); !strings.Contains(detail, `"tf-acc-secret"`) {
+			t.Fatalf("id %s: warning detail %q does not name the secret to look for", id, detail)
+		}
+		if !resp.State.Raw.IsNull() {
+			t.Fatalf("id %s: refresh kept a row with no ID: %v", id, resp.State.Raw)
+		}
+	}
+}
+
+// secrets.Extract decodes the whole body as the secret, so a 200 for the
+// secret's own URL whose body is not a secret gives an empty one and no error.
+// readInto must report that as an error, and not as not-found: that would drop
+// a real secret from state.
+func TestSecretReadIntoRefusesAnAnswerWithoutTheSecret(t *testing.T) {
+	t.Parallel()
+	routes := secretRoutes()
+	routes["GET "+secretPath] = reply(http.StatusOK, secretListJSON)
+	r := &secretResource{config: newFakeBarbican(t, routes).config}
+	client, err := r.config.KeyManagerV1Client()
+	if err != nil {
+		t.Fatalf("building the fake Barbican client: %v", err)
+	}
+
+	m := secretModel{Region: types.StringNull()}
+	notFound, diags := r.readInto(context.Background(), client, "sec-1", &m)
+	if notFound {
+		t.Fatal("readInto reported sec-1 not found; the next refresh would drop a secret that exists")
+	}
+	if !diags.HasError() {
+		t.Fatalf("readInto accepted an answer without the secret: diagnostics %v", diags)
+	}
+}
+
+// terraform destroy -refresh=false reaches Delete without Read dropping the row
+// first. Delete used to send DELETE for an empty ID, which reaches the
+// collection URL, and Barbican refuses that. Delete must warn and send nothing,
+// so Terraform forgets the row.
+func TestSecretDeleteSkipsARowWithNoID(t *testing.T) {
+	t.Parallel()
+	routes := secretRoutes()
+	routes["DELETE "+secretsPath+"/"] = reply(http.StatusMethodNotAllowed, "")
+	barbican := newFakeBarbican(t, routes)
+	r := &secretResource{config: barbican.config}
+
+	for _, id := range []types.String{types.StringNull(), types.StringValue("")} {
+		resp := runDelete(r, secretRowWithoutID(t, r, id))
+		if sent := barbican.received(); len(sent) != 0 {
+			t.Fatalf("id %s: delete of a row with no ID sent %v; it names nothing to delete", id, sent)
+		}
+		if resp.Diagnostics.HasError() || resp.Diagnostics.WarningsCount() != 1 {
+			t.Fatalf("id %s: diagnostics = %v, want exactly one warning", id, resp.Diagnostics)
+		}
 	}
 }
