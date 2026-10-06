@@ -25,6 +25,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -156,9 +157,26 @@ func (r *containerResource) Create(ctx context.Context, req resource.CreateReque
 		resp.Diagnostics.AddError("keymanager: creating container", err.Error())
 		return
 	}
+	id := refToID(container.ContainerRef)
+	plan.ID = types.StringValue(id)
+	plan.ContainerRef = types.StringValue(container.ContainerRef)
+	// Barbican keeps the container whatever fails next, so record it before
+	// the read-back.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
-	_, readDiags := r.readInto(ctx, client, refToID(container.ContainerRef), &plan)
+	notFound, readDiags := r.readInto(ctx, client, id, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("keymanager: reading container after create",
+			fmt.Sprintf("Container %s no longer exists.", id))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -166,6 +184,9 @@ func (r *containerResource) Read(ctx context.Context, req resource.ReadRequest, 
 	var state containerModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "key manager container", state.Name.ValueString()) {
 		return
 	}
 
@@ -202,6 +223,9 @@ func (r *containerResource) Delete(ctx context.Context, req resource.DeleteReque
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "key manager container", state.Name.ValueString()) {
+		return
+	}
 
 	client, err := r.config.KeyManagerV1Client()
 	if err != nil {
@@ -231,6 +255,15 @@ func (r *containerResource) readInto(ctx context.Context, client *gophercloud.Se
 			return true, diags
 		}
 		diags.AddError("keymanager: reading container", err.Error())
+		return false, diags
+	}
+	// Extract decodes the whole body as the container, so a 200 that holds no
+	// container decodes to an empty one, without the container_ref Barbican
+	// always sends. It is not a not-found: that would drop a container that
+	// exists from state.
+	if container == nil || container.ContainerRef == "" {
+		diags.AddError("keymanager: reading container",
+			fmt.Sprintf("The Key Manager API answered without a container object for ID %q.", id))
 		return false, diags
 	}
 
