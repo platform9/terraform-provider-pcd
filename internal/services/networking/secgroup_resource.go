@@ -26,6 +26,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -110,6 +111,12 @@ func (r *secgroupResource) Create(ctx context.Context, req resource.CreateReques
 		resp.Diagnostics.AddError("networking: creating security group", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(sg.ID)
+	// Neutron keeps the group whatever fails next, so record it before the
+	// default-rule deletion and the tags step.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
 	if plan.DeleteDefaultRules.ValueBool() {
 		for _, rule := range sg.Rules {
@@ -132,8 +139,17 @@ func (r *secgroupResource) Create(ctx context.Context, req resource.CreateReques
 		}
 	}
 
-	_, readDiags := r.readInto(ctx, client, sg.ID, &plan)
+	notFound, readDiags := r.readInto(ctx, client, sg.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("networking: reading security group after create",
+			fmt.Sprintf("Security group %s no longer exists.", sg.ID))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -141,6 +157,9 @@ func (r *secgroupResource) Read(ctx context.Context, req resource.ReadRequest, r
 	var state secgroupModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "security group", state.Name.ValueString()) {
 		return
 	}
 
@@ -200,8 +219,16 @@ func (r *secgroupResource) Update(ctx context.Context, req resource.UpdateReques
 		}
 	}
 
-	_, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
+	notFound, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("networking: reading security group after update",
+			fmt.Sprintf("Security group %s no longer exists.", plan.ID.ValueString()))
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -209,6 +236,9 @@ func (r *secgroupResource) Delete(ctx context.Context, req resource.DeleteReques
 	var state secgroupModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "security group", state.Name.ValueString()) {
 		return
 	}
 
@@ -237,6 +267,13 @@ func (r *secgroupResource) readInto(ctx context.Context, client *gophercloud.Ser
 			return true, diags
 		}
 		diags.AddError("networking: reading security group", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a group that exists from state.
+	if sg == nil {
+		diags.AddError("networking: reading security group",
+			fmt.Sprintf("The Networking API answered without a security_group object for ID %q.", id))
 		return false, diags
 	}
 
