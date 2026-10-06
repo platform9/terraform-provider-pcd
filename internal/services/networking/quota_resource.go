@@ -197,6 +197,13 @@ func (r *quotaResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		resp.Diagnostics.AddError("networking: reading quotas", err.Error())
 		return
 	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop the row from state.
+	if q == nil {
+		resp.Diagnostics.AddError("networking: reading quotas",
+			fmt.Sprintf("The Networking API answered without a quota object for project ID %q.", state.ProjectID.ValueString()))
+		return
+	}
 
 	setNetworkQuotaState(&state, region, q)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -254,6 +261,12 @@ func (r *quotaResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *r
 
 func (r *quotaResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	parts := strings.SplitN(req.ID, "/", 2)
+	// An empty project ID names no project: the refresh after the import would
+	// read the quotas collection URL instead.
+	if parts[0] == "" {
+		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("expected <project_id>/<region>, got %q", req.ID))
+		return
+	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project_id"), parts[0])...)
 	if len(parts) == 2 && parts[1] != "" {
 		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("region"), parts[1])...)
@@ -265,6 +278,12 @@ func (r *quotaResource) readInto(ctx context.Context, client *gophercloud.Servic
 	q, err := quotas.Get(ctx, client, projectID).Extract()
 	if err != nil {
 		diags.AddError("networking: reading quotas", err.Error())
+		return diags
+	}
+	// A 200 without the object decodes to nil.
+	if q == nil {
+		diags.AddError("networking: reading quotas",
+			fmt.Sprintf("The Networking API answered without a quota object for project ID %q.", projectID))
 		return diags
 	}
 	setNetworkQuotaState(m, region, q)
