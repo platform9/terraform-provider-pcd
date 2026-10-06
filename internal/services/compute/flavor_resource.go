@@ -28,6 +28,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -127,6 +128,12 @@ func (r *flavorResource) Create(ctx context.Context, req resource.CreateRequest,
 		resp.Diagnostics.AddError("compute: creating flavor", err.Error())
 		return
 	}
+	r.flatten(flavor, &plan)
+	// Nova keeps the flavor whatever fails next, so record it before the
+	// extra-specs steps.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
 	if specs := extractStringMap(ctx, plan.ExtraSpecs, &resp.Diagnostics); len(specs) > 0 {
 		if resp.Diagnostics.HasError() {
@@ -138,8 +145,10 @@ func (r *flavorResource) Create(ctx context.Context, req resource.CreateRequest,
 		}
 	}
 
-	r.flatten(flavor, &plan)
 	resp.Diagnostics.Append(r.refreshExtraSpecs(ctx, client, flavor.ID, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -147,6 +156,9 @@ func (r *flavorResource) Read(ctx context.Context, req resource.ReadRequest, res
 	var state flavorModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "flavor", state.Name.ValueString()) {
 		return
 	}
 
@@ -165,6 +177,13 @@ func (r *flavorResource) Read(ctx context.Context, req resource.ReadRequest, res
 			return
 		}
 		resp.Diagnostics.AddError("compute: reading flavor", err.Error())
+		return
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a flavor that exists from state.
+	if flavor == nil {
+		resp.Diagnostics.AddError("compute: reading flavor",
+			fmt.Sprintf("The Compute API answered without a flavor object for ID %q.", state.ID.ValueString()))
 		return
 	}
 
@@ -218,6 +237,9 @@ func (r *flavorResource) Update(ctx context.Context, req resource.UpdateRequest,
 	}
 
 	resp.Diagnostics.Append(r.refreshExtraSpecs(ctx, client, id, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -225,6 +247,9 @@ func (r *flavorResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	var state flavorModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "flavor", state.Name.ValueString()) {
 		return
 	}
 
