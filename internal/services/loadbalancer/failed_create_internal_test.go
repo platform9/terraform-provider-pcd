@@ -1610,3 +1610,256 @@ func TestLBChildDeleteSkipsARowWithNoID(t *testing.T) {
 		})
 	}
 }
+
+// lbList is Octavia's answer to a GET of the load balancer collection.
+var lbList = `{"loadbalancers": [` + lbJSON(lbActive) + `], "loadbalancers_links": []}`
+
+// plannedLoadBalancer is the plan for lb-1 when the config sets name and
+// vip_subnet_id. Provider v0.1.13 and earlier wrote it back unchanged when the
+// read-back after the wait failed.
+func plannedLoadBalancer() loadBalancerModel {
+	return loadBalancerModel{
+		ID:                 types.StringUnknown(),
+		Name:               types.StringValue("web-lb"),
+		Description:        types.StringUnknown(),
+		AdminStateUp:       types.BoolValue(true),
+		VipSubnetID:        types.StringValue("subnet-1"),
+		VipNetworkID:       types.StringUnknown(),
+		VipAddress:         types.StringUnknown(),
+		VipPortID:          types.StringUnknown(),
+		FlavorID:           types.StringUnknown(),
+		Provider:           types.StringValue("ovn"),
+		Tags:               types.SetUnknown(types.StringType),
+		ProvisioningStatus: types.StringUnknown(),
+		OperatingStatus:    types.StringUnknown(),
+		Region:             types.StringUnknown(),
+	}
+}
+
+// knownLoadBalancer is lb-1 as a refresh leaves it.
+func knownLoadBalancer() loadBalancerModel {
+	return loadBalancerModel{
+		ID:                 types.StringValue("lb-1"),
+		Name:               types.StringValue("web-lb"),
+		Description:        types.StringValue(""),
+		AdminStateUp:       types.BoolValue(true),
+		VipSubnetID:        types.StringValue("subnet-1"),
+		VipNetworkID:       types.StringValue("net-1"),
+		VipAddress:         types.StringValue("10.0.0.5"),
+		VipPortID:          types.StringValue("port-1"),
+		FlavorID:           types.StringValue(""),
+		Provider:           types.StringValue("ovn"),
+		Tags:               types.SetValueMust(types.StringType, []attr.Value{}),
+		ProvisioningStatus: types.StringValue(lbActive),
+		OperatingStatus:    types.StringValue("ONLINE"),
+		Region:             types.StringValue("region-one"),
+	}
+}
+
+// Create now records a load balancer before its wait and never leaves a row
+// with no ID. Provider v0.1.13 and earlier did, when the read-back after the
+// wait failed, and the refresh of that row read the collection URL and
+// crashed. Read must drop it with a warning that names the load balancer,
+// without sending anything.
+func TestLoadBalancerReadDropsARowWithNoID(t *testing.T) {
+	t.Parallel()
+	octavia := newFakeOctavia(t, octaviaRoutes{"GET " + lbsPath + "/": reply(http.StatusOK, lbList)})
+	r := &loadBalancerResource{config: octavia.config}
+	planned := plannedLoadBalancer()
+
+	resp := runRead(r, rowWithoutID(t, newPlan(t, schemaOf(t, r), &planned)))
+	if sent := octavia.received(); len(sent) != 0 {
+		t.Fatalf("refresh of a row with no ID sent %v; it names nothing to read", sent)
+	}
+	if resp.Diagnostics.HasError() || resp.Diagnostics.WarningsCount() != 1 {
+		t.Fatalf("diagnostics = %v, want exactly one warning", resp.Diagnostics)
+	}
+	if detail := resp.Diagnostics[0].Detail(); !strings.Contains(detail, `"web-lb"`) {
+		t.Fatalf("warning detail %q does not name the load balancer to look for", detail)
+	}
+	if !resp.State.Raw.IsNull() {
+		t.Fatalf("refresh kept a row with no ID: %v", resp.State.Raw)
+	}
+}
+
+// A 200 for the load balancer's own URL whose body holds no loadbalancer
+// object makes gophercloud return no load balancer and no error. Read must
+// report that as an error and keep the row, and not take it as not-found.
+func TestLoadBalancerReadRefusesAnAnswerWithoutTheLoadBalancer(t *testing.T) {
+	t.Parallel()
+	r := &loadBalancerResource{config: newFakeOctavia(t, octaviaRoutes{"GET " + lbPath: reply(http.StatusOK, lbList)}).config}
+	known := knownLoadBalancer()
+	row := newState(t, schemaOf(t, r), &known)
+
+	resp := runRead(r, row)
+	if !resp.Diagnostics.HasError() {
+		t.Fatalf("refresh accepted an answer without the load balancer: diagnostics %v", resp.Diagnostics)
+	}
+	if !resp.State.Raw.Equal(row.Raw) {
+		t.Fatalf("refresh state = %v, want the row kept: %v", resp.State.Raw, row.Raw)
+	}
+}
+
+// lbUpdateRoutes answers a rename of lb-1: the waits before and after the PUT
+// each see ACTIVE on their first poll, and readBack answers the GET after them.
+func lbUpdateRoutes(readBack http.HandlerFunc) octaviaRoutes {
+	gets := 0
+	return octaviaRoutes{
+		"GET " + lbPath: func(w http.ResponseWriter, r *http.Request) {
+			gets++
+			if gets > 2 {
+				readBack(w, r)
+				return
+			}
+			reply(http.StatusOK, `{"loadbalancer": `+lbJSON(lbActive)+`}`)(w, r)
+		},
+		"PUT " + lbPath: reply(http.StatusOK, `{"loadbalancer": {"id": "lb-1", "provisioning_status": "PENDING_UPDATE"}}`),
+	}
+}
+
+// runRename calls Update to rename lb-1 from its known state.
+func runRename(t *testing.T, r *loadBalancerResource) (resp resource.UpdateResponse, prior tfsdk.State) {
+	t.Helper()
+	s := schemaOf(t, r)
+	known := knownLoadBalancer()
+	prior = newState(t, s, &known)
+	renamed := known
+	renamed.Name = types.StringValue("web-lb-renamed")
+	return runUpdate(r, newPlan(t, s, &renamed), prior), prior
+}
+
+// An update whose read-back fails must return the error and keep the prior
+// state, which the next plan compares against, instead of writing the plan.
+func TestLoadBalancerUpdateKeepsStateWhenReadBackFails(t *testing.T) {
+	t.Parallel()
+	r := &loadBalancerResource{config: newFakeOctavia(t, lbUpdateRoutes(badGateway)).config}
+
+	resp, prior := runRename(t, r)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("update succeeded; want the 502 on the read-back reported")
+	}
+	if !resp.State.Raw.Equal(prior.Raw) {
+		t.Fatalf("update state = %v, want the prior state %v", resp.State.Raw, prior.Raw)
+	}
+}
+
+// An update whose read-back finds the load balancer gone used to be swallowed.
+// Update must report it and keep the prior state; the next refresh drops the
+// row.
+func TestLoadBalancerUpdateKeepsStateWhenReadBack404s(t *testing.T) {
+	t.Parallel()
+	r := &loadBalancerResource{config: newFakeOctavia(t, lbUpdateRoutes(reply(http.StatusNotFound, ""))).config}
+
+	resp, prior := runRename(t, r)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("update succeeded; want the 404 read-back reported")
+	}
+	if !resp.State.Raw.Equal(prior.Raw) {
+		t.Fatalf("update state = %v, want the prior state %v", resp.State.Raw, prior.Raw)
+	}
+}
+
+// terraform destroy -refresh=false reaches Delete without Read dropping a
+// v0.1.13 row first. Delete used to send a cascade DELETE for an empty ID,
+// which reaches the collection URL. Delete must warn and send nothing, so
+// Terraform forgets the row.
+func TestLoadBalancerDeleteSkipsARowWithNoID(t *testing.T) {
+	t.Parallel()
+	octavia := newFakeOctavia(t, octaviaRoutes{})
+	r := &loadBalancerResource{config: octavia.config}
+	planned := plannedLoadBalancer()
+
+	resp := runDelete(r, rowWithoutID(t, newPlan(t, schemaOf(t, r), &planned)))
+	if sent := octavia.received(); len(sent) != 0 {
+		t.Fatalf("delete of a row with no ID sent %v; it names nothing to delete", sent)
+	}
+	if resp.Diagnostics.HasError() || resp.Diagnostics.WarningsCount() != 1 {
+		t.Fatalf("diagnostics = %v, want exactly one warning", resp.Diagnostics)
+	}
+}
+
+// A listener whose config sets loadbalancer_id = "" waits on that ID before
+// its POST. The wait used to send GET for the empty ID, which reaches the
+// collection URL; Octavia answers that with the list, and the wait
+// dereferenced the nil load balancer gophercloud decoded from it. The wait must
+// refuse the empty ID without sending anything.
+func TestWaitForLoadBalancerActiveRefusesAnEmptyID(t *testing.T) {
+	t.Parallel()
+	octavia := newFakeOctavia(t, octaviaRoutes{"GET " + lbsPath + "/": reply(http.StatusOK, lbList)})
+	client, err := octavia.config.LoadBalancerV2Client()
+	if err != nil {
+		t.Fatalf("building the client: %v", err)
+	}
+
+	if err := waitForLoadBalancerActive(context.Background(), client, "", 2*time.Second); err == nil {
+		t.Fatal("wait succeeded for an empty load balancer ID")
+	}
+	if sent := octavia.received(); len(sent) != 0 {
+		t.Fatalf("wait for an empty ID sent %v; it names nothing to poll", sent)
+	}
+}
+
+// A 200 for the load balancer's own URL whose body holds no loadbalancer
+// object makes gophercloud return no load balancer and no error. The wait must
+// fail on it, not dereference it.
+func TestWaitForLoadBalancerActiveRefusesAnAnswerWithoutTheLoadBalancer(t *testing.T) {
+	t.Parallel()
+	octavia := newFakeOctavia(t, octaviaRoutes{"GET " + lbPath: reply(http.StatusOK, lbList)})
+	client, err := octavia.config.LoadBalancerV2Client()
+	if err != nil {
+		t.Fatalf("building the client: %v", err)
+	}
+
+	err = waitForLoadBalancerActive(context.Background(), client, "lb-1", 2*time.Second)
+	if err == nil {
+		t.Fatal("wait succeeded on an answer without the load balancer")
+	}
+	if want := "without a loadbalancer object"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("wait error = %q; want it to say the answer was %s", err, want)
+	}
+}
+
+// A member or monitor whose config sets pool_id = "" resolves its load
+// balancer through that pool before its POST. The lookup used to send GET for
+// the empty ID, which reaches the collection URL, and dereferenced the nil
+// pool gophercloud decoded from the list. It must refuse the empty ID without
+// sending anything.
+func TestRootLBIDFromPoolRefusesAnEmptyID(t *testing.T) {
+	t.Parallel()
+	octavia := newFakeOctavia(t, octaviaRoutes{
+		"GET " + poolsPath + "/": reply(http.StatusOK, `{"pools": [`+poolJSON+`], "pools_links": []}`),
+	})
+	client, err := octavia.config.LoadBalancerV2Client()
+	if err != nil {
+		t.Fatalf("building the client: %v", err)
+	}
+
+	if _, err := rootLBIDFromPool(context.Background(), client, ""); err == nil {
+		t.Fatal("lookup succeeded for an empty pool ID")
+	}
+	if sent := octavia.received(); len(sent) != 0 {
+		t.Fatalf("lookup for an empty ID sent %v; it names nothing to read", sent)
+	}
+}
+
+// A 200 for the pool's own URL whose body holds no pool object makes
+// gophercloud return no pool and no error. The lookup must fail on it, not
+// dereference it.
+func TestRootLBIDFromPoolRefusesAnAnswerWithoutThePool(t *testing.T) {
+	t.Parallel()
+	octavia := newFakeOctavia(t, octaviaRoutes{
+		"GET " + poolPath: reply(http.StatusOK, `{"pools": [`+poolJSON+`], "pools_links": []}`),
+	})
+	client, err := octavia.config.LoadBalancerV2Client()
+	if err != nil {
+		t.Fatalf("building the client: %v", err)
+	}
+
+	_, err = rootLBIDFromPool(context.Background(), client, "pool-1")
+	if err == nil {
+		t.Fatal("lookup succeeded on an answer without the pool")
+	}
+	if want := "without a pool object"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("lookup error = %q; want it to say the answer was %s", err, want)
+	}
+}

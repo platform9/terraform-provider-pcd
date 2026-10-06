@@ -123,14 +123,22 @@ func configureClient(providerData any, diags *diag.Diagnostics) *clients.Config 
 }
 
 // waitForLoadBalancerActive blocks until the load balancer reaches ACTIVE,
-// failing on ERROR/DELETED or timeout. PENDING_* statuses are transient.
+// failing on ERROR/DELETED or timeout. PENDING_* statuses are transient. It
+// refuses an empty lbID, which a configured loadbalancer_id = "" passes in:
+// a GET for it would reach the collection URL instead of a load balancer.
 func waitForLoadBalancerActive(ctx context.Context, client *gophercloud.ServiceClient, lbID string, timeout time.Duration) error {
+	if lbID == "" {
+		return fmt.Errorf("waiting for a load balancer to become ACTIVE: the load balancer ID is empty")
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	err := gophercloud.WaitFor(ctx, func(ctx context.Context) (bool, error) {
 		lb, err := loadbalancers.Get(ctx, client, lbID).Extract()
 		if err != nil {
 			return false, err
+		}
+		if lb == nil {
+			return false, fmt.Errorf("the Load Balancer API answered without a loadbalancer object for ID %q", lbID)
 		}
 		switch lb.ProvisioningStatus {
 		case lbActive:
@@ -279,11 +287,18 @@ func rootLBIDFromListener(ctx context.Context, client *gophercloud.ServiceClient
 }
 
 // rootLBIDFromPool resolves the load balancer a pool belongs to, directly or via
-// its listener.
+// its listener. It refuses an empty poolID, which a configured pool_id = ""
+// passes in: a GET for it would reach the collection URL instead of a pool.
 func rootLBIDFromPool(ctx context.Context, client *gophercloud.ServiceClient, poolID string) (string, error) {
+	if poolID == "" {
+		return "", fmt.Errorf("resolving the load balancer of a pool: the pool ID is empty")
+	}
 	p, err := pools.Get(ctx, client, poolID).Extract()
 	if err != nil {
 		return "", err
+	}
+	if p == nil {
+		return "", fmt.Errorf("the Load Balancer API answered without a pool object for ID %q", poolID)
 	}
 	if len(p.Loadbalancers) > 0 {
 		return p.Loadbalancers[0].ID, nil

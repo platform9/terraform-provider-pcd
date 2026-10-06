@@ -175,6 +175,9 @@ func (r *loadBalancerResource) Read(ctx context.Context, req resource.ReadReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "load balancer", state.Name.ValueString()) {
+		return
+	}
 
 	client, err := r.config.LoadBalancerV2Client()
 	if err != nil {
@@ -255,8 +258,16 @@ func (r *loadBalancerResource) Update(ctx context.Context, req resource.UpdateRe
 		}
 	}
 
-	_, readDiags := r.readInto(ctx, client, id, &plan)
+	notFound, readDiags := r.readInto(ctx, client, id, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("loadbalancer: reading load balancer after update",
+			fmt.Sprintf("Load balancer %s no longer exists.", id))
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -264,6 +275,9 @@ func (r *loadBalancerResource) Delete(ctx context.Context, req resource.DeleteRe
 	var state loadBalancerModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "load balancer", state.Name.ValueString()) {
 		return
 	}
 
@@ -297,6 +311,13 @@ func (r *loadBalancerResource) readInto(ctx context.Context, client *gophercloud
 			return true, diags
 		}
 		diags.AddError("loadbalancer: reading load balancer", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a load balancer that exists from state.
+	if lb == nil {
+		diags.AddError("loadbalancer: reading load balancer",
+			fmt.Sprintf("The Load Balancer API answered without a loadbalancer object for ID %q.", id))
 		return false, diags
 	}
 
