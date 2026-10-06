@@ -14,11 +14,13 @@ import (
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/subnets"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
@@ -53,13 +55,16 @@ func (r *subnetRouteResource) Metadata(_ context.Context, req resource.MetadataR
 
 func (r *subnetRouteResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	forceNew := []planmodifier.String{stringplanmodifier.RequiresReplace()}
+	// An empty subnet ID names no subnet; refuse it at plan time, where the user
+	// can fix it.
+	notEmpty := []validator.String{stringvalidator.LengthAtLeast(1)}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a single host route on a Neutron subnet (advertised to instances via DHCP) " +
 			"without disturbing routes managed elsewhere. Every attribute forces a new resource. Multiple " +
 			"subnet_route resources on the same subnet are applied serially so they do not clobber each other.",
 		Attributes: map[string]schema.Attribute{
 			"id":               schema.StringAttribute{Computed: true, MarkdownDescription: "Composite ID: `subnet_id/destination_cidr/next_hop`.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
-			"subnet_id":        schema.StringAttribute{Required: true, MarkdownDescription: "The subnet to add the host route to. Changing this forces a new resource.", PlanModifiers: forceNew},
+			"subnet_id":        schema.StringAttribute{Required: true, MarkdownDescription: "The subnet to add the host route to. Changing this forces a new resource.", PlanModifiers: forceNew, Validators: notEmpty},
 			"destination_cidr": schema.StringAttribute{Required: true, MarkdownDescription: "The destination CIDR. Changing this forces a new resource.", PlanModifiers: forceNew},
 			"next_hop":         schema.StringAttribute{Required: true, MarkdownDescription: "The next-hop IP address. Changing this forces a new resource.", PlanModifiers: forceNew},
 			"region":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
@@ -75,6 +80,15 @@ func (r *subnetRouteResource) Create(ctx context.Context, req resource.CreateReq
 	var plan subnetRouteModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	// The schema's validator refuses "", even a value known only at apply, since
+	// Terraform validates the config again before it applies it. This guards a
+	// caller that skips validation: an empty ID would read the subnets
+	// collection URL instead of a subnet.
+	if plan.SubnetID.ValueString() == "" {
+		resp.Diagnostics.AddAttributeError(path.Root("subnet_id"), "Invalid subnet_id",
+			"The subnet ID is empty, so it names no subnet to add the host route to.")
 		return
 	}
 
@@ -94,6 +108,12 @@ func (r *subnetRouteResource) Create(ctx context.Context, req resource.CreateReq
 	subnet, err := subnets.Get(ctx, client, subnetID).Extract()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: reading subnet", err.Error())
+		return
+	}
+	// A 200 without the object decodes to nil.
+	if subnet == nil {
+		resp.Diagnostics.AddError("networking: reading subnet",
+			fmt.Sprintf("The Networking API answered without a subnet object for ID %q.", subnetID))
 		return
 	}
 	for _, rt := range subnet.HostRoutes {
@@ -141,6 +161,13 @@ func (r *subnetRouteResource) Read(ctx context.Context, req resource.ReadRequest
 			return
 		}
 		resp.Diagnostics.AddError("networking: reading subnet", err.Error())
+		return
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a host route that exists from state.
+	if subnet == nil {
+		resp.Diagnostics.AddError("networking: reading subnet",
+			fmt.Sprintf("The Networking API answered without a subnet object for ID %q.", subnetID))
 		return
 	}
 
@@ -198,6 +225,13 @@ func (r *subnetRouteResource) Delete(ctx context.Context, req resource.DeleteReq
 			return
 		}
 		resp.Diagnostics.AddError("networking: reading subnet", err.Error())
+		return
+	}
+	// A 200 without the object decodes to nil. Taking it for a subnet with no
+	// host routes would write an empty list, removing the routes others manage.
+	if subnet == nil {
+		resp.Diagnostics.AddError("networking: reading subnet",
+			fmt.Sprintf("The Networking API answered without a subnet object for ID %q.", subnetID))
 		return
 	}
 

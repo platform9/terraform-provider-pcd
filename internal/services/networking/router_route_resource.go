@@ -15,11 +15,13 @@ import (
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/layer3/routers"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
@@ -54,13 +56,16 @@ func (r *routerRouteResource) Metadata(_ context.Context, req resource.MetadataR
 
 func (r *routerRouteResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	forceNew := []planmodifier.String{stringplanmodifier.RequiresReplace()}
+	// An empty router ID names no router; refuse it at plan time, where the user
+	// can fix it.
+	notEmpty := []validator.String{stringvalidator.LengthAtLeast(1)}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a single static route on a Neutron router without disturbing routes managed " +
 			"elsewhere. Every attribute forces a new resource. Multiple router_route resources on the same router are " +
 			"applied serially so they do not clobber each other's routes.",
 		Attributes: map[string]schema.Attribute{
 			"id":               schema.StringAttribute{Computed: true, MarkdownDescription: "Composite ID: `router_id/destination_cidr/next_hop`.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
-			"router_id":        schema.StringAttribute{Required: true, MarkdownDescription: "The router to add the route to. Changing this forces a new resource.", PlanModifiers: forceNew},
+			"router_id":        schema.StringAttribute{Required: true, MarkdownDescription: "The router to add the route to. Changing this forces a new resource.", PlanModifiers: forceNew, Validators: notEmpty},
 			"destination_cidr": schema.StringAttribute{Required: true, MarkdownDescription: "The destination CIDR. Changing this forces a new resource.", PlanModifiers: forceNew},
 			"next_hop":         schema.StringAttribute{Required: true, MarkdownDescription: "The next-hop IP address. Changing this forces a new resource.", PlanModifiers: forceNew},
 			"region":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
@@ -76,6 +81,15 @@ func (r *routerRouteResource) Create(ctx context.Context, req resource.CreateReq
 	var plan routerRouteModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	// The schema's validator refuses "", even a value known only at apply, since
+	// Terraform validates the config again before it applies it. This guards a
+	// caller that skips validation: an empty ID would read the routers
+	// collection URL instead of a router.
+	if plan.RouterID.ValueString() == "" {
+		resp.Diagnostics.AddAttributeError(path.Root("router_id"), "Invalid router_id",
+			"The router ID is empty, so it names no router to add the route to.")
 		return
 	}
 
@@ -95,6 +109,12 @@ func (r *routerRouteResource) Create(ctx context.Context, req resource.CreateReq
 	router, err := routers.Get(ctx, client, routerID).Extract()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: reading router", err.Error())
+		return
+	}
+	// A 200 without the object decodes to nil.
+	if router == nil {
+		resp.Diagnostics.AddError("networking: reading router",
+			fmt.Sprintf("The Networking API answered without a router object for ID %q.", routerID))
 		return
 	}
 	for _, rt := range router.Routes {
@@ -142,6 +162,13 @@ func (r *routerRouteResource) Read(ctx context.Context, req resource.ReadRequest
 			return
 		}
 		resp.Diagnostics.AddError("networking: reading router", err.Error())
+		return
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a route that exists from state.
+	if router == nil {
+		resp.Diagnostics.AddError("networking: reading router",
+			fmt.Sprintf("The Networking API answered without a router object for ID %q.", routerID))
 		return
 	}
 
@@ -199,6 +226,13 @@ func (r *routerRouteResource) Delete(ctx context.Context, req resource.DeleteReq
 			return
 		}
 		resp.Diagnostics.AddError("networking: reading router", err.Error())
+		return
+	}
+	// A 200 without the object decodes to nil. Taking it for a router with no
+	// routes would write an empty list, removing the routes others manage.
+	if router == nil {
+		resp.Diagnostics.AddError("networking: reading router",
+			fmt.Sprintf("The Networking API answered without a router object for ID %q.", routerID))
 		return
 	}
 
