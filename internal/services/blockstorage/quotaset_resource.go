@@ -193,6 +193,13 @@ func (r *quotasetResource) Read(ctx context.Context, req resource.ReadRequest, r
 		resp.Diagnostics.AddError("blockstorage: reading quotas", err.Error())
 		return
 	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop the row from state.
+	if qs == nil {
+		resp.Diagnostics.AddError("blockstorage: reading quotas",
+			fmt.Sprintf("The Block Storage API answered without a quota_set object for project ID %q.", state.ProjectID.ValueString()))
+		return
+	}
 
 	setQuotaState(&state, region, qs)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -248,6 +255,12 @@ func (r *quotasetResource) Delete(_ context.Context, _ resource.DeleteRequest, _
 
 func (r *quotasetResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	parts := strings.SplitN(req.ID, "/", 2)
+	// An empty project ID names no project: the refresh after the import would
+	// read .../os-quota-sets/ instead.
+	if parts[0] == "" {
+		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("expected <project_id>/<region>, got %q", req.ID))
+		return
+	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project_id"), parts[0])...)
 	if len(parts) == 2 && parts[1] != "" {
 		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("region"), parts[1])...)
@@ -259,6 +272,12 @@ func (r *quotasetResource) readInto(ctx context.Context, client *gophercloud.Ser
 	qs, err := quotasets.Get(ctx, client, projectID).Extract()
 	if err != nil {
 		diags.AddError("blockstorage: reading quotas", err.Error())
+		return diags
+	}
+	// A 200 without the object decodes to nil.
+	if qs == nil {
+		diags.AddError("blockstorage: reading quotas",
+			fmt.Sprintf("The Block Storage API answered without a quota_set object for project ID %q.", projectID))
 		return diags
 	}
 	setQuotaState(m, region, qs)
