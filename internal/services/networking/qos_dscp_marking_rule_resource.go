@@ -23,6 +23,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -89,13 +90,23 @@ func (r *qosDSCPMarkingRuleResource) Create(ctx context.Context, req resource.Cr
 		resp.Diagnostics.AddError("networking: creating dscp-marking rule", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(rule.ID)
+	// Neutron keeps the rule whatever fails next, so record it before the
+	// read-back.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
 	notFound, readDiags := r.readInto(ctx, client, policyID, rule.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
 	if notFound {
 		resp.Diagnostics.AddError("networking: dscp-marking rule not found after create",
 			fmt.Sprintf("Rule %s was not found immediately after creation.", rule.ID))
+		resp.State.RemoveResource(ctx)
 		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -104,6 +115,9 @@ func (r *qosDSCPMarkingRuleResource) Read(ctx context.Context, req resource.Read
 	var state qosDSCPMarkingRuleModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "QoS DSCP marking rule", "") {
 		return
 	}
 
@@ -157,6 +171,9 @@ func (r *qosDSCPMarkingRuleResource) Update(ctx context.Context, req resource.Up
 			fmt.Sprintf("Rule %s was not found immediately after update.", plan.ID.ValueString()))
 		return
 	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -164,6 +181,9 @@ func (r *qosDSCPMarkingRuleResource) Delete(ctx context.Context, req resource.De
 	var state qosDSCPMarkingRuleModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "QoS DSCP marking rule", "") {
 		return
 	}
 
@@ -198,6 +218,13 @@ func (r *qosDSCPMarkingRuleResource) readInto(ctx context.Context, client *gophe
 			return true, diags
 		}
 		diags.AddError("networking: reading dscp-marking rule", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a rule that exists from state.
+	if rule == nil {
+		diags.AddError("networking: reading dscp-marking rule",
+			fmt.Sprintf("The Networking API answered without a dscp_marking_rule object for ID %q.", ruleID))
 		return false, diags
 	}
 
