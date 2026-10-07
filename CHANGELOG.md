@@ -77,6 +77,40 @@ All notable changes to this project are documented here. The format is based on
   service may already have acted on them, and neither are the requests that authenticate the provider or a
   request that failed because the endpoint's TLS certificate is not trusted, the endpoint does not speak TLS,
   or its host name does not resolve. The default stays 0.
+- **A success answer without the object no longer crashes the provider.** When a service answered a create
+  with a success status but a body that lacked the object, the provider crashed and the whole apply failed.
+  The same happened when the answer to a status poll lacked the object, in the waits for a DNS zone or
+  recordset, a Key Manager secret, or a load balancer that is settling or being deleted, and in the lookups of
+  a listener's load balancer and of the current user for `pcd_identity_application_credential`. Such an
+  answer is now an error. This covers the creates of `pcd_networking_secgroup`,
+  `pcd_networking_secgroup_rule`, `pcd_networking_router`, `pcd_networking_subnet`, the four QoS resources,
+  the five load balancer resources, `pcd_compute_flavor`, `pcd_compute_volume_attach`,
+  `pcd_compute_interface_attach`, `pcd_compute_servergroup`, `pcd_compute_keypair`, `pcd_identity_project`,
+  `pcd_identity_group`, `pcd_identity_role`, `pcd_identity_user`, `pcd_identity_application_credential`,
+  `pcd_blockstorage_snapshot`, `pcd_images_image`, `pcd_dns_zone`, `pcd_dns_recordset`,
+  `pcd_keymanager_secret`, and `pcd_keymanager_container`. The service may still have created the object, so
+  look for it by name and delete or import it.
+- `pcd_networking_secgroup` now sends a change to `stateful`. Before, the update left the group's flag as it
+  was, and the apply failed with "Provider produced inconsistent result after apply". A change to
+  `delete_default_rules` now replaces the group, as documented; before, it planned an in-place update that did
+  nothing. An imported group, whose `delete_default_rules` is unset in state, is not replaced on its first plan.
+- `pcd_networking_secgroup_rule` is replaced when `port_range_min` or `port_range_max` changes. Neutron cannot
+  change a rule, so the in-place update planned before sent nothing: state took the new port while the rule
+  kept the old one, and every later plan showed the same change.
+- `pcd_networking_floatingip_associate` no longer sends the old port's address when `port_id` changes and
+  `fixed_ip` is unset, which Neutron refused. The floating IP maps to the new port's first address, as it does
+  on create.
+- An update of a `pcd_networking_router` whose configuration leaves `enable_snat` unset no longer resends the
+  router's gateway, which made Neutron reset SNAT to its default: renaming a router with SNAT off turned it on.
+- `pcd_cluster_blueprint` no longer fails a create or update with "Provider returned invalid result object
+  after apply" when its `virtual_networking` block leaves a setting such as `vnid_range` unset. The setting
+  takes PCD's value.
+- A `region` change on `pcd_compute_flavor` no longer deletes the extra specs the configuration does not set,
+  and an update retried with `-refresh=false` after a failed one no longer fails on an extra spec the failed
+  update had already deleted. A `region` change on `pcd_keymanager_container` no longer fails with "Provider
+  returned invalid result object after apply".
+- An update of a `pcd_dns_zone` no longer fails with "Provider produced inconsistent result after apply" when
+  Designate increments the zone's serial. An update now plans `serial` as known after apply.
 
 ## [0.1.14] - 2026-09-20
 
