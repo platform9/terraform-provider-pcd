@@ -51,7 +51,7 @@ resource "pcd_networking_floatingip" "example" {
 - `description` (String) A description of the floating IP.
 - `fixed_ip` (String) The specific fixed IP on the associated port to map to. Defaults to the port's first address.
 - `port_id` (String) The port to associate the floating IP with. Set to a port ID to associate, or to an empty string to disassociate. Leave unset to manage the association with a separate `pcd_networking_floatingip_associate` resource.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `tags` (Set of String) Tags applied to the floating IP.
 - `tenant_id` (String) The owning project. Changing this forces a new resource.
 

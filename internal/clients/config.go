@@ -186,6 +186,22 @@ func (c *Config) tlsConfig() (*tls.Config, error) {
 
 // endpointOpts returns the common endpoint selection options. Region may be
 // overridden per resource/data source in a later phase.
+// ForRegion returns the configuration for a resource in region: the same
+// credentials and authenticated client, with service endpoints looked up in
+// region's catalog. An empty region, which a resource that leaves region unset
+// passes, and the provider's own region both return c. EndpointOverrides pin a
+// service to one URL in the provider's region, so another region does not use
+// them.
+func (c *Config) ForRegion(region string) *Config {
+	if region == "" || region == c.Region {
+		return c
+	}
+	rc := *c
+	rc.Region = region
+	rc.EndpointOverrides = nil
+	return &rc
+}
+
 func (c *Config) endpointOpts() gophercloud.EndpointOpts {
 	return gophercloud.EndpointOpts{
 		Region:       c.Region,

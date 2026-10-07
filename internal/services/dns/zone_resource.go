@@ -80,11 +80,11 @@ func (r *zoneResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"description": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "A description of the zone.", PlanModifiers: useState},
 			"masters":     schema.ListAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Master nameservers for a SECONDARY zone.", PlanModifiers: []planmodifier.List{listplanmodifier.UseStateForUnknown()}},
 			"attributes":  schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key/value zone attributes (e.g. pool scheduling hints). Changing this forces a new resource.", PlanModifiers: []planmodifier.Map{mapplanmodifier.RequiresReplace(), mapplanmodifier.UseStateForUnknown()}},
-			"serial":      schema.Int64Attribute{Computed: true, MarkdownDescription: "The zone serial number.", PlanModifiers: []planmodifier.Int64{int64planmodifier.UseStateForUnknown()}},
+			"serial":      schema.Int64Attribute{Computed: true, MarkdownDescription: "The zone serial number."}, // not UseStateForUnknown: Designate increments it on every update
 			"status":      schema.StringAttribute{Computed: true, MarkdownDescription: "The zone status (e.g. ACTIVE).", PlanModifiers: useState},
 			"pool_id":     schema.StringAttribute{Computed: true, MarkdownDescription: "The pool the zone is scheduled on.", PlanModifiers: useState},
 			"project_id":  schema.StringAttribute{Computed: true, MarkdownDescription: "The owning project.", PlanModifiers: useState},
-			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -100,7 +100,7 @@ func (r *zoneResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	client, err := r.config.DNSV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).DNSV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("dns: building v2 client", err.Error())
 		return
@@ -121,7 +121,7 @@ func (r *zoneResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	zone, err := zones.Create(ctx, client, createOpts).Extract()
+	zone, err := clients.RequireObject(zones.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("dns: creating zone", err.Error())
 		return
@@ -162,7 +162,7 @@ func (r *zoneResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	client, err := r.config.DNSV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).DNSV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("dns: building v2 client", err.Error())
 		return
@@ -190,7 +190,7 @@ func (r *zoneResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	client, err := r.config.DNSV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).DNSV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("dns: building v2 client", err.Error())
 		return
@@ -242,7 +242,7 @@ func (r *zoneResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	client, err := r.config.DNSV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).DNSV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("dns: building v2 client", err.Error())
 		return

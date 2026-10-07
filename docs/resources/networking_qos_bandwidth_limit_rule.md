@@ -37,7 +37,7 @@ resource "pcd_networking_qos_bandwidth_limit_rule" "example" {
 
 - `direction` (String) The traffic direction: egress (default) or ingress.
 - `max_burst_kbps` (Number) The maximum burst size in kilobits.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 

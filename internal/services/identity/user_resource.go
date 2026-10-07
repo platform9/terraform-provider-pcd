@@ -103,8 +103,8 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"region": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "The region in which to manage the user. Defaults to the provider's region.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				MarkdownDescription: "The region in which to manage the user. Defaults to the provider's region. Changing this forces a new resource.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()},
 			},
 		},
 	}
@@ -121,21 +121,21 @@ func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
 	}
 
 	enabled := plan.Enabled.ValueBool()
-	user, err := users.Create(ctx, client, users.CreateOpts{
+	user, err := clients.RequireObject(users.Create(ctx, client, users.CreateOpts{
 		Name:             plan.Name.ValueString(),
 		Description:      plan.Description.ValueString(),
 		DomainID:         plan.DomainID.ValueString(),
 		DefaultProjectID: plan.DefaultProjectID.ValueString(),
 		Enabled:          &enabled,
 		Password:         plan.Password.ValueString(),
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: creating user", err.Error())
 		return
@@ -152,13 +152,13 @@ func (r *userResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
 	}
 
-	user, err := users.Get(ctx, client, state.ID.ValueString()).Extract()
+	user, err := clients.RequireObject(users.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("User not found",
@@ -182,7 +182,7 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -201,7 +201,7 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		opts.Password = plan.Password.ValueString()
 	}
 
-	user, err := users.Update(ctx, client, plan.ID.ValueString(), opts).Extract()
+	user, err := clients.RequireObject(users.Update(ctx, client, plan.ID.ValueString(), opts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: updating user", err.Error())
 		return
@@ -218,7 +218,7 @@ func (r *userResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return

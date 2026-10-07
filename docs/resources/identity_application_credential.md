@@ -32,7 +32,7 @@ resource "pcd_identity_application_credential" "example" {
 
 - `description` (String) A description of the application credential.
 - `expires_at` (String) RFC3339 expiry timestamp. If omitted, the credential does not expire.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `roles` (Set of String) Role names the credential is limited to. Defaults to all of the user's roles.
 - `secret` (String, Sensitive) The secret. If omitted, one is generated and returned on create only.
 - `unrestricted` (Boolean) Whether the credential may be used to create/delete other application credentials and trusts.

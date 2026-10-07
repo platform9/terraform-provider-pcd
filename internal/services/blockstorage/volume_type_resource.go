@@ -67,7 +67,7 @@ func (r *volumeTypeResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"description": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "A description of the volume type.", PlanModifiers: useState},
 			"is_public":   schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Whether the volume type is visible to all projects."},
 			"extra_specs": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key-value backend specs. `volume_backend_name` selects the blueprint storage backend this type provisions on."},
-			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -83,7 +83,7 @@ func (r *volumeTypeResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -119,7 +119,7 @@ func (r *volumeTypeResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -146,7 +146,7 @@ func (r *volumeTypeResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -186,7 +186,7 @@ func (r *volumeTypeResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return

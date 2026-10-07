@@ -81,7 +81,7 @@ func (d *subnetDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 		return
 	}
 
-	client, err := d.config.NetworkV2Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -89,7 +89,7 @@ func (d *subnetDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 
 	var sub *subnets.Subnet
 	if v := data.SubnetID.ValueString(); v != "" {
-		sub, err = subnets.Get(ctx, client, v).Extract()
+		sub, err = clients.RequireObject(subnets.Get(ctx, client, v).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("networking: getting subnet", err.Error())
 			return

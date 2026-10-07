@@ -86,10 +86,12 @@ func (r *blueprintResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Computed:            true,
 				MarkdownDescription: "Virtual (tenant) networking settings.",
 				PlanModifiers:       objUseState,
+				// The write API takes the whole blueprint, so a leaf the block leaves
+				// unset must plan, and send, the blueprint's current value.
 				Attributes: map[string]schema.Attribute{
-					"enabled":       schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Whether virtual networking is enabled."},
-					"underlay_type": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "How tenant networks are carried between hosts: `vlan`, `vxlan`, or `geneve`."},
-					"vnid_range":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The VLAN/VNI segmentation ID range (e.g. `1000:2000`)."},
+					"enabled":       schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Whether virtual networking is enabled.", PlanModifiers: boolUseState},
+					"underlay_type": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "How tenant networks are carried between hosts: `vlan`, `vxlan`, or `geneve`.", PlanModifiers: useState},
+					"vnid_range":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The VLAN/VNI segmentation ID range (e.g. `1000:2000`).", PlanModifiers: useState},
 				},
 			},
 			"image_library_storage":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The name of the volume type the image library stores images on. Create it with `pcd_blockstorage_volume_type` first.", PlanModifiers: useState},
@@ -224,7 +226,13 @@ func (r *blueprintResource) Update(ctx context.Context, req resource.UpdateReque
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if err := putJSON(ctx, client, client.ServiceURL("blueprint", plan.Name.ValueString()), body, nil); err != nil {
+	url := client.ServiceURL("blueprint", plan.Name.ValueString())
+	merged, err := overStoredBlueprint(ctx, client, url, body)
+	if err != nil {
+		resp.Diagnostics.AddError("resmgr: reading blueprint before update", err.Error())
+		return
+	}
+	if err := putJSON(ctx, client, url, merged, nil); err != nil {
 		resp.Diagnostics.AddError("resmgr: updating blueprint", err.Error())
 		return
 	}
@@ -237,6 +245,29 @@ func (r *blueprintResource) Update(ctx context.Context, req resource.UpdateReque
 		// null; the next refresh reads it.
 		resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
 	}
+}
+
+// overStoredBlueprint returns the stored blueprint at url with body's fields
+// laid over it. resmgr's update replaces the whole row, so a field the PUT
+// leaves out, such as imageLibraryStores, which the provider does not model,
+// would be stored as null.
+func overStoredBlueprint(ctx context.Context, client *gophercloud.ServiceClient, url string, body *blueprintAPI) (map[string]json.RawMessage, error) {
+	var stored map[string]json.RawMessage
+	if err := getJSON(ctx, client, url, &stored); err != nil {
+		return nil, err
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	var ours map[string]json.RawMessage
+	if err := json.Unmarshal(b, &ours); err != nil {
+		return nil, err
+	}
+	for k, v := range ours {
+		stored[k] = v
+	}
+	return stored, nil
 }
 
 // refresh reconciles state after a write. It reads the server object but keeps
@@ -271,9 +302,9 @@ func restoreKnown(m, saved *blueprintResourceModel) {
 	if knownStr(saved.DNSDomainName) {
 		m.DNSDomainName = saved.DNSDomainName
 	}
-	if knownObj(saved.VirtualNetworking) {
-		m.VirtualNetworking = saved.VirtualNetworking
-	}
+	// Per leaf: a block that leaves a leaf unset plans it unknown, and that leaf
+	// takes the server's value.
+	m.VirtualNetworking = mergeObject(m.VirtualNetworking, saved.VirtualNetworking)
 	if knownStr(saved.ImageLibraryStorage) {
 		m.ImageLibraryStorage = saved.ImageLibraryStorage
 	}
@@ -296,7 +327,6 @@ func restoreKnown(m, saved *blueprintResourceModel) {
 
 func knownStr(v types.String) bool { return !v.IsNull() && !v.IsUnknown() }
 func knownBool(v types.Bool) bool  { return !v.IsNull() && !v.IsUnknown() }
-func knownObj(v types.Object) bool { return !v.IsNull() && !v.IsUnknown() }
 
 // Delete removes the blueprint from PCD. It used to be a no-op that only dropped
 // the resource from state, so a `terraform destroy` reported success while the

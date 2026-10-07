@@ -39,7 +39,7 @@ resource "pcd_lb_loadbalancer" "example" {
 - `flavor_id` (String) The Octavia flavor to use. Changing this forces a new resource.
 - `loadbalancer_provider` (String) The Octavia provider driver. PCD ships only `ovn`, which is the default; changing this forces a new resource.
 - `name` (String) The name of the load balancer.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `tags` (Set of String) Tags applied to the load balancer.
 - `vip_address` (String) The VIP address. Requesting a specific address changing it forces a new resource.
 - `vip_network_id` (String) Network on which to allocate the VIP (mutually exclusive with vip_subnet_id). Changing this forces a new resource.

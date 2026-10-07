@@ -46,7 +46,7 @@ resource "pcd_compute_interface_attach" "example" {
 - `fixed_ip` (String) A specific fixed IP to request (only valid with network_id). Changing this forces a new resource.
 - `network_id` (String) A network to allocate a new port on (mutually exclusive with port_id). Changing this forces a new resource.
 - `port_id` (String) An existing port to attach (mutually exclusive with network_id). Changing this forces a new resource.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 

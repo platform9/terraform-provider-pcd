@@ -79,7 +79,7 @@ func (d *projectDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
-	client, err := d.config.IdentityV3Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -87,7 +87,7 @@ func (d *projectDataSource) Read(ctx context.Context, req datasource.ReadRequest
 
 	var project *projects.Project
 	if v := data.ProjectID.ValueString(); v != "" {
-		project, err = projects.Get(ctx, client, v).Extract()
+		project, err = clients.RequireObject(projects.Get(ctx, client, v).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("identity: getting project by id", err.Error())
 			return

@@ -64,10 +64,37 @@ func (r *floatingIPAssociateResource) Schema(_ context.Context, _ resource.Schem
 			"id":             schema.StringAttribute{Computed: true, MarkdownDescription: "The floating IP ID (same as `floating_ip_id`).", PlanModifiers: useState},
 			"floating_ip_id": schema.StringAttribute{Required: true, MarkdownDescription: "The ID of the floating IP to associate. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
 			"port_id":        schema.StringAttribute{Required: true, MarkdownDescription: "The ID of the port to associate the floating IP with."},
-			"fixed_ip":       schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The specific fixed IP on the port to map to. Defaults to the port's first address.", PlanModifiers: useState},
-			"region":         schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"fixed_ip":       schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The specific fixed IP on the port to map to. Defaults to the port's first address.", PlanModifiers: []planmodifier.String{fixedIPForSamePort{}}},
+			"region":         schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
+}
+
+// fixedIPForSamePort plans an unset fixed_ip from state, like
+// UseStateForUnknown, but only while port_id stays the same. The address
+// belongs to the old port, so a move to another port plans it unknown, and
+// Neutron maps the new port's first address.
+type fixedIPForSamePort struct{}
+
+func (fixedIPForSamePort) Description(context.Context) string {
+	return "Keeps the prior fixed IP while port_id does not change."
+}
+
+func (m fixedIPForSamePort) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (fixedIPForSamePort) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	if req.StateValue.IsNull() || !req.PlanValue.IsUnknown() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	var planned, prior types.String
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("port_id"), &planned)...)
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("port_id"), &prior)...)
+	if resp.Diagnostics.HasError() || !planned.Equal(prior) {
+		return
+	}
+	resp.PlanValue = req.StateValue
 }
 
 func (r *floatingIPAssociateResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -81,7 +108,7 @@ func (r *floatingIPAssociateResource) Create(ctx context.Context, req resource.C
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -130,7 +157,7 @@ func (r *floatingIPAssociateResource) Read(ctx context.Context, req resource.Rea
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -157,7 +184,7 @@ func (r *floatingIPAssociateResource) Update(ctx context.Context, req resource.U
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -196,7 +223,7 @@ func (r *floatingIPAssociateResource) Delete(ctx context.Context, req resource.D
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

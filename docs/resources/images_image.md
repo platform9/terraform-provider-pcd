@@ -49,7 +49,7 @@ resource "pcd_images_image" "example" {
 - `min_ram_mb` (Number) Minimum RAM (MB) required to boot the image.
 - `properties` (Map of String) User-defined key/value image properties (custom Glance metadata). Only keys you set here are managed; Glance system/read-only properties are not tracked.
 - `protected` (Boolean) Whether the image is protected from deletion.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `tags` (Set of String) Tags applied to the image.
 - `verify_checksum` (Boolean) Verify the uploaded file's md5 against the Glance checksum (local_file_path only).
 - `visibility` (String) Image visibility: public, private, shared, or community.

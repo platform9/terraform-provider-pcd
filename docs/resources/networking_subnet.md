@@ -71,7 +71,7 @@ resource "pcd_networking_subnet" "app" {
 - `gateway_ip` (String) The gateway IP. Defaults to the first address in the CIDR.
 - `ip_version` (Number) IP version (4 or 6).
 - `name` (String) The name of the subnet.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `tags` (Set of String) Tags applied to the subnet.
 - `tenant_id` (String) The owning project. Changing this forces a new resource.
 

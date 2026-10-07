@@ -34,7 +34,7 @@ resource "pcd_keymanager_secret" "example" {
 - `payload` (String, Sensitive) The secret data. Write-only: never read back from the server. Changing this forces a new resource.
 - `payload_content_encoding` (String) The payload content encoding (e.g. base64 for binary payloads). Changing this forces a new resource.
 - `payload_content_type` (String) The payload content type (required when payload is set, e.g. text/plain). Changing this forces a new resource.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `secret_type` (String) The secret type: symmetric, public, private, passphrase, certificate, or opaque (default). Changing this forces a new resource.
 
 ### Read-Only

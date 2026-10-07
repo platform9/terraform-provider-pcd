@@ -40,7 +40,7 @@ resource "pcd_blockstorage_volume" "example" {
 - `image_id` (String) Create the volume from this image. Changing this forces a new resource.
 - `metadata` (Map of String) Key-value metadata for the volume.
 - `name` (String) The name of the volume.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `snapshot_id` (String) Create the volume from this snapshot. Changing this forces a new resource.
 - `source_vol_id` (String) Clone the volume from this source volume. Changing this forces a new resource.
 - `volume_type` (String) The volume type. Changing this forces a new resource.

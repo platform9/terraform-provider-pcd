@@ -58,7 +58,7 @@ resource "pcd_lb_member" "example" {
 - `monitor_address` (String) Alternate IP address used for health monitoring.
 - `monitor_port` (Number) Alternate port used for health monitoring.
 - `name` (String) The name of the member.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `subnet_id` (String) The subnet the member address is on. Changing this forces a new resource.
 - `tags` (Set of String) Tags applied to the member.
 - `weight` (Number) Relative share of traffic this member receives (0 disables).

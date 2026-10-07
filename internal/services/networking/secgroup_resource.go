@@ -20,6 +20,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -70,11 +71,18 @@ func (r *secgroupResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"delete_default_rules": schema.BoolAttribute{
 				Optional: true, Computed: true, Default: booldefault.StaticBool(false),
 				MarkdownDescription: "Delete the default egress rules Neutron creates with the group. Changing this forces a new resource.",
-				PlanModifiers:       []planmodifier.Bool{},
+				PlanModifiers: []planmodifier.Bool{boolplanmodifier.RequiresReplaceIf(
+					// Neutron does not report it, so an import leaves it null, and the
+					// first apply records the configured value without replacing the group.
+					func(_ context.Context, req planmodifier.BoolRequest, resp *boolplanmodifier.RequiresReplaceIfFuncResponse) {
+						resp.RequiresReplace = !req.StateValue.IsNull()
+					},
+					"Changing this forces a new resource.", "Changing this forces a new resource.",
+				)},
 			},
 			"tenant_id": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The owning project. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 			"tags":      schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the security group.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
-			"region":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"region":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -90,7 +98,7 @@ func (r *secgroupResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -106,7 +114,7 @@ func (r *secgroupResource) Create(ctx context.Context, req resource.CreateReques
 		createOpts.Stateful = &stateful
 	}
 
-	sg, err := groups.Create(ctx, client, createOpts).Extract()
+	sg, err := clients.RequireObject(groups.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating security group", err.Error())
 		return
@@ -163,7 +171,7 @@ func (r *secgroupResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -191,7 +199,7 @@ func (r *secgroupResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -200,6 +208,12 @@ func (r *secgroupResource) Update(ctx context.Context, req resource.UpdateReques
 	name := plan.Name.ValueString()
 	description := plan.Description.ValueString()
 	updateOpts := groups.UpdateOpts{Name: name, Description: &description}
+	// Neutron refuses to change stateful on a group a port uses, so send it
+	// only when it changes.
+	if !plan.Stateful.IsUnknown() && !plan.Stateful.Equal(state.Stateful) {
+		stateful := plan.Stateful.ValueBool()
+		updateOpts.Stateful = &stateful
+	}
 	if _, err := groups.Update(ctx, client, plan.ID.ValueString(), updateOpts).Extract(); err != nil {
 		resp.Diagnostics.AddError("networking: updating security group", err.Error())
 		return
@@ -242,7 +256,7 @@ func (r *secgroupResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

@@ -90,7 +90,7 @@ func (d *secretDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 		return
 	}
 
-	client, err := d.config.KeyManagerV1Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).KeyManagerV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: building v1 client", err.Error())
 		return
@@ -99,9 +99,17 @@ func (d *secretDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 	var secret *secrets.Secret
 	switch {
 	case data.SecretRef.ValueString() != "":
-		secret, err = secrets.Get(ctx, client, refToID(data.SecretRef.ValueString())).Extract()
+		secret, err = clients.RequireObject(secrets.Get(ctx, client, refToID(data.SecretRef.ValueString())).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("keymanager: getting secret", err.Error())
+			return
+		}
+		// Extract decodes the whole body as the secret, so a 200 that holds no
+		// secret decodes to an empty one, without the secret_ref Barbican always
+		// sends.
+		if secret.SecretRef == "" {
+			resp.Diagnostics.AddError("keymanager: getting secret",
+				fmt.Sprintf("The Key Manager API answered without a secret object for ID %q.", refToID(data.SecretRef.ValueString())))
 			return
 		}
 	case data.Name.ValueString() != "":

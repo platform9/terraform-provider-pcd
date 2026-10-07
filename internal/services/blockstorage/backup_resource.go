@@ -76,7 +76,7 @@ func (r *backupResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"container":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The backup store container. Changing this forces a new resource.", PlanModifiers: forceNew},
 			"size":        schema.Int64Attribute{Computed: true, MarkdownDescription: "The size of the backup in GB."},
 			"status":      schema.StringAttribute{Computed: true, MarkdownDescription: "The Cinder status (e.g. available)."},
-			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -92,7 +92,7 @@ func (r *backupResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -135,7 +135,7 @@ func (r *backupResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -161,7 +161,7 @@ func (r *backupResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -191,15 +191,19 @@ func (r *backupResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
 	}
 
 	if err := backups.Delete(ctx, client, state.ID.ValueString()).ExtractErr(); err != nil {
+		// Cinder also answers 404 when the backup service is missing, and the
+		// backup then stays, so a 404 counts as done only once a GET agrees.
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
-			return
+			if _, getErr := backups.Get(ctx, client, state.ID.ValueString()).Extract(); gophercloud.ResponseCodeIs(getErr, http.StatusNotFound) {
+				return
+			}
 		}
 		resp.Diagnostics.AddError("blockstorage: deleting volume backup", err.Error())
 		return

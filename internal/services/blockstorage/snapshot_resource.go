@@ -74,7 +74,7 @@ func (r *snapshotResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"metadata":    schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key-value metadata for the snapshot."},
 			"size":        schema.Int64Attribute{Computed: true, MarkdownDescription: "The size of the snapshot in GB."},
 			"status":      schema.StringAttribute{Computed: true, MarkdownDescription: "The Cinder status (e.g. available)."},
-			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -90,19 +90,19 @@ func (r *snapshotResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
 	}
 
-	snap, err := snapshots.Create(ctx, client, snapshots.CreateOpts{
+	snap, err := clients.RequireObject(snapshots.Create(ctx, client, snapshots.CreateOpts{
 		VolumeID:    plan.VolumeID.ValueString(),
 		Force:       plan.Force.ValueBool(),
 		Name:        plan.Name.ValueString(),
 		Description: plan.Description.ValueString(),
 		Metadata:    mapToStrings(ctx, plan.Metadata, &resp.Diagnostics),
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: creating snapshot", err.Error())
 		return
@@ -132,7 +132,7 @@ func (r *snapshotResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -158,7 +158,7 @@ func (r *snapshotResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -174,15 +174,17 @@ func (r *snapshotResource) Update(ctx context.Context, req resource.UpdateReques
 		}
 	}
 
-	if !plan.Metadata.Equal(state.Metadata) {
-		meta := map[string]any{}
+	// metadata is unknown when the config leaves it unset, and the snapshot's
+	// metadata is not the config's to change then.
+	if !plan.Metadata.IsUnknown() && !plan.Metadata.Equal(state.Metadata) {
+		meta := snapshotMetadata{}
 		for k, v := range mapToStrings(ctx, plan.Metadata, &resp.Diagnostics) {
 			meta[k] = v
 		}
 		if resp.Diagnostics.HasError() {
 			return
 		}
-		if _, err := snapshots.UpdateMetadata(ctx, client, id, snapshots.UpdateMetadataOpts{Metadata: meta}).Extract(); err != nil {
+		if _, err := snapshots.UpdateMetadata(ctx, client, id, meta).Extract(); err != nil {
 			resp.Diagnostics.AddError("blockstorage: updating snapshot metadata", err.Error())
 			return
 		}
@@ -195,6 +197,15 @@ func (r *snapshotResource) Update(ctx context.Context, req resource.UpdateReques
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
+// snapshotMetadata is the body of a snapshot metadata update. It always carries
+// the metadata element: snapshots.UpdateMetadataOpts drops an empty map, and
+// Cinder refuses a body without it, so metadata = {} could not clear it.
+type snapshotMetadata map[string]any
+
+func (m snapshotMetadata) ToSnapshotUpdateMetadataMap() (map[string]any, error) {
+	return map[string]any{"metadata": map[string]any(m)}, nil
+}
+
 func (r *snapshotResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var state snapshotModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
@@ -202,7 +213,7 @@ func (r *snapshotResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -233,7 +244,7 @@ func (r *snapshotResource) readInto(ctx context.Context, client *gophercloud.Ser
 }
 
 func (r *snapshotResource) readIntoChecked(ctx context.Context, client *gophercloud.ServiceClient, id string, m *snapshotModel) (notFound bool, diags diag.Diagnostics) {
-	snap, err := snapshots.Get(ctx, client, id).Extract()
+	snap, err := clients.RequireObject(snapshots.Get(ctx, client, id).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			return true, diags
@@ -272,7 +283,7 @@ func (r *snapshotResource) setState(ctx context.Context, m *snapshotModel, snap 
 func waitForSnapshotStatus(ctx context.Context, client *gophercloud.ServiceClient, id, target string, timeout time.Duration) (*snapshots.Snapshot, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		snap, err := snapshots.Get(ctx, client, id).Extract()
+		snap, err := clients.RequireObject(snapshots.Get(ctx, client, id).Extract())
 		if err != nil {
 			return nil, err
 		}
@@ -296,7 +307,7 @@ func waitForSnapshotStatus(ctx context.Context, client *gophercloud.ServiceClien
 func waitForSnapshotDeleted(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		snap, err := snapshots.Get(ctx, client, id).Extract()
+		snap, err := clients.RequireObject(snapshots.Get(ctx, client, id).Extract())
 		if err != nil {
 			if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 				return nil

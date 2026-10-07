@@ -106,7 +106,7 @@ func (d *imageDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		return
 	}
 
-	client, err := d.config.ImageV2Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).ImageV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("images: building v2 client", err.Error())
 		return
@@ -114,7 +114,7 @@ func (d *imageDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 
 	var img *images.Image
 	if v := data.ImageID.ValueString(); v != "" {
-		img, err = images.Get(ctx, client, v).Extract()
+		img, err = clients.RequireObject(images.Get(ctx, client, v).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("images: getting image by id", err.Error())
 			return

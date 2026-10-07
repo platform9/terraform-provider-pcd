@@ -85,7 +85,7 @@ func (r *flavorResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"is_public":    schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Whether the flavor is public. Changing this forces a new resource.", PlanModifiers: []planmodifier.Bool{boolplanmodifier.RequiresReplace()}},
 			"ephemeral":    schema.Int64Attribute{Optional: true, Computed: true, Default: int64default.StaticInt64(0), MarkdownDescription: "Ephemeral disk in GB. Changing this forces a new resource.", PlanModifiers: fnInt},
 			"extra_specs":  schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key/value extra specs (e.g. `hw:cpu_policy`). Can be added, changed, or removed on an existing flavor without replacing it."},
-			"region":       schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"region":       schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -101,7 +101,7 @@ func (r *flavorResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
@@ -123,7 +123,7 @@ func (r *flavorResource) Create(ctx context.Context, req resource.CreateRequest,
 		Ephemeral:  &ephemeral,
 	}
 
-	flavor, err := flavors.Create(ctx, client, createOpts).Extract()
+	flavor, err := clients.RequireObject(flavors.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("compute: creating flavor", err.Error())
 		return
@@ -162,7 +162,7 @@ func (r *flavorResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
@@ -202,7 +202,7 @@ func (r *flavorResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
@@ -213,11 +213,18 @@ func (r *flavorResource) Update(ctx context.Context, req resource.UpdateRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	// extra_specs is unknown when the config leaves it unset, and the flavor's
+	// specs are not the config's to change then.
+	if plan.ExtraSpecs.IsUnknown() {
+		newSpecs = oldSpecs
+	}
 
 	id := plan.ID.ValueString()
 	for k := range oldSpecs {
 		if _, ok := newSpecs[k]; !ok {
-			if err := flavors.DeleteExtraSpec(ctx, client, id, k).ExtractErr(); err != nil {
+			// A 404 is a spec an earlier update deleted before it failed.
+			if err := flavors.DeleteExtraSpec(ctx, client, id, k).ExtractErr(); err != nil &&
+				!gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 				resp.Diagnostics.AddError("compute: deleting flavor extra spec", err.Error())
 				return
 			}
@@ -253,7 +260,7 @@ func (r *flavorResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return

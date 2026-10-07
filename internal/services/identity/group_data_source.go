@@ -71,7 +71,7 @@ func (d *groupDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		return
 	}
 
-	client, err := d.config.IdentityV3Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -79,7 +79,7 @@ func (d *groupDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 
 	var group *groups.Group
 	if v := data.GroupID.ValueString(); v != "" {
-		group, err = groups.Get(ctx, client, v).Extract()
+		group, err = clients.RequireObject(groups.Get(ctx, client, v).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("identity: getting group by id", err.Error())
 			return

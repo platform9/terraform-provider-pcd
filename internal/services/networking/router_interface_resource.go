@@ -64,7 +64,7 @@ func (r *routerInterfaceResource) Schema(_ context.Context, _ resource.SchemaReq
 			"router_id": schema.StringAttribute{Required: true, MarkdownDescription: "The router to attach to.", PlanModifiers: fn},
 			"subnet_id": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The subnet to attach (mutually exclusive with port_id).", PlanModifiers: fnC},
 			"port_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "An existing port to attach (mutually exclusive with subnet_id).", PlanModifiers: fnC},
-			"region":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"region":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -87,7 +87,7 @@ func (r *routerInterfaceResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -131,7 +131,7 @@ func (r *routerInterfaceResource) Read(ctx context.Context, req resource.ReadReq
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -168,7 +168,7 @@ func (r *routerInterfaceResource) Delete(ctx context.Context, req resource.Delet
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

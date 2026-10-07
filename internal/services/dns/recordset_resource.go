@@ -73,7 +73,7 @@ func (r *recordSetResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"ttl":         schema.Int64Attribute{Optional: true, Computed: true, MarkdownDescription: "The recordset TTL in seconds. Omit to inherit the zone default.", PlanModifiers: []planmodifier.Int64{int64planmodifier.UseStateForUnknown()}},
 			"description": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "A description of the recordset.", PlanModifiers: useState},
 			"status":      schema.StringAttribute{Computed: true, MarkdownDescription: "The recordset status (e.g. ACTIVE).", PlanModifiers: useState},
-			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -89,7 +89,7 @@ func (r *recordSetResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	client, err := r.config.DNSV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).DNSV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("dns: building v2 client", err.Error())
 		return
@@ -109,7 +109,7 @@ func (r *recordSetResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	rr, err := recordsets.Create(ctx, client, zoneID, createOpts).Extract()
+	rr, err := clients.RequireObject(recordsets.Create(ctx, client, zoneID, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("dns: creating recordset", err.Error())
 		return
@@ -150,7 +150,7 @@ func (r *recordSetResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	client, err := r.config.DNSV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).DNSV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("dns: building v2 client", err.Error())
 		return
@@ -178,7 +178,7 @@ func (r *recordSetResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	client, err := r.config.DNSV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).DNSV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("dns: building v2 client", err.Error())
 		return
@@ -231,7 +231,7 @@ func (r *recordSetResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	client, err := r.config.DNSV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).DNSV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("dns: building v2 client", err.Error())
 		return

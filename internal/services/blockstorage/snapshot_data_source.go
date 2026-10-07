@@ -75,7 +75,7 @@ func (d *snapshotDataSource) Read(ctx context.Context, req datasource.ReadReques
 		return
 	}
 
-	client, err := d.config.BlockStorageV3Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -83,7 +83,7 @@ func (d *snapshotDataSource) Read(ctx context.Context, req datasource.ReadReques
 
 	var snap *snapshots.Snapshot
 	if v := data.SnapshotID.ValueString(); v != "" {
-		snap, err = snapshots.Get(ctx, client, v).Extract()
+		snap, err = clients.RequireObject(snapshots.Get(ctx, client, v).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("blockstorage: getting snapshot", err.Error())
 			return

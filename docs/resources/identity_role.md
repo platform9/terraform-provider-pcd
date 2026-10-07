@@ -28,7 +28,7 @@ resource "pcd_identity_role" "example" {
 ### Optional
 
 - `domain_id` (String) The domain the role belongs to (empty for a global role). Changing this forces a new resource.
-- `region` (String) The region in which to manage the role. Defaults to the provider's region.
+- `region` (String) The region in which to manage the role. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 

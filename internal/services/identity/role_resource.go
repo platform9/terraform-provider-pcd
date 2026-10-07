@@ -75,8 +75,8 @@ func (r *roleResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"region": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "The region in which to manage the role. Defaults to the provider's region.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				MarkdownDescription: "The region in which to manage the role. Defaults to the provider's region. Changing this forces a new resource.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()},
 			},
 		},
 	}
@@ -93,16 +93,16 @@ func (r *roleResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
 	}
 
-	role, err := roles.Create(ctx, client, roles.CreateOpts{
+	role, err := clients.RequireObject(roles.Create(ctx, client, roles.CreateOpts{
 		Name:     plan.Name.ValueString(),
 		DomainID: plan.DomainID.ValueString(),
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: creating role", err.Error())
 		return
@@ -119,13 +119,13 @@ func (r *roleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
 	}
 
-	role, err := roles.Get(ctx, client, state.ID.ValueString()).Extract()
+	role, err := clients.RequireObject(roles.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Role not found",
@@ -148,15 +148,15 @@ func (r *roleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
 	}
 
-	role, err := roles.Update(ctx, client, plan.ID.ValueString(), roles.UpdateOpts{
+	role, err := clients.RequireObject(roles.Update(ctx, client, plan.ID.ValueString(), roles.UpdateOpts{
 		Name: plan.Name.ValueString(),
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: updating role", err.Error())
 		return
@@ -173,7 +173,7 @@ func (r *roleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return

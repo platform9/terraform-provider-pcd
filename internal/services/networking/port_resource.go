@@ -120,7 +120,7 @@ func (r *portResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"tags":          schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the port.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
 			"status":        schema.StringAttribute{Computed: true, MarkdownDescription: "The operational status of the port."},
 			"all_fixed_ips": schema.ListAttribute{Computed: true, ElementType: types.StringType, MarkdownDescription: "The IP addresses Neutron assigned to the port, in order."},
-			"region":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -136,7 +136,7 @@ func (r *portResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -216,7 +216,7 @@ func (r *portResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -244,7 +244,7 @@ func (r *portResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -338,7 +338,7 @@ func (r *portResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

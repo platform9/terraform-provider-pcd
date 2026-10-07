@@ -43,7 +43,7 @@ resource "pcd_networking_router_interface" "example" {
 ### Optional
 
 - `port_id` (String) An existing port to attach (mutually exclusive with subnet_id).
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `subnet_id` (String) The subnet to attach (mutually exclusive with port_id).
 
 ### Read-Only

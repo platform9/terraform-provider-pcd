@@ -44,7 +44,7 @@ resource "pcd_identity_role_assignment" "example" {
 - `domain_id` (String) The domain the assignment is scoped to (mutually exclusive with project_id).
 - `group_id` (String) The group to assign the role to (mutually exclusive with user_id).
 - `project_id` (String) The project the assignment is scoped to (mutually exclusive with domain_id).
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `user_id` (String) The user to assign the role to (mutually exclusive with group_id).
 
 ### Read-Only

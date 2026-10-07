@@ -70,7 +70,7 @@ func (r *interfaceAttachResource) Schema(_ context.Context, _ resource.SchemaReq
 			"fixed_ip":    schema.StringAttribute{Optional: true, MarkdownDescription: "A specific fixed IP to request (only valid with network_id). Changing this forces a new resource.", PlanModifiers: forceNew},
 			"mac":         schema.StringAttribute{Computed: true, MarkdownDescription: "The MAC address of the attached interface.", PlanModifiers: stable},
 			"port_state":  schema.StringAttribute{Computed: true, MarkdownDescription: "The port state (e.g. ACTIVE).", PlanModifiers: stable},
-			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: stable},
+			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -101,7 +101,7 @@ func (r *interfaceAttachResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
@@ -115,7 +115,7 @@ func (r *interfaceAttachResource) Create(ctx context.Context, req resource.Creat
 		createOpts.FixedIPs = []attachinterfaces.FixedIP{{IPAddress: fixedIP}}
 	}
 
-	iface, err := attachinterfaces.Create(ctx, client, plan.InstanceID.ValueString(), createOpts).Extract()
+	iface, err := clients.RequireObject(attachinterfaces.Create(ctx, client, plan.InstanceID.ValueString(), createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("compute: attaching interface", err.Error())
 		return
@@ -133,13 +133,13 @@ func (r *interfaceAttachResource) Read(ctx context.Context, req resource.ReadReq
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
 	}
 
-	iface, err := attachinterfaces.Get(ctx, client, state.InstanceID.ValueString(), state.PortID.ValueString()).Extract()
+	iface, err := clients.RequireObject(attachinterfaces.Get(ctx, client, state.InstanceID.ValueString(), state.PortID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Interface attachment not found",
@@ -169,7 +169,7 @@ func (r *interfaceAttachResource) Delete(ctx context.Context, req resource.Delet
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return

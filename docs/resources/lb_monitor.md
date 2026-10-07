@@ -61,7 +61,7 @@ resource "pcd_lb_monitor" "example" {
 - `http_method` (String) HTTP method for HTTP(S) checks (default GET).
 - `max_retries_down` (Number) Failed checks before marking a member down.
 - `name` (String) The name of the monitor.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `tags` (Set of String) Tags applied to the monitor.
 - `url_path` (String) URL path for HTTP(S) checks (default /).
 

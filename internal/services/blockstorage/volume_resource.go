@@ -83,7 +83,7 @@ func (r *volumeResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"bootable":          schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether the volume is bootable."},
 			"encrypted":         schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether the volume is encrypted."},
 			"status":            schema.StringAttribute{Computed: true, MarkdownDescription: "The Cinder status (e.g. available)."},
-			"region":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: stable},
+			"region":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -99,7 +99,7 @@ func (r *volumeResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -157,7 +157,7 @@ func (r *volumeResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -187,7 +187,7 @@ func (r *volumeResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -196,14 +196,14 @@ func (r *volumeResource) Update(ctx context.Context, req resource.UpdateRequest,
 	if !plan.Name.Equal(state.Name) || !plan.Description.Equal(state.Description) || !plan.Metadata.Equal(state.Metadata) {
 		name := plan.Name.ValueString()
 		description := plan.Description.ValueString()
-		updateOpts := volumes.UpdateOpts{Name: &name, Description: &description}
+		updateOpts := volumeUpdate{UpdateOpts: volumes.UpdateOpts{Name: &name, Description: &description}}
 		if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() {
-			var meta map[string]string
+			meta := map[string]string{}
 			resp.Diagnostics.Append(plan.Metadata.ElementsAs(ctx, &meta, false)...)
 			if resp.Diagnostics.HasError() {
 				return
 			}
-			updateOpts.Metadata = meta
+			updateOpts.metadata = meta
 		}
 		if _, err := volumes.Update(ctx, client, plan.ID.ValueString(), updateOpts).Extract(); err != nil {
 			resp.Diagnostics.AddError("blockstorage: updating volume", err.Error())
@@ -234,6 +234,26 @@ func (r *volumeResource) Update(ctx context.Context, req resource.UpdateRequest,
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
+// volumeUpdate is a volume update whose metadata, when set, is sent even if
+// empty, so metadata = {} clears it: volumes.UpdateOpts drops an empty map.
+type volumeUpdate struct {
+	volumes.UpdateOpts
+	metadata map[string]string
+}
+
+func (o volumeUpdate) ToVolumeUpdateMap() (map[string]any, error) {
+	b, err := o.UpdateOpts.ToVolumeUpdateMap()
+	if err != nil || o.metadata == nil {
+		return b, err
+	}
+	v, ok := b["volume"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("building the volume update: unexpected body %v", b)
+	}
+	v["metadata"] = o.metadata
+	return b, nil
+}
+
 func (r *volumeResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var state volumeModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
@@ -241,7 +261,7 @@ func (r *volumeResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return

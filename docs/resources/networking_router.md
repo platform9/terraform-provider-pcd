@@ -38,7 +38,7 @@ resource "pcd_networking_router" "example" {
 - `enable_snat` (Boolean) Whether SNAT is enabled on the gateway. Requires external_network_id.
 - `external_network_id` (String) The ID of the external network for the router's gateway.
 - `name` (String) The name of the router.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `tags` (Set of String) Tags applied to the router.
 - `tenant_id` (String) The owning project. Changing this forces a new resource.
 

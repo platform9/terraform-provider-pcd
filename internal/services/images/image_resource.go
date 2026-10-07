@@ -110,7 +110,7 @@ func (r *imageResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 			"owner":            schema.StringAttribute{Computed: true, MarkdownDescription: "Project that owns the image."},
 			"created_at":       schema.StringAttribute{Computed: true, MarkdownDescription: "Creation timestamp (RFC3339)."},
 			"updated_at":       schema.StringAttribute{Computed: true, MarkdownDescription: "Last-update timestamp (RFC3339)."},
-			"region":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: stable},
+			"region":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -143,7 +143,7 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 
-	client, err := r.config.ImageV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).ImageV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("images: building v2 client", err.Error())
 		return
@@ -182,7 +182,7 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 		createOpts.Properties = userProps
 	}
 
-	img, err := images.Create(ctx, client, createOpts).Extract()
+	img, err := clients.RequireObject(images.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("images: creating image", err.Error())
 		return
@@ -268,13 +268,13 @@ func (r *imageResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 
-	client, err := r.config.ImageV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ImageV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("images: building v2 client", err.Error())
 		return
 	}
 
-	img, err := images.Get(ctx, client, state.ID.ValueString()).Extract()
+	img, err := clients.RequireObject(images.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Image not found",
@@ -298,7 +298,7 @@ func (r *imageResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 
-	client, err := r.config.ImageV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).ImageV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("images: building v2 client", err.Error())
 		return
@@ -362,7 +362,7 @@ func (r *imageResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		}
 	}
 
-	img, err := images.Get(ctx, client, plan.ID.ValueString()).Extract()
+	img, err := clients.RequireObject(images.Get(ctx, client, plan.ID.ValueString()).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("images: reading image after update", err.Error())
 		return
@@ -378,7 +378,7 @@ func (r *imageResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 		return
 	}
 
-	client, err := r.config.ImageV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ImageV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("images: building v2 client", err.Error())
 		return
@@ -426,7 +426,7 @@ func (r *imageResource) uploadLocalFile(ctx context.Context, client *gophercloud
 	if err != nil {
 		return fmt.Errorf("computing checksum: %w", err)
 	}
-	img, err := images.Get(ctx, client, id).Extract()
+	img, err := clients.RequireObject(images.Get(ctx, client, id).Extract())
 	if err != nil {
 		return err
 	}
@@ -509,7 +509,7 @@ func imageProperty(img *images.Image, key string) string {
 func waitForImageActive(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*images.Image, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		img, err := images.Get(ctx, client, id).Extract()
+		img, err := clients.RequireObject(images.Get(ctx, client, id).Extract())
 		if err != nil {
 			return nil, err
 		}

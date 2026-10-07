@@ -50,7 +50,7 @@ resource "pcd_networking_network" "example" {
 ### Optional
 
 - `device` (String) Device path (e.g. /dev/vdb); omit for Nova to auto-assign. Nova may return a different device than requested. Changing this forces a new resource.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 

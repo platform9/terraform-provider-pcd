@@ -70,7 +70,7 @@ func (r *servergroupResource) Schema(_ context.Context, _ resource.SchemaRequest
 				MarkdownDescription: "Instance IDs that are members of this server group.",
 				PlanModifiers:       []planmodifier.List{listplanmodifier.UseStateForUnknown()},
 			},
-			"region": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"region": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -86,7 +86,7 @@ func (r *servergroupResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
@@ -98,10 +98,10 @@ func (r *servergroupResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	sg, err := servergroups.Create(ctx, client, servergroups.CreateOpts{
+	sg, err := clients.RequireObject(servergroups.Create(ctx, client, servergroups.CreateOpts{
 		Name:     plan.Name.ValueString(),
 		Policies: policies,
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("compute: creating server group", err.Error())
 		return
@@ -118,13 +118,13 @@ func (r *servergroupResource) Read(ctx context.Context, req resource.ReadRequest
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
 	}
 
-	sg, err := servergroups.Get(ctx, client, state.ID.ValueString()).Extract()
+	sg, err := clients.RequireObject(servergroups.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Server group not found",
@@ -157,7 +157,7 @@ func (r *servergroupResource) Delete(ctx context.Context, req resource.DeleteReq
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return

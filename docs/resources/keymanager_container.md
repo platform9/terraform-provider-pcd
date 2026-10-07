@@ -40,7 +40,7 @@ resource "pcd_keymanager_container" "example" {
 ### Optional
 
 - `name` (String) The name of the container. Changing this forces a new resource.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `secret_refs` (Attributes Set) The secrets in the container. Changing these forces a new resource. (see [below for nested schema](#nestedatt--secret_refs))
 
 ### Read-Only

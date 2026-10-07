@@ -297,7 +297,7 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"config_drive":      schema.BoolAttribute{Optional: true, MarkdownDescription: "Whether to use a config drive. Changing this forces a new resource.", PlanModifiers: []planmodifier.Bool{}},
 			"access_ip_v4":      schema.StringAttribute{Computed: true, MarkdownDescription: "The first IPv4 address of the instance.", PlanModifiers: stable},
 			"status":            schema.StringAttribute{Computed: true, MarkdownDescription: "The Nova status (e.g. ACTIVE)."},
-			"region":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: stable},
+			"region":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 		Blocks: map[string]schema.Block{
 			"network": schema.ListNestedBlock{
@@ -384,7 +384,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
@@ -417,7 +417,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	}
 	imageID := plan.ImageID.ValueString()
 	if imageNameSet {
-		imgClient, err := r.config.ImageV2Client()
+		imgClient, err := r.config.ForRegion(plan.Region.ValueString()).ImageV2Client()
 		if err != nil {
 			resp.Diagnostics.AddError("compute: building image v2 client", err.Error())
 			return
@@ -537,7 +537,7 @@ func (r *instanceResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
@@ -567,7 +567,7 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
@@ -698,7 +698,7 @@ func (r *instanceResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return

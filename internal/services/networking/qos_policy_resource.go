@@ -71,7 +71,7 @@ func (r *qosPolicyResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"is_default":  schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false), MarkdownDescription: "Whether this is the default policy for the project."},
 			"tenant_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The owning project. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 			"tags":        schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the policy.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
-			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -87,7 +87,7 @@ func (r *qosPolicyResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -101,7 +101,7 @@ func (r *qosPolicyResource) Create(ctx context.Context, req resource.CreateReque
 		TenantID:    plan.TenantID.ValueString(),
 	}
 
-	policy, err := policies.Create(ctx, client, createOpts).Extract()
+	policy, err := clients.RequireObject(policies.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating qos policy", err.Error())
 		return
@@ -149,7 +149,7 @@ func (r *qosPolicyResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -177,7 +177,7 @@ func (r *qosPolicyResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -243,7 +243,7 @@ func (r *qosPolicyResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

@@ -67,7 +67,7 @@ func (r *subnetRouteResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"subnet_id":        schema.StringAttribute{Required: true, MarkdownDescription: "The subnet to add the host route to. Changing this forces a new resource.", PlanModifiers: forceNew, Validators: notEmpty},
 			"destination_cidr": schema.StringAttribute{Required: true, MarkdownDescription: "The destination CIDR. Changing this forces a new resource.", PlanModifiers: forceNew},
 			"next_hop":         schema.StringAttribute{Required: true, MarkdownDescription: "The next-hop IP address. Changing this forces a new resource.", PlanModifiers: forceNew},
-			"region":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"region":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -92,7 +92,7 @@ func (r *subnetRouteResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -144,7 +144,7 @@ func (r *subnetRouteResource) Read(ctx context.Context, req resource.ReadRequest
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -206,7 +206,7 @@ func (r *subnetRouteResource) Delete(ctx context.Context, req resource.DeleteReq
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

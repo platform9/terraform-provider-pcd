@@ -95,7 +95,7 @@ func waitForZoneActive(ctx context.Context, client *gophercloud.ServiceClient, z
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	err := gophercloud.WaitFor(ctx, func(ctx context.Context) (bool, error) {
-		z, err := zones.Get(ctx, client, zoneID).Extract()
+		z, err := clients.RequireObject(zones.Get(ctx, client, zoneID).Extract())
 		if err != nil {
 			return false, err
 		}
@@ -129,7 +129,7 @@ func waitForZoneDeleted(ctx context.Context, client *gophercloud.ServiceClient, 
 	defer cancel()
 	seenNonError, lastStatus := false, ""
 	err := gophercloud.WaitFor(ctx, func(ctx context.Context) (bool, error) {
-		z, err := zones.Get(ctx, client, zoneID).Extract()
+		z, err := clients.RequireObject(zones.Get(ctx, client, zoneID).Extract())
 		if err != nil {
 			if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 				return true, nil
@@ -160,7 +160,7 @@ func waitForRecordSetActive(ctx context.Context, client *gophercloud.ServiceClie
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	err := gophercloud.WaitFor(ctx, func(ctx context.Context) (bool, error) {
-		rr, err := recordsets.Get(ctx, client, zoneID, rrID).Extract()
+		rr, err := clients.RequireObject(recordsets.Get(ctx, client, zoneID, rrID).Extract())
 		if err != nil {
 			return false, err
 		}

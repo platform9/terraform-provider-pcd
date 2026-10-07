@@ -82,7 +82,7 @@ func (d *imageIDsDataSource) Read(ctx context.Context, req datasource.ReadReques
 		return
 	}
 
-	client, err := d.config.ImageV2Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).ImageV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("images: building v2 client", err.Error())
 		return

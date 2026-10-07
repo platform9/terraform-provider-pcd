@@ -83,7 +83,7 @@ func (d *networkDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
-	client, err := d.config.NetworkV2Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

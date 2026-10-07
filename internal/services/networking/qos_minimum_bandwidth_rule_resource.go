@@ -62,7 +62,7 @@ func (r *qosMinimumBandwidthRuleResource) Schema(_ context.Context, _ resource.S
 			"qos_policy_id": schema.StringAttribute{Required: true, MarkdownDescription: "The QoS policy this rule belongs to. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
 			"min_kbps":      schema.Int64Attribute{Required: true, MarkdownDescription: "The minimum guaranteed bandwidth in kbps."},
 			"direction":     schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The traffic direction: egress (default) or ingress.", PlanModifiers: useState},
-			"region":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -78,17 +78,17 @@ func (r *qosMinimumBandwidthRuleResource) Create(ctx context.Context, req resour
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
 	}
 
 	policyID := plan.QoSPolicyID.ValueString()
-	rule, err := rules.CreateMinimumBandwidthRule(ctx, client, policyID, rules.CreateMinimumBandwidthRuleOpts{
+	rule, err := clients.RequireObject(rules.CreateMinimumBandwidthRule(ctx, client, policyID, rules.CreateMinimumBandwidthRuleOpts{
 		MinKBps:   int(plan.MinKBps.ValueInt64()),
 		Direction: plan.Direction.ValueString(),
-	}).ExtractMinimumBandwidthRule()
+	}).ExtractMinimumBandwidthRule())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating minimum-bandwidth rule", err.Error())
 		return
@@ -124,7 +124,7 @@ func (r *qosMinimumBandwidthRuleResource) Read(ctx context.Context, req resource
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -152,7 +152,7 @@ func (r *qosMinimumBandwidthRuleResource) Update(ctx context.Context, req resour
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -196,7 +196,7 @@ func (r *qosMinimumBandwidthRuleResource) Delete(ctx context.Context, req resour
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

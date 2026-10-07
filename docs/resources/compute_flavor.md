@@ -45,7 +45,7 @@ resource "pcd_compute_flavor" "example" {
 - `extra_specs` (Map of String) Key/value extra specs (e.g. `hw:cpu_policy`). Can be added, changed, or removed on an existing flavor without replacing it.
 - `flavor_id` (String) The desired flavor ID (auto-generated if omitted). Changing this forces a new resource.
 - `is_public` (Boolean) Whether the flavor is public. Changing this forces a new resource.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `rx_tx_factor` (Number) RX/TX factor. Changing this forces a new resource.
 - `swap` (Number) Swap space in MB. Changing this forces a new resource.
 

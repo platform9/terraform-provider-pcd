@@ -53,7 +53,7 @@ resource "pcd_networking_floatingip_associate" "example" {
 ### Optional
 
 - `fixed_ip` (String) The specific fixed IP on the port to map to. Defaults to the port's first address.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 

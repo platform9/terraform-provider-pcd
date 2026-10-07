@@ -66,7 +66,7 @@ func (r *volumeAttachResource) Schema(_ context.Context, _ resource.SchemaReques
 			"instance_id": schema.StringAttribute{Required: true, MarkdownDescription: "The instance (server) ID to attach the volume to. Changing this forces a new resource.", PlanModifiers: forceNew},
 			"volume_id":   schema.StringAttribute{Required: true, MarkdownDescription: "The Cinder volume ID to attach. Changing this forces a new resource.", PlanModifiers: forceNew},
 			"device":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Device path (e.g. /dev/vdb); omit for Nova to auto-assign. Nova may return a different device than requested. Changing this forces a new resource.", PlanModifiers: forceNewC},
-			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: stable},
+			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -82,7 +82,7 @@ func (r *volumeAttachResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
@@ -93,7 +93,7 @@ func (r *volumeAttachResource) Create(ctx context.Context, req resource.CreateRe
 		createOpts.Device = plan.Device.ValueString()
 	}
 
-	att, err := volumeattach.Create(ctx, client, plan.InstanceID.ValueString(), createOpts).Extract()
+	att, err := clients.RequireObject(volumeattach.Create(ctx, client, plan.InstanceID.ValueString(), createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("compute: attaching volume", err.Error())
 		return
@@ -101,7 +101,7 @@ func (r *volumeAttachResource) Create(ctx context.Context, req resource.CreateRe
 
 	// Best-effort: wait for the volume to report in-use. Skipped silently when the
 	// block-storage service is unavailable (e.g. no Cinder backend on the lab).
-	r.waitForVolume(ctx, plan.VolumeID.ValueString(), "in-use", 5*time.Minute)
+	r.waitForVolume(ctx, plan.Region.ValueString(), plan.VolumeID.ValueString(), "in-use", 5*time.Minute)
 
 	plan.ID = types.StringValue(att.ID)
 	plan.Device = types.StringValue(att.Device)
@@ -118,13 +118,13 @@ func (r *volumeAttachResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
 	}
 
-	att, err := volumeattach.Get(ctx, client, state.InstanceID.ValueString(), state.ID.ValueString()).Extract()
+	att, err := clients.RequireObject(volumeattach.Get(ctx, client, state.InstanceID.ValueString(), state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Volume attachment not found",
@@ -159,7 +159,7 @@ func (r *volumeAttachResource) Delete(ctx context.Context, req resource.DeleteRe
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
@@ -174,7 +174,7 @@ func (r *volumeAttachResource) Delete(ctx context.Context, req resource.DeleteRe
 	}
 
 	// Best-effort: wait for the volume to return to available.
-	r.waitForVolume(ctx, state.VolumeID.ValueString(), "available", 5*time.Minute)
+	r.waitForVolume(ctx, state.Region.ValueString(), state.VolumeID.ValueString(), "available", 5*time.Minute)
 }
 
 func (r *volumeAttachResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
@@ -191,8 +191,8 @@ func (r *volumeAttachResource) ImportState(ctx context.Context, req resource.Imp
 // Any failure (no block-storage service, volume error, timeout) returns silently:
 // the Nova attachment call is the source of truth, and this is only a courtesy
 // wait so the volume's state has settled before Terraform reports success.
-func (r *volumeAttachResource) waitForVolume(ctx context.Context, volumeID, target string, timeout time.Duration) {
-	bs, err := r.config.BlockStorageV3Client()
+func (r *volumeAttachResource) waitForVolume(ctx context.Context, region, volumeID, target string, timeout time.Duration) {
+	bs, err := r.config.ForRegion(region).BlockStorageV3Client()
 	if err != nil {
 		return
 	}

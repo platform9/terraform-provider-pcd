@@ -35,7 +35,7 @@ resource "pcd_networking_router_route" "example" {
 
 ### Optional
 
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 

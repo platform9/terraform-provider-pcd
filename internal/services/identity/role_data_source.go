@@ -69,7 +69,7 @@ func (d *roleDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
-	client, err := d.config.IdentityV3Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -77,7 +77,7 @@ func (d *roleDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 
 	var role *roles.Role
 	if v := data.RoleID.ValueString(); v != "" {
-		role, err = roles.Get(ctx, client, v).Extract()
+		role, err = clients.RequireObject(roles.Get(ctx, client, v).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("identity: getting role by id", err.Error())
 			return

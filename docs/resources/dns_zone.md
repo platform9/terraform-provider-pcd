@@ -34,7 +34,7 @@ resource "pcd_dns_zone" "example" {
 - `description` (String) A description of the zone.
 - `email` (String) The email for the zone's SOA record (required for PRIMARY zones).
 - `masters` (List of String) Master nameservers for a SECONDARY zone.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `ttl` (Number) The zone TTL in seconds. Omit to accept the pool default.
 - `type` (String) The zone type: PRIMARY (default) or SECONDARY. Changing this forces a new resource.
 

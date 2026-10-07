@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -61,7 +62,7 @@ func (r *secgroupRuleResource) Metadata(_ context.Context, req resource.Metadata
 func (r *secgroupRuleResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	fnStr := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	fnStrC := []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}
-	fnInt := []planmodifier.Int64{}
+	fnInt := []planmodifier.Int64{int64planmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a rule within a Neutron security group. Rules are immutable: any change forces a new resource.",
 		Attributes: map[string]schema.Attribute{
@@ -76,7 +77,7 @@ func (r *secgroupRuleResource) Schema(_ context.Context, _ resource.SchemaReques
 			"remote_ip_prefix":  schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Remote CIDR (mutually exclusive with remote_group_id).", PlanModifiers: fnStrC},
 			"description":       schema.StringAttribute{Optional: true, MarkdownDescription: "A description of the rule.", PlanModifiers: fnStr},
 			"tenant_id":         schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The owning project.", PlanModifiers: fnStrC},
-			"region":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"region":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -92,7 +93,7 @@ func (r *secgroupRuleResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -110,7 +111,7 @@ func (r *secgroupRuleResource) Create(ctx context.Context, req resource.CreateRe
 		Description:    plan.Description.ValueString(),
 	}
 
-	rule, err := rules.Create(ctx, client, createOpts).Extract()
+	rule, err := clients.RequireObject(rules.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating security group rule", err.Error())
 		return
@@ -127,13 +128,13 @@ func (r *secgroupRuleResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
 	}
 
-	rule, err := rules.Get(ctx, client, state.ID.ValueString()).Extract()
+	rule, err := clients.RequireObject(rules.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Security group rule not found",
@@ -149,7 +150,8 @@ func (r *secgroupRuleResource) Read(ctx context.Context, req resource.ReadReques
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-// Update is required by the interface but never invoked (every attribute forces replacement).
+// Update is required by the interface but never invoked: every attribute
+// forces replacement.
 func (r *secgroupRuleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan secgroupRuleModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -166,7 +168,7 @@ func (r *secgroupRuleResource) Delete(ctx context.Context, req resource.DeleteRe
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

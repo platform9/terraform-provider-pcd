@@ -65,7 +65,7 @@ func (r *groupResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 				MarkdownDescription: "The domain the group belongs to. Defaults to the default domain. Changing this forces a new resource.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()},
 			},
-			"region": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -81,17 +81,17 @@ func (r *groupResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
 	}
 
-	group, err := groups.Create(ctx, client, groups.CreateOpts{
+	group, err := clients.RequireObject(groups.Create(ctx, client, groups.CreateOpts{
 		Name:        plan.Name.ValueString(),
 		Description: plan.Description.ValueString(),
 		DomainID:    plan.DomainID.ValueString(),
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: creating group", err.Error())
 		return
@@ -108,13 +108,13 @@ func (r *groupResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
 	}
 
-	group, err := groups.Get(ctx, client, state.ID.ValueString()).Extract()
+	group, err := clients.RequireObject(groups.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.State.RemoveResource(ctx)
@@ -136,7 +136,7 @@ func (r *groupResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -151,7 +151,7 @@ func (r *groupResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		updateOpts.Description = &v
 	}
 
-	group, err := groups.Update(ctx, client, plan.ID.ValueString(), updateOpts).Extract()
+	group, err := clients.RequireObject(groups.Update(ctx, client, plan.ID.ValueString(), updateOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: updating group", err.Error())
 		return
@@ -168,7 +168,7 @@ func (r *groupResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return

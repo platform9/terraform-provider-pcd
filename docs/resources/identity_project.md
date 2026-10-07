@@ -35,7 +35,7 @@ resource "pcd_identity_project" "example" {
 - `enabled` (Boolean) Whether the project is enabled. Defaults to true.
 - `is_domain` (Boolean) Whether this project behaves as a domain. Changing this forces a new resource.
 - `parent_id` (String) The parent project ID. Changing this forces a new resource.
-- `region` (String) The region in which to manage the project. Defaults to the provider's region.
+- `region` (String) The region in which to manage the project. Defaults to the provider's region. Changing this forces a new resource.
 - `tags` (Set of String) A set of string tags applied to the project.
 
 ### Read-Only

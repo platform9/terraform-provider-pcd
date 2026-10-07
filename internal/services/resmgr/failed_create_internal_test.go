@@ -373,7 +373,18 @@ func TestBlueprintCreateKeepsStateWhenReadBackFails(t *testing.T) {
 func TestBlueprintUpdateKeepsStateKnownWhenReadBackFails(t *testing.T) {
 	t.Parallel()
 	routes := blueprintRoutes()
-	routes["GET "+blueprintPath] = badGateway
+	// Update reads the stored blueprint before its PUT; the read-back after the
+	// PUT is the GET that fails.
+	gets := 0
+	readBefore := routes["GET "+blueprintPath]
+	routes["GET "+blueprintPath] = func(w http.ResponseWriter, r *http.Request) {
+		gets++
+		if gets == 1 {
+			readBefore(w, r)
+			return
+		}
+		badGateway(w, r)
+	}
 	r := &blueprintResource{config: newRoutedResmgr(t, routes).config}
 	s := schemaOf(t, r)
 

@@ -33,7 +33,7 @@ resource "pcd_networking_qos_dscp_marking_rule" "example" {
 
 ### Optional
 
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 

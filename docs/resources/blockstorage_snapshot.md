@@ -37,7 +37,7 @@ resource "pcd_blockstorage_snapshot" "example" {
 - `force` (Boolean) Snapshot the volume even if it is attached/in-use. Changing this forces a new resource.
 - `metadata` (Map of String) Key-value metadata for the snapshot.
 - `name` (String) The name of the snapshot.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 

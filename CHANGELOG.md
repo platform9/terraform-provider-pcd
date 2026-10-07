@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`region` on a resource or data source now takes effect.** It was documented as the region to manage the
+  object in, but every request went to the provider's region. A resource whose `region` named another region
+  was created, read, updated, and deleted in the provider's region while its state recorded the other one; a
+  data source looked its object up in the provider's region; and the three quota resources wrote every
+  region's quota to the provider's. Each resource and data source now reaches its own region, and the
+  provider's region when `region` is unset. Changing a resource's `region` now replaces it, since an object
+  cannot move between regions. `endpoint_overrides` applies to the provider's region only; a resource in
+  another region uses that region's catalog endpoint. Configurations that leave `region` unset, or set it to
+  the provider's region, plan no changes after the upgrade.
+
+  **Upgrade note:** earlier versions created a resource whose `region` named another region in the provider's
+  region instead. After the upgrade, its refresh looks for it in the region its state records: the refresh
+  fails if that region has no endpoint for the service, and if the region exists but does not hold the
+  object, Terraform drops the entry and the next apply creates a new object there, leaving the original
+  behind. To keep such an object where it is, remove its entry with `terraform state rm` and import it again
+  with `region` unset or set to the provider's region.
 - **Setting `tenant_id` no longer fails to authenticate when a domain is also set.** The provider sent the
   project ID together with a domain from `project_domain_id` or `project_domain_name`, falling back to
   `user_domain_id` or `user_domain_name` and their `OS_*` variables, and the request failed before reaching
@@ -88,6 +104,68 @@ All notable changes to this project are documented here. The format is based on
   service may already have acted on them, and neither are the requests that authenticate the provider or a
   request that failed because the endpoint's TLS certificate is not trusted, the endpoint does not speak TLS,
   or its host name does not resolve. The default stays 0.
+- **A success answer without the object no longer crashes the provider.** When a service answered a create
+  with a success status but a body that lacked the object, the provider crashed and the whole apply failed.
+  The same happened when the answer to a status poll lacked the object, in the waits for a DNS zone or
+  recordset, a Key Manager secret, or a load balancer that is settling or being deleted, and in the lookups of
+  a listener's load balancer and of the current user for `pcd_identity_application_credential`. Such an
+  answer is now an error. This covers the creates of `pcd_networking_secgroup`,
+  `pcd_networking_secgroup_rule`, `pcd_networking_router`, `pcd_networking_subnet`, the four QoS resources,
+  the five load balancer resources, `pcd_compute_flavor`, `pcd_compute_volume_attach`,
+  `pcd_compute_interface_attach`, `pcd_compute_servergroup`, `pcd_compute_keypair`, `pcd_identity_project`,
+  `pcd_identity_group`, `pcd_identity_role`, `pcd_identity_user`, `pcd_identity_application_credential`,
+  `pcd_blockstorage_snapshot`, `pcd_images_image`, `pcd_dns_zone`, `pcd_dns_recordset`,
+  `pcd_keymanager_secret`, and `pcd_keymanager_container`. The service may still have created the object, so
+  look for it by name and delete or import it.
+- **A refresh, update, or data source read whose answer lacks the object no longer crashes the provider.** A
+  success answer whose body lacked the object crashed the plan or apply in the refresh of
+  `pcd_networking_secgroup_rule`, `pcd_identity_project`, `pcd_identity_group`, `pcd_identity_role`,
+  `pcd_identity_user`, `pcd_identity_application_credential`, `pcd_compute_servergroup`, `pcd_compute_keypair`,
+  `pcd_compute_volume_attach`, `pcd_compute_interface_attach`, `pcd_blockstorage_snapshot`, and
+  `pcd_images_image`; in the updates of `pcd_identity_project`, `pcd_identity_group`, `pcd_identity_role`,
+  `pcd_identity_user`, `pcd_blockstorage_snapshot`, and `pcd_images_image`; in the waits for a snapshot to
+  become available or be deleted and for an image to become active, and the checksum check after an image
+  upload; and in the `pcd_identity_project`, `pcd_identity_group`, `pcd_identity_role`, `pcd_identity_user`,
+  `pcd_compute_flavor`, `pcd_compute_keypair`, `pcd_blockstorage_snapshot`, `pcd_images_image`,
+  `pcd_networking_router`, `pcd_networking_subnet`, `pcd_networking_secgroup`, `pcd_networking_qos_policy`,
+  `pcd_lb_loadbalancer`, `pcd_dns_zone`, and `pcd_keymanager_secret` data sources when they look the object up
+  by its ID, name, or reference, and in the `pcd_identity_auth_scope` data source for a token answer without its
+  user. Such an answer is now an error. A refresh keeps the object in state, since it may still exist; a 404
+  still removes it. The `pcd_dns_zone` and `pcd_keymanager_secret` data sources also report an error, instead of
+  saving empty values, when the answer to their lookup by ID or reference is an object with no fields.
+- `pcd_networking_secgroup` now sends a change to `stateful`. Before, the update left the group's flag as it
+  was, and the apply failed with "Provider produced inconsistent result after apply". A change to
+  `delete_default_rules` now replaces the group, as documented; before, it planned an in-place update that did
+  nothing. An imported group, whose `delete_default_rules` is unset in state, is not replaced on its first plan.
+- `pcd_networking_secgroup_rule` is replaced when `port_range_min` or `port_range_max` changes. Neutron cannot
+  change a rule, so the in-place update planned before sent nothing: state took the new port while the rule
+  kept the old one, and every later plan showed the same change.
+- `pcd_networking_floatingip_associate` no longer sends the old port's address when `port_id` changes and
+  `fixed_ip` is unset, which Neutron refused. The floating IP maps to the new port's first address, as it does
+  on create.
+- An update of a `pcd_networking_router` whose configuration leaves `enable_snat` unset no longer resends the
+  router's gateway, which made Neutron reset SNAT to its default: renaming a router with SNAT off turned it on.
+- `pcd_cluster_blueprint` no longer fails a create or update with "Provider returned invalid result object
+  after apply" when its `virtual_networking` block leaves a setting such as `vnid_range` unset. The setting
+  takes PCD's value. An update now also sends the blueprint's current value for such a setting; before, it
+  sent `false` for an unset `enabled` and an empty `vnid_range`.
+- A `pcd_compute_flavor` update retried with `-refresh=false` after a failed one no longer fails on an extra
+  spec the failed update had already deleted.
+- An update of a `pcd_dns_zone` no longer fails with "Provider produced inconsistent result after apply" when
+  Designate increments the zone's serial. An update now plans `serial` as known after apply.
+- Renaming a `pcd_blockstorage_snapshot` whose configuration leaves `metadata` unset no longer fails with 400
+  "Missing required element 'metadata'" after the rename has gone through; the update leaves the snapshot's
+  metadata alone. `metadata = {}` now clears the metadata of a `pcd_blockstorage_snapshot`, which failed with
+  the same 400, and of a `pcd_blockstorage_volume`, which kept the old metadata and failed the apply with
+  "Provider produced inconsistent result after apply".
+- Destroying a `pcd_blockstorage_volume_backup` on a cloud without a backup service now reports Cinder's
+  error and keeps the backup in state. Cinder answers that delete with 404 "Service cinder-backup could not be
+  found", and the provider took the 404 for a backup already gone, so the destroy reported success and
+  Terraform forgot a backup that still existed.
+- An update of a `pcd_cluster_blueprint` no longer drops the blueprint's image library stores
+  (`imageLibraryStores` and `defaultImageLibraryStore`), which the provider does not manage; PCD replaces the
+  whole blueprint on an update. On a region whose hosts hold the image library role, PCD refused that removal,
+  so every update failed. The update now starts from the stored blueprint.
 
 ## [0.1.14] - 2026-09-20
 

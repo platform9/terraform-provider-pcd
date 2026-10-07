@@ -192,7 +192,7 @@ resource "pcd_compute_instance" "web" {
 - `metadata` (Map of String) Key-value metadata attached to the instance. The key `migration-priority` is reserved — set it through `migration_priority` instead.
 - `migration_priority` (String) How PCD's Dynamic Resource Rebalancing (DRR) service treats this VM when balancing hosts: `normal`, `low`, `high`, or `never` (excluded from automatic migration). Unset means DRR's default. Stored as the `migration-priority` server metadata key, exactly as the PCD UI's Set Migration Priority dialog does. Updatable in place; set `""` to clear.
 - `network` (Block List) Networks to attach. Changing this forces a new resource. (see [below for nested schema](#nestedblock--network))
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `scheduler_hints` (Block List) Scheduler hints passed to Nova at boot (`os:scheduler_hints`). Mirrors `openstack_compute_instance_v2`. Use `group` with a `pcd_compute_servergroup` for affinity / anti-affinity placement, `different_host` / `same_host` to place relative to existing instances. At most one block. Create-only: changing this forces a new resource. Nova does not report hints back, so the block round-trips from configuration. (see [below for nested schema](#nestedblock--scheduler_hints))
 - `security_groups` (Set of String) Names of security groups to associate. Changing this forces a new resource.
 - `user_data` (String) User data (cloud-init) for the instance. Changing this forces a new resource.

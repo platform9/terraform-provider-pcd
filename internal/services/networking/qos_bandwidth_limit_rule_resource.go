@@ -65,7 +65,7 @@ func (r *qosBandwidthLimitRuleResource) Schema(_ context.Context, _ resource.Sch
 			"max_kbps":       schema.Int64Attribute{Required: true, MarkdownDescription: "The maximum rate in kbps."},
 			"max_burst_kbps": schema.Int64Attribute{Optional: true, Computed: true, MarkdownDescription: "The maximum burst size in kilobits.", PlanModifiers: []planmodifier.Int64{int64planmodifier.UseStateForUnknown()}},
 			"direction":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The traffic direction: egress (default) or ingress.", PlanModifiers: useState},
-			"region":         schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":         schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -81,7 +81,7 @@ func (r *qosBandwidthLimitRuleResource) Create(ctx context.Context, req resource
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -94,7 +94,7 @@ func (r *qosBandwidthLimitRuleResource) Create(ctx context.Context, req resource
 		Direction:    plan.Direction.ValueString(),
 	}
 
-	rule, err := rules.CreateBandwidthLimitRule(ctx, client, policyID, createOpts).ExtractBandwidthLimitRule()
+	rule, err := clients.RequireObject(rules.CreateBandwidthLimitRule(ctx, client, policyID, createOpts).ExtractBandwidthLimitRule())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating bandwidth-limit rule", err.Error())
 		return
@@ -130,7 +130,7 @@ func (r *qosBandwidthLimitRuleResource) Read(ctx context.Context, req resource.R
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -158,7 +158,7 @@ func (r *qosBandwidthLimitRuleResource) Update(ctx context.Context, req resource
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -206,7 +206,7 @@ func (r *qosBandwidthLimitRuleResource) Delete(ctx context.Context, req resource
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

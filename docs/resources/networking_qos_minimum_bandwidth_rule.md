@@ -35,7 +35,7 @@ resource "pcd_networking_qos_minimum_bandwidth_rule" "example" {
 ### Optional
 
 - `direction` (String) The traffic direction: egress (default) or ingress.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 

@@ -100,7 +100,7 @@ func (r *listenerResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"tags":                      schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the listener.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
 			"provisioning_status":       schema.StringAttribute{Computed: true, MarkdownDescription: "The provisioning status.", PlanModifiers: useState},
 			"operating_status":          schema.StringAttribute{Computed: true, MarkdownDescription: "The operating status.", PlanModifiers: useState},
-			"region":                    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":                    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -116,7 +116,7 @@ func (r *listenerResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	client, err := r.config.LoadBalancerV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).LoadBalancerV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("loadbalancer: building v2 client", err.Error())
 		return
@@ -154,7 +154,7 @@ func (r *listenerResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	listener, err := listeners.Create(ctx, client, createOpts).Extract()
+	listener, err := clients.RequireObject(listeners.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("loadbalancer: creating listener", err.Error())
 		return
@@ -197,7 +197,7 @@ func (r *listenerResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
-	client, err := r.config.LoadBalancerV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).LoadBalancerV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("loadbalancer: building v2 client", err.Error())
 		return
@@ -225,7 +225,7 @@ func (r *listenerResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	client, err := r.config.LoadBalancerV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).LoadBalancerV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("loadbalancer: building v2 client", err.Error())
 		return
@@ -327,7 +327,7 @@ func (r *listenerResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
-	client, err := r.config.LoadBalancerV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).LoadBalancerV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("loadbalancer: building v2 client", err.Error())
 		return

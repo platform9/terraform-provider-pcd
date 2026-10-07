@@ -72,7 +72,7 @@ func (r *routerResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"enable_snat":         schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Whether SNAT is enabled on the gateway. Requires external_network_id.", PlanModifiers: []planmodifier.Bool{}},
 			"tenant_id":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The owning project. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 			"tags":                schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the router.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
-			"region":              schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: stable},
+			"region":              schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -100,7 +100,7 @@ func (r *routerResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -115,7 +115,7 @@ func (r *routerResource) Create(ctx context.Context, req resource.CreateRequest,
 		GatewayInfo:  r.gatewayInfo(&plan),
 	}
 
-	router, err := routers.Create(ctx, client, createOpts).Extract()
+	router, err := clients.RequireObject(routers.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating router", err.Error())
 		return
@@ -163,7 +163,7 @@ func (r *routerResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -191,7 +191,7 @@ func (r *routerResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -201,7 +201,10 @@ func (r *routerResource) Update(ctx context.Context, req resource.UpdateRequest,
 	description := plan.Description.ValueString()
 	adminUp := plan.AdminStateUp.ValueBool()
 	updateOpts := routers.UpdateOpts{Name: name, Description: &description, AdminStateUp: &adminUp}
-	if !plan.ExternalNetworkID.Equal(state.ExternalNetworkID) || !plan.EnableSNAT.Equal(state.EnableSNAT) {
+	// enable_snat is unknown when the config leaves it unset. Resending the
+	// gateway for that would have Neutron reset SNAT to its default.
+	if !plan.ExternalNetworkID.Equal(state.ExternalNetworkID) ||
+		(!plan.EnableSNAT.IsUnknown() && !plan.EnableSNAT.Equal(state.EnableSNAT)) {
 		updateOpts.GatewayInfo = r.gatewayInfo(&plan)
 	}
 
@@ -247,7 +250,7 @@ func (r *routerResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

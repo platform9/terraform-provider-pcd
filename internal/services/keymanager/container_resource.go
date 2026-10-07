@@ -112,7 +112,7 @@ func (r *containerResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				}},
 			},
 			"created_at": schema.StringAttribute{Computed: true, MarkdownDescription: "Creation timestamp (RFC3339).", PlanModifiers: useState},
-			"region":     schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":     schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -128,7 +128,7 @@ func (r *containerResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	client, err := r.config.KeyManagerV1Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).KeyManagerV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: building v1 client", err.Error())
 		return
@@ -152,7 +152,7 @@ func (r *containerResource) Create(ctx context.Context, req resource.CreateReque
 		}
 	}
 
-	container, err := containers.Create(ctx, client, createOpts).Extract()
+	container, err := clients.RequireObject(containers.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: creating container", err.Error())
 		return
@@ -190,7 +190,7 @@ func (r *containerResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	client, err := r.config.KeyManagerV1Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).KeyManagerV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: building v1 client", err.Error())
 		return
@@ -210,10 +210,17 @@ func (r *containerResource) Read(ctx context.Context, req resource.ReadRequest, 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-// Update is required by the interface but never invoked (every attribute forces replacement).
+// Update is required by the interface but never invoked: every attribute
+// forces replacement. Were it to run, consumers, which has no plan modifier,
+// would be planned unknown, so it keeps the prior value.
 func (r *containerResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan containerModel
+	var plan, state containerModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	plan.Consumers = state.Consumers
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -227,7 +234,7 @@ func (r *containerResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	client, err := r.config.KeyManagerV1Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).KeyManagerV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: building v1 client", err.Error())
 		return

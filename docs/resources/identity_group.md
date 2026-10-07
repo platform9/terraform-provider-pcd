@@ -30,7 +30,7 @@ resource "pcd_identity_group" "example" {
 
 - `description` (String) A description of the group.
 - `domain_id` (String) The domain the group belongs to. Defaults to the default domain. Changing this forces a new resource.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 
