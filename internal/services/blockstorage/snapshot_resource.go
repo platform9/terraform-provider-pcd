@@ -233,7 +233,7 @@ func (r *snapshotResource) readInto(ctx context.Context, client *gophercloud.Ser
 }
 
 func (r *snapshotResource) readIntoChecked(ctx context.Context, client *gophercloud.ServiceClient, id string, m *snapshotModel) (notFound bool, diags diag.Diagnostics) {
-	snap, err := snapshots.Get(ctx, client, id).Extract()
+	snap, err := clients.RequireObject(snapshots.Get(ctx, client, id).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			return true, diags
@@ -272,7 +272,7 @@ func (r *snapshotResource) setState(ctx context.Context, m *snapshotModel, snap 
 func waitForSnapshotStatus(ctx context.Context, client *gophercloud.ServiceClient, id, target string, timeout time.Duration) (*snapshots.Snapshot, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		snap, err := snapshots.Get(ctx, client, id).Extract()
+		snap, err := clients.RequireObject(snapshots.Get(ctx, client, id).Extract())
 		if err != nil {
 			return nil, err
 		}
@@ -296,7 +296,7 @@ func waitForSnapshotStatus(ctx context.Context, client *gophercloud.ServiceClien
 func waitForSnapshotDeleted(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		snap, err := snapshots.Get(ctx, client, id).Extract()
+		snap, err := clients.RequireObject(snapshots.Get(ctx, client, id).Extract())
 		if err != nil {
 			if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 				return nil
