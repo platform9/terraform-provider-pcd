@@ -90,6 +90,22 @@ All notable changes to this project are documented here. The format is based on
   `pcd_blockstorage_snapshot`, `pcd_images_image`, `pcd_dns_zone`, `pcd_dns_recordset`,
   `pcd_keymanager_secret`, and `pcd_keymanager_container`. The service may still have created the object, so
   look for it by name and delete or import it.
+- **A refresh, update, or data source read whose answer lacks the object no longer crashes the provider.** A
+  success answer whose body lacked the object crashed the plan or apply in the refresh of
+  `pcd_networking_secgroup_rule`, `pcd_identity_project`, `pcd_identity_group`, `pcd_identity_role`,
+  `pcd_identity_user`, `pcd_identity_application_credential`, `pcd_compute_servergroup`, `pcd_compute_keypair`,
+  `pcd_compute_volume_attach`, `pcd_compute_interface_attach`, `pcd_blockstorage_snapshot`, and
+  `pcd_images_image`; in the updates of `pcd_identity_project`, `pcd_identity_group`, `pcd_identity_role`,
+  `pcd_identity_user`, `pcd_blockstorage_snapshot`, and `pcd_images_image`; in the waits for a snapshot to
+  become available or be deleted and for an image to become active, and the checksum check after an image
+  upload; and in the `pcd_identity_project`, `pcd_identity_group`, `pcd_identity_role`, `pcd_identity_user`,
+  `pcd_compute_flavor`, `pcd_compute_keypair`, `pcd_blockstorage_snapshot`, `pcd_images_image`,
+  `pcd_networking_router`, `pcd_networking_subnet`, `pcd_networking_secgroup`, `pcd_networking_qos_policy`,
+  `pcd_lb_loadbalancer`, `pcd_dns_zone`, and `pcd_keymanager_secret` data sources when they look the object up
+  by its ID, name, or reference, and in the `pcd_identity_auth_scope` data source for a token answer without its
+  user. Such an answer is now an error. A refresh keeps the object in state, since it may still exist; a 404
+  still removes it. The `pcd_dns_zone` and `pcd_keymanager_secret` data sources also report an error, instead of
+  saving empty values, when the answer to their lookup by ID or reference is an object with no fields.
 - `pcd_networking_secgroup` now sends a change to `stateful`. Before, the update left the group's flag as it
   was, and the apply failed with "Provider produced inconsistent result after apply". A change to
   `delete_default_rules` now replaces the group, as documented; before, it planned an in-place update that did

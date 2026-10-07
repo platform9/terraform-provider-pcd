@@ -88,7 +88,7 @@ func (d *loadBalancerDataSource) Read(ctx context.Context, req datasource.ReadRe
 	var lb *loadbalancers.LoadBalancer
 	switch {
 	case data.LoadBalancerID.ValueString() != "":
-		lb, err = loadbalancers.Get(ctx, client, data.LoadBalancerID.ValueString()).Extract()
+		lb, err = clients.RequireObject(loadbalancers.Get(ctx, client, data.LoadBalancerID.ValueString()).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("loadbalancer: getting load balancer", err.Error())
 			return

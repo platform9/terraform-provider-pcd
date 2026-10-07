@@ -114,7 +114,7 @@ func (d *imageDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 
 	var img *images.Image
 	if v := data.ImageID.ValueString(); v != "" {
-		img, err = images.Get(ctx, client, v).Extract()
+		img, err = clients.RequireObject(images.Get(ctx, client, v).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("images: getting image by id", err.Error())
 			return

@@ -87,7 +87,7 @@ func (d *qosPolicyDataSource) Read(ctx context.Context, req datasource.ReadReque
 
 	var policy *policies.Policy
 	if id := data.PolicyID.ValueString(); id != "" {
-		policy, err = policies.Get(ctx, client, id).Extract()
+		policy, err = clients.RequireObject(policies.Get(ctx, client, id).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("networking: getting qos policy", err.Error())
 			return

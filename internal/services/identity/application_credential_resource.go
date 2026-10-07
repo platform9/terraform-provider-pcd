@@ -204,7 +204,7 @@ func (r *appCredResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	ac, err := applicationcredentials.Get(ctx, client, userID, state.ID.ValueString()).Extract()
+	ac, err := clients.RequireObject(applicationcredentials.Get(ctx, client, userID, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Application credential not found",

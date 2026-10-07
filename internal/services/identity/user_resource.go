@@ -158,7 +158,7 @@ func (r *userResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	user, err := users.Get(ctx, client, state.ID.ValueString()).Extract()
+	user, err := clients.RequireObject(users.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("User not found",
@@ -201,7 +201,7 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		opts.Password = plan.Password.ValueString()
 	}
 
-	user, err := users.Update(ctx, client, plan.ID.ValueString(), opts).Extract()
+	user, err := clients.RequireObject(users.Update(ctx, client, plan.ID.ValueString(), opts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: updating user", err.Error())
 		return

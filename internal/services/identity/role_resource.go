@@ -125,7 +125,7 @@ func (r *roleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	role, err := roles.Get(ctx, client, state.ID.ValueString()).Extract()
+	role, err := clients.RequireObject(roles.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Role not found",
@@ -154,9 +154,9 @@ func (r *roleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	role, err := roles.Update(ctx, client, plan.ID.ValueString(), roles.UpdateOpts{
+	role, err := clients.RequireObject(roles.Update(ctx, client, plan.ID.ValueString(), roles.UpdateOpts{
 		Name: plan.Name.ValueString(),
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: updating role", err.Error())
 		return

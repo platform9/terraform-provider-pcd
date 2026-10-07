@@ -139,7 +139,7 @@ func (r *interfaceAttachResource) Read(ctx context.Context, req resource.ReadReq
 		return
 	}
 
-	iface, err := attachinterfaces.Get(ctx, client, state.InstanceID.ValueString(), state.PortID.ValueString()).Extract()
+	iface, err := clients.RequireObject(attachinterfaces.Get(ctx, client, state.InstanceID.ValueString(), state.PortID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Interface attachment not found",

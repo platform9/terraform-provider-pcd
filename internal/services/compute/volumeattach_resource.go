@@ -124,7 +124,7 @@ func (r *volumeAttachResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 
-	att, err := volumeattach.Get(ctx, client, state.InstanceID.ValueString(), state.ID.ValueString()).Extract()
+	att, err := clients.RequireObject(volumeattach.Get(ctx, client, state.InstanceID.ValueString(), state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Volume attachment not found",

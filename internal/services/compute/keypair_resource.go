@@ -121,7 +121,7 @@ func (r *keypairResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	kp, err := keypairs.Get(ctx, client, state.Name.ValueString(), keypairs.GetOpts{UserID: state.UserID.ValueString()}).Extract()
+	kp, err := clients.RequireObject(keypairs.Get(ctx, client, state.Name.ValueString(), keypairs.GetOpts{UserID: state.UserID.ValueString()}).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Keypair not found",

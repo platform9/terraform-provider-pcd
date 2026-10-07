@@ -201,7 +201,7 @@ func (r *projectResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	project, err := projects.Get(ctx, client, state.ID.ValueString()).Extract()
+	project, err := clients.RequireObject(projects.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning(
@@ -250,7 +250,7 @@ func (r *projectResource) Update(ctx context.Context, req resource.UpdateRequest
 		Tags:        &tags,
 	}
 
-	project, err := projects.Update(ctx, client, plan.ID.ValueString(), updateOpts).Extract()
+	project, err := clients.RequireObject(projects.Update(ctx, client, plan.ID.ValueString(), updateOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: updating project", err.Error())
 		return

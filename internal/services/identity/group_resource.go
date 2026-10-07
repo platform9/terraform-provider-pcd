@@ -114,7 +114,7 @@ func (r *groupResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 
-	group, err := groups.Get(ctx, client, state.ID.ValueString()).Extract()
+	group, err := clients.RequireObject(groups.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.State.RemoveResource(ctx)
@@ -151,7 +151,7 @@ func (r *groupResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		updateOpts.Description = &v
 	}
 
-	group, err := groups.Update(ctx, client, plan.ID.ValueString(), updateOpts).Extract()
+	group, err := clients.RequireObject(groups.Update(ctx, client, plan.ID.ValueString(), updateOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: updating group", err.Error())
 		return
