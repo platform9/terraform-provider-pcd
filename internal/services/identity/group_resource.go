@@ -87,11 +87,11 @@ func (r *groupResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 
-	group, err := groups.Create(ctx, client, groups.CreateOpts{
+	group, err := clients.RequireObject(groups.Create(ctx, client, groups.CreateOpts{
 		Name:        plan.Name.ValueString(),
 		Description: plan.Description.ValueString(),
 		DomainID:    plan.DomainID.ValueString(),
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: creating group", err.Error())
 		return

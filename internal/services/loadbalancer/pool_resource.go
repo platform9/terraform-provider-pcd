@@ -164,7 +164,7 @@ func (r *poolResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	pool, err := pools.Create(ctx, client, createOpts).Extract()
+	pool, err := clients.RequireObject(pools.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("loadbalancer: creating pool", err.Error())
 		return

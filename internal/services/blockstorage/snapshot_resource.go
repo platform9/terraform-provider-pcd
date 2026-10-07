@@ -96,13 +96,13 @@ func (r *snapshotResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	snap, err := snapshots.Create(ctx, client, snapshots.CreateOpts{
+	snap, err := clients.RequireObject(snapshots.Create(ctx, client, snapshots.CreateOpts{
 		VolumeID:    plan.VolumeID.ValueString(),
 		Force:       plan.Force.ValueBool(),
 		Name:        plan.Name.ValueString(),
 		Description: plan.Description.ValueString(),
 		Metadata:    mapToStrings(ctx, plan.Metadata, &resp.Diagnostics),
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: creating snapshot", err.Error())
 		return

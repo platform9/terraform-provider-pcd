@@ -186,7 +186,7 @@ func waitForLoadBalancerSettled(ctx context.Context, client *gophercloud.Service
 	defer cancel()
 	status := ""
 	err := gophercloud.WaitFor(ctx, func(ctx context.Context) (bool, error) {
-		lb, err := loadbalancers.Get(ctx, client, lbID).Extract()
+		lb, err := clients.RequireObject(loadbalancers.Get(ctx, client, lbID).Extract())
 		if err != nil {
 			if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 				status = lbDeleted
@@ -248,7 +248,7 @@ func waitForLoadBalancerDeleted(ctx context.Context, client *gophercloud.Service
 	defer cancel()
 	lastStatus, seenNonError := "", false
 	err := gophercloud.WaitFor(ctx, func(ctx context.Context) (bool, error) {
-		lb, err := loadbalancers.Get(ctx, client, lbID).Extract()
+		lb, err := clients.RequireObject(loadbalancers.Get(ctx, client, lbID).Extract())
 		if err != nil {
 			if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 				return true, nil
@@ -276,7 +276,7 @@ func waitForLoadBalancerDeleted(ctx context.Context, client *gophercloud.Service
 
 // rootLBIDFromListener resolves the load balancer a listener belongs to.
 func rootLBIDFromListener(ctx context.Context, client *gophercloud.ServiceClient, listenerID string) (string, error) {
-	l, err := listeners.Get(ctx, client, listenerID).Extract()
+	l, err := clients.RequireObject(listeners.Get(ctx, client, listenerID).Extract())
 	if err != nil {
 		return "", err
 	}

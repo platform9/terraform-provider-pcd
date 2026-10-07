@@ -114,7 +114,7 @@ func (r *secgroupResource) Create(ctx context.Context, req resource.CreateReques
 		createOpts.Stateful = &stateful
 	}
 
-	sg, err := groups.Create(ctx, client, createOpts).Extract()
+	sg, err := clients.RequireObject(groups.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating security group", err.Error())
 		return

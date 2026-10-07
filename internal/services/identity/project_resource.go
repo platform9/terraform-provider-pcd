@@ -178,7 +178,7 @@ func (r *projectResource) Create(ctx context.Context, req resource.CreateRequest
 		Tags:        tags,
 	}
 
-	project, err := projects.Create(ctx, client, createOpts).Extract()
+	project, err := clients.RequireObject(projects.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: creating project", err.Error())
 		return

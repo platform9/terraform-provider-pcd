@@ -145,7 +145,7 @@ func (r *secretResource) Create(ctx context.Context, req resource.CreateRequest,
 		createOpts.Expiration = &exp
 	}
 
-	secret, err := secrets.Create(ctx, client, createOpts).Extract()
+	secret, err := clients.RequireObject(secrets.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: creating secret", err.Error())
 		return

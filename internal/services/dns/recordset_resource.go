@@ -109,7 +109,7 @@ func (r *recordSetResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	rr, err := recordsets.Create(ctx, client, zoneID, createOpts).Extract()
+	rr, err := clients.RequireObject(recordsets.Create(ctx, client, zoneID, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("dns: creating recordset", err.Error())
 		return

@@ -182,7 +182,7 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 		createOpts.Properties = userProps
 	}
 
-	img, err := images.Create(ctx, client, createOpts).Extract()
+	img, err := clients.RequireObject(images.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("images: creating image", err.Error())
 		return

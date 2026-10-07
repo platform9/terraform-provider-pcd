@@ -123,7 +123,7 @@ func (r *flavorResource) Create(ctx context.Context, req resource.CreateRequest,
 		Ephemeral:  &ephemeral,
 	}
 
-	flavor, err := flavors.Create(ctx, client, createOpts).Extract()
+	flavor, err := clients.RequireObject(flavors.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("compute: creating flavor", err.Error())
 		return

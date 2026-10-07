@@ -99,10 +99,10 @@ func (r *roleResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	role, err := roles.Create(ctx, client, roles.CreateOpts{
+	role, err := clients.RequireObject(roles.Create(ctx, client, roles.CreateOpts{
 		Name:     plan.Name.ValueString(),
 		DomainID: plan.DomainID.ValueString(),
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: creating role", err.Error())
 		return

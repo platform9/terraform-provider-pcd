@@ -152,7 +152,7 @@ func (r *containerResource) Create(ctx context.Context, req resource.CreateReque
 		}
 	}
 
-	container, err := containers.Create(ctx, client, createOpts).Extract()
+	container, err := clients.RequireObject(containers.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: creating container", err.Error())
 		return

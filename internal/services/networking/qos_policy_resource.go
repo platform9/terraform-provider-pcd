@@ -101,7 +101,7 @@ func (r *qosPolicyResource) Create(ctx context.Context, req resource.CreateReque
 		TenantID:    plan.TenantID.ValueString(),
 	}
 
-	policy, err := policies.Create(ctx, client, createOpts).Extract()
+	policy, err := clients.RequireObject(policies.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating qos policy", err.Error())
 		return

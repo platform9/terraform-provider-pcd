@@ -147,7 +147,7 @@ func (r *subnetResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	sub, err := subnets.Create(ctx, client, createOpts).Extract()
+	sub, err := clients.RequireObject(subnets.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating subnet", err.Error())
 		return

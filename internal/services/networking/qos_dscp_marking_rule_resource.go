@@ -83,9 +83,9 @@ func (r *qosDSCPMarkingRuleResource) Create(ctx context.Context, req resource.Cr
 	}
 
 	policyID := plan.QoSPolicyID.ValueString()
-	rule, err := rules.CreateDSCPMarkingRule(ctx, client, policyID, rules.CreateDSCPMarkingRuleOpts{
+	rule, err := clients.RequireObject(rules.CreateDSCPMarkingRule(ctx, client, policyID, rules.CreateDSCPMarkingRuleOpts{
 		DSCPMark: int(plan.DSCPMark.ValueInt64()),
-	}).ExtractDSCPMarkingRule()
+	}).ExtractDSCPMarkingRule())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating dscp-marking rule", err.Error())
 		return

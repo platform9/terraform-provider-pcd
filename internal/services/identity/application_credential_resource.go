@@ -174,7 +174,7 @@ func (r *appCredResource) Create(ctx context.Context, req resource.CreateRequest
 		opts.ExpiresAt = &ts
 	}
 
-	ac, err := applicationcredentials.Create(ctx, client, userID, opts).Extract()
+	ac, err := clients.RequireObject(applicationcredentials.Create(ctx, client, userID, opts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: creating application credential", err.Error())
 		return
@@ -287,7 +287,7 @@ func (r *appCredResource) flatten(ctx context.Context, ac *applicationcredential
 
 // currentUserID returns the user ID of the token the provider is using.
 func currentUserID(ctx context.Context, client *gophercloud.ServiceClient) (string, error) {
-	user, err := tokens.Get(ctx, client, client.Token()).ExtractUser()
+	user, err := clients.RequireObject(tokens.Get(ctx, client, client.Token()).ExtractUser())
 	if err != nil {
 		return "", err
 	}

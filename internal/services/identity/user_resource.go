@@ -128,14 +128,14 @@ func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, r
 	}
 
 	enabled := plan.Enabled.ValueBool()
-	user, err := users.Create(ctx, client, users.CreateOpts{
+	user, err := clients.RequireObject(users.Create(ctx, client, users.CreateOpts{
 		Name:             plan.Name.ValueString(),
 		Description:      plan.Description.ValueString(),
 		DomainID:         plan.DomainID.ValueString(),
 		DefaultProjectID: plan.DefaultProjectID.ValueString(),
 		Enabled:          &enabled,
 		Password:         plan.Password.ValueString(),
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: creating user", err.Error())
 		return

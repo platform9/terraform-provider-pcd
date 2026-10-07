@@ -146,7 +146,7 @@ func (r *monitorResource) Create(ctx context.Context, req resource.CreateRequest
 		}
 	}
 
-	mon, err := monitors.Create(ctx, client, createOpts).Extract()
+	mon, err := clients.RequireObject(monitors.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("loadbalancer: creating monitor", err.Error())
 		return

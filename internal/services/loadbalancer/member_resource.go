@@ -139,7 +139,7 @@ func (r *memberResource) Create(ctx context.Context, req resource.CreateRequest,
 		}
 	}
 
-	member, err := pools.CreateMember(ctx, client, poolID, createOpts).Extract()
+	member, err := clients.RequireObject(pools.CreateMember(ctx, client, poolID, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("loadbalancer: creating member", err.Error())
 		return

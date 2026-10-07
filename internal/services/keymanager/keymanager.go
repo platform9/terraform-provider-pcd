@@ -63,7 +63,7 @@ func waitForSecretActive(ctx context.Context, client *gophercloud.ServiceClient,
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	err := gophercloud.WaitFor(ctx, func(ctx context.Context) (bool, error) {
-		s, err := secrets.Get(ctx, client, uuid).Extract()
+		s, err := clients.RequireObject(secrets.Get(ctx, client, uuid).Extract())
 		if err != nil {
 			return false, err
 		}

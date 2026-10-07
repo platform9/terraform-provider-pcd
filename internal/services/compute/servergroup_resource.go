@@ -98,10 +98,10 @@ func (r *servergroupResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	sg, err := servergroups.Create(ctx, client, servergroups.CreateOpts{
+	sg, err := clients.RequireObject(servergroups.Create(ctx, client, servergroups.CreateOpts{
 		Name:     plan.Name.ValueString(),
 		Policies: policies,
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("compute: creating server group", err.Error())
 		return

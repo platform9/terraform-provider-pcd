@@ -135,7 +135,7 @@ func (r *loadBalancerResource) Create(ctx context.Context, req resource.CreateRe
 		}
 	}
 
-	lb, err := loadbalancers.Create(ctx, client, createOpts).Extract()
+	lb, err := clients.RequireObject(loadbalancers.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("loadbalancer: creating load balancer", err.Error())
 		return

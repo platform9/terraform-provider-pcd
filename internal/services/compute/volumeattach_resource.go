@@ -93,7 +93,7 @@ func (r *volumeAttachResource) Create(ctx context.Context, req resource.CreateRe
 		createOpts.Device = plan.Device.ValueString()
 	}
 
-	att, err := volumeattach.Create(ctx, client, plan.InstanceID.ValueString(), createOpts).Extract()
+	att, err := clients.RequireObject(volumeattach.Create(ctx, client, plan.InstanceID.ValueString(), createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("compute: attaching volume", err.Error())
 		return

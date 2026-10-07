@@ -87,11 +87,11 @@ func (r *keypairResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	kp, err := keypairs.Create(ctx, client, keypairs.CreateOpts{
+	kp, err := clients.RequireObject(keypairs.Create(ctx, client, keypairs.CreateOpts{
 		Name:      plan.Name.ValueString(),
 		PublicKey: plan.PublicKey.ValueString(),
 		UserID:    plan.UserID.ValueString(),
-	}).Extract()
+	}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("compute: creating keypair", err.Error())
 		return

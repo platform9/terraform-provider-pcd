@@ -121,7 +121,7 @@ func (r *zoneResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	zone, err := zones.Create(ctx, client, createOpts).Extract()
+	zone, err := clients.RequireObject(zones.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("dns: creating zone", err.Error())
 		return

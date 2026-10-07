@@ -154,7 +154,7 @@ func (r *listenerResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	listener, err := listeners.Create(ctx, client, createOpts).Extract()
+	listener, err := clients.RequireObject(listeners.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("loadbalancer: creating listener", err.Error())
 		return

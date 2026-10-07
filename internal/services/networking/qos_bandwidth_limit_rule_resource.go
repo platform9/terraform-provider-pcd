@@ -94,7 +94,7 @@ func (r *qosBandwidthLimitRuleResource) Create(ctx context.Context, req resource
 		Direction:    plan.Direction.ValueString(),
 	}
 
-	rule, err := rules.CreateBandwidthLimitRule(ctx, client, policyID, createOpts).ExtractBandwidthLimitRule()
+	rule, err := clients.RequireObject(rules.CreateBandwidthLimitRule(ctx, client, policyID, createOpts).ExtractBandwidthLimitRule())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating bandwidth-limit rule", err.Error())
 		return

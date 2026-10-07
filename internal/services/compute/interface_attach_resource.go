@@ -115,7 +115,7 @@ func (r *interfaceAttachResource) Create(ctx context.Context, req resource.Creat
 		createOpts.FixedIPs = []attachinterfaces.FixedIP{{IPAddress: fixedIP}}
 	}
 
-	iface, err := attachinterfaces.Create(ctx, client, plan.InstanceID.ValueString(), createOpts).Extract()
+	iface, err := clients.RequireObject(attachinterfaces.Create(ctx, client, plan.InstanceID.ValueString(), createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("compute: attaching interface", err.Error())
 		return

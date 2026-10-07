@@ -85,10 +85,10 @@ func (r *qosMinimumBandwidthRuleResource) Create(ctx context.Context, req resour
 	}
 
 	policyID := plan.QoSPolicyID.ValueString()
-	rule, err := rules.CreateMinimumBandwidthRule(ctx, client, policyID, rules.CreateMinimumBandwidthRuleOpts{
+	rule, err := clients.RequireObject(rules.CreateMinimumBandwidthRule(ctx, client, policyID, rules.CreateMinimumBandwidthRuleOpts{
 		MinKBps:   int(plan.MinKBps.ValueInt64()),
 		Direction: plan.Direction.ValueString(),
-	}).ExtractMinimumBandwidthRule()
+	}).ExtractMinimumBandwidthRule())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating minimum-bandwidth rule", err.Error())
 		return

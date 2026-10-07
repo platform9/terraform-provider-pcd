@@ -111,7 +111,7 @@ func (r *secgroupRuleResource) Create(ctx context.Context, req resource.CreateRe
 		Description:    plan.Description.ValueString(),
 	}
 
-	rule, err := rules.Create(ctx, client, createOpts).Extract()
+	rule, err := clients.RequireObject(rules.Create(ctx, client, createOpts).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("networking: creating security group rule", err.Error())
 		return
