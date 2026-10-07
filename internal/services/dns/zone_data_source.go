@@ -95,6 +95,13 @@ func (d *zoneDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 			resp.Diagnostics.AddError("dns: getting zone", err.Error())
 			return
 		}
+		// Extract decodes the whole body, so a 200 without the zone decodes to
+		// one with every field empty.
+		if zone.ID == "" {
+			resp.Diagnostics.AddError("dns: getting zone",
+				fmt.Sprintf("The DNS API answered without a zone object for ID %q.", data.ZoneID.ValueString()))
+			return
+		}
 	case data.Name.ValueString() != "":
 		pages, err := zones.List(client, zones.ListOpts{Name: data.Name.ValueString()}).AllPages(ctx)
 		if err != nil {

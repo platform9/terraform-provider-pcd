@@ -104,6 +104,14 @@ func (d *secretDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 			resp.Diagnostics.AddError("keymanager: getting secret", err.Error())
 			return
 		}
+		// Extract decodes the whole body as the secret, so a 200 that holds no
+		// secret decodes to an empty one, without the secret_ref Barbican always
+		// sends.
+		if secret.SecretRef == "" {
+			resp.Diagnostics.AddError("keymanager: getting secret",
+				fmt.Sprintf("The Key Manager API answered without a secret object for ID %q.", refToID(data.SecretRef.ValueString())))
+			return
+		}
 	case data.Name.ValueString() != "":
 		pages, err := secrets.List(client, secrets.ListOpts{Name: data.Name.ValueString()}).AllPages(ctx)
 		if err != nil {
