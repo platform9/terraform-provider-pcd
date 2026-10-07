@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -61,7 +62,7 @@ func (r *secgroupRuleResource) Metadata(_ context.Context, req resource.Metadata
 func (r *secgroupRuleResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	fnStr := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	fnStrC := []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}
-	fnInt := []planmodifier.Int64{}
+	fnInt := []planmodifier.Int64{int64planmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a rule within a Neutron security group. Rules are immutable: any change forces a new resource.",
 		Attributes: map[string]schema.Attribute{
@@ -149,7 +150,8 @@ func (r *secgroupRuleResource) Read(ctx context.Context, req resource.ReadReques
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-// Update is required by the interface but never invoked (every attribute forces replacement).
+// Update runs only for a change to region, the one attribute that does not
+// force replacement. Neutron cannot change a rule, so it sends nothing.
 func (r *secgroupRuleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan secgroupRuleModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
