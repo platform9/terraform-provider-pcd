@@ -74,8 +74,8 @@ output "project" {
 - `project_domain_id` (String) Domain ID of the scoped project. Falls back to `OS_PROJECT_DOMAIN_ID`.
 - `project_domain_name` (String) Domain name of the scoped project. Falls back to `OS_PROJECT_DOMAIN_NAME`.
 - `region` (String) Region to operate in (e.g. `Infra` on CE). Falls back to `OS_REGION_NAME`.
-- `tenant_id` (String) Project (tenant) ID to scope to. Falls back to `OS_PROJECT_ID`/`OS_TENANT_ID`.
-- `tenant_name` (String) Project (tenant) name to scope to. Falls back to `OS_PROJECT_NAME`/`OS_TENANT_NAME`.
+- `tenant_id` (String) Project (tenant) ID to scope to. Falls back to `OS_PROJECT_ID`/`OS_TENANT_ID`. Takes precedence over `tenant_name` when both are set. Setting `tenant_id` or `tenant_name` here ignores the project ID and name from the environment and `clouds.yaml`.
+- `tenant_name` (String) Project (tenant) name to scope to. Falls back to `OS_PROJECT_NAME`/`OS_TENANT_NAME`. `tenant_id` takes precedence when both are set. Setting `tenant_id` or `tenant_name` here ignores the project ID and name from the environment and `clouds.yaml`.
 - `token` (String, Sensitive) Pre-issued Keystone token for token auth. Falls back to `OS_TOKEN`/`OS_AUTH_TOKEN`.
 - `user_domain_id` (String) Domain ID that the user belongs to. Falls back to `OS_USER_DOMAIN_ID`.
 - `user_domain_name` (String) Domain name that the user belongs to. Falls back to `OS_USER_DOMAIN_NAME`.
