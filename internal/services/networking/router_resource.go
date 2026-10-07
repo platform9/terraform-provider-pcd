@@ -201,7 +201,10 @@ func (r *routerResource) Update(ctx context.Context, req resource.UpdateRequest,
 	description := plan.Description.ValueString()
 	adminUp := plan.AdminStateUp.ValueBool()
 	updateOpts := routers.UpdateOpts{Name: name, Description: &description, AdminStateUp: &adminUp}
-	if !plan.ExternalNetworkID.Equal(state.ExternalNetworkID) || !plan.EnableSNAT.Equal(state.EnableSNAT) {
+	// enable_snat is unknown when the config leaves it unset. Resending the
+	// gateway for that would have Neutron reset SNAT to its default.
+	if !plan.ExternalNetworkID.Equal(state.ExternalNetworkID) ||
+		(!plan.EnableSNAT.IsUnknown() && !plan.EnableSNAT.Equal(state.EnableSNAT)) {
 		updateOpts.GatewayInfo = r.gatewayInfo(&plan)
 	}
 
