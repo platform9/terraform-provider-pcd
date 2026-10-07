@@ -99,7 +99,7 @@ func (d *secretDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 	var secret *secrets.Secret
 	switch {
 	case data.SecretRef.ValueString() != "":
-		secret, err = secrets.Get(ctx, client, refToID(data.SecretRef.ValueString())).Extract()
+		secret, err = clients.RequireObject(secrets.Get(ctx, client, refToID(data.SecretRef.ValueString())).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("keymanager: getting secret", err.Error())
 			return

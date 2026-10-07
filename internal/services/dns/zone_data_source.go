@@ -90,7 +90,7 @@ func (d *zoneDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	var zone *zones.Zone
 	switch {
 	case data.ZoneID.ValueString() != "":
-		zone, err = zones.Get(ctx, client, data.ZoneID.ValueString()).Extract()
+		zone, err = clients.RequireObject(zones.Get(ctx, client, data.ZoneID.ValueString()).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("dns: getting zone", err.Error())
 			return
