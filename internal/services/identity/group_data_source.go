@@ -79,7 +79,7 @@ func (d *groupDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 
 	var group *groups.Group
 	if v := data.GroupID.ValueString(); v != "" {
-		group, err = groups.Get(ctx, client, v).Extract()
+		group, err = clients.RequireObject(groups.Get(ctx, client, v).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("identity: getting group by id", err.Error())
 			return

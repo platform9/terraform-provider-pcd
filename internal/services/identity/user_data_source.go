@@ -83,7 +83,7 @@ func (d *userDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 
 	var user *users.User
 	if v := data.UserID.ValueString(); v != "" {
-		user, err = users.Get(ctx, client, v).Extract()
+		user, err = clients.RequireObject(users.Get(ctx, client, v).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("identity: getting user by id", err.Error())
 			return

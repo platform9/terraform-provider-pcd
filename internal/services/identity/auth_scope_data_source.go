@@ -136,7 +136,7 @@ func (d *authScopeDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 
-	user, err := result.ExtractUser()
+	user, err := clients.RequireObject(result.ExtractUser())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: extracting user from token", err.Error())
 		return
