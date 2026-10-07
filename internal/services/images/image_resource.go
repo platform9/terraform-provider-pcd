@@ -274,7 +274,7 @@ func (r *imageResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 
-	img, err := images.Get(ctx, client, state.ID.ValueString()).Extract()
+	img, err := clients.RequireObject(images.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Image not found",
@@ -362,7 +362,7 @@ func (r *imageResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		}
 	}
 
-	img, err := images.Get(ctx, client, plan.ID.ValueString()).Extract()
+	img, err := clients.RequireObject(images.Get(ctx, client, plan.ID.ValueString()).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("images: reading image after update", err.Error())
 		return
@@ -426,7 +426,7 @@ func (r *imageResource) uploadLocalFile(ctx context.Context, client *gophercloud
 	if err != nil {
 		return fmt.Errorf("computing checksum: %w", err)
 	}
-	img, err := images.Get(ctx, client, id).Extract()
+	img, err := clients.RequireObject(images.Get(ctx, client, id).Extract())
 	if err != nil {
 		return err
 	}
@@ -509,7 +509,7 @@ func imageProperty(img *images.Image, key string) string {
 func waitForImageActive(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*images.Image, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		img, err := images.Get(ctx, client, id).Extract()
+		img, err := clients.RequireObject(images.Get(ctx, client, id).Extract())
 		if err != nil {
 			return nil, err
 		}
