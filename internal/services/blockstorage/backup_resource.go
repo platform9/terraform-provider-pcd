@@ -198,8 +198,12 @@ func (r *backupResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	}
 
 	if err := backups.Delete(ctx, client, state.ID.ValueString()).ExtractErr(); err != nil {
+		// Cinder also answers 404 when the backup service is missing, and the
+		// backup then stays, so a 404 counts as done only once a GET agrees.
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
-			return
+			if _, getErr := backups.Get(ctx, client, state.ID.ValueString()).Extract(); gophercloud.ResponseCodeIs(getErr, http.StatusNotFound) {
+				return
+			}
 		}
 		resp.Diagnostics.AddError("blockstorage: deleting volume backup", err.Error())
 		return
