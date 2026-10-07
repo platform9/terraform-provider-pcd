@@ -128,6 +128,19 @@ All notable changes to this project are documented here. The format is based on
   returned invalid result object after apply".
 - An update of a `pcd_dns_zone` no longer fails with "Provider produced inconsistent result after apply" when
   Designate increments the zone's serial. An update now plans `serial` as known after apply.
+- Renaming a `pcd_blockstorage_snapshot` whose configuration leaves `metadata` unset no longer fails with 400
+  "Missing required element 'metadata'" after the rename has gone through; the update leaves the snapshot's
+  metadata alone. `metadata = {}` now clears the metadata of a `pcd_blockstorage_snapshot`, which failed with
+  the same 400, and of a `pcd_blockstorage_volume`, which kept the old metadata and failed the apply with
+  "Provider produced inconsistent result after apply".
+- Destroying a `pcd_blockstorage_volume_backup` on a cloud without a backup service now reports Cinder's
+  error and keeps the backup in state. Cinder answers that delete with 404 "Service cinder-backup could not be
+  found", and the provider took the 404 for a backup already gone, so the destroy reported success and
+  Terraform forgot a backup that still existed.
+- An update of a `pcd_cluster_blueprint` no longer drops the blueprint's image library stores
+  (`imageLibraryStores` and `defaultImageLibraryStore`), which the provider does not manage; PCD replaces the
+  whole blueprint on an update. On a region whose hosts hold the image library role, PCD refused that removal,
+  so every update failed. The update now starts from the stored blueprint.
 
 ## [0.1.14] - 2026-09-20
 
