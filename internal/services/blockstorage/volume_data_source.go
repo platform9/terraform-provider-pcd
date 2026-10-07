@@ -77,7 +77,7 @@ func (d *volumeDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 		return
 	}
 
-	client, err := d.config.BlockStorageV3Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return

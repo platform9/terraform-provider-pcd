@@ -65,7 +65,7 @@ func (r *keypairResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"private_key": schema.StringAttribute{Computed: true, Sensitive: true, MarkdownDescription: "The generated private key (only set when public_key was not supplied).", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
 			"fingerprint": schema.StringAttribute{Computed: true, MarkdownDescription: "The keypair fingerprint.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
 			"user_id":     schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The user that owns the keypair. Changing this forces a new resource.", PlanModifiers: fnC},
-			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -81,7 +81,7 @@ func (r *keypairResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
@@ -115,7 +115,7 @@ func (r *keypairResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
@@ -160,7 +160,7 @@ func (r *keypairResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	client, err := r.config.ComputeV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return

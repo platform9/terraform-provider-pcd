@@ -67,7 +67,7 @@ resource "pcd_networking_port" "example" {
 - `fixed_ip` (Attributes List) Requested fixed IPs. Each entry pins the port to a subnet and optionally a specific address. Not refreshed from the server; see `all_fixed_ips`. (see [below for nested schema](#nestedatt--fixed_ip))
 - `mac_address` (String) The MAC address of the port. Setting a specific MAC forces a new resource.
 - `name` (String) The name of the port.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `security_group_ids` (Set of String) Security groups applied to the port. Omit to inherit the network's default group; set to `[]` to apply none.
 - `tags` (Set of String) Tags applied to the port.
 - `tenant_id` (String) The owning project. Changing this forces a new resource.

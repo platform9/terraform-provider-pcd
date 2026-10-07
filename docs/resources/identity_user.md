@@ -35,7 +35,7 @@ resource "pcd_identity_user" "example" {
 - `domain_id` (String) The domain the user belongs to. Changing this forces a new resource.
 - `enabled` (Boolean) Whether the user is enabled. Defaults to true.
 - `password` (String, Sensitive) The user's password. Write-only: it is never read back from the API.
-- `region` (String) The region in which to manage the user. Defaults to the provider's region.
+- `region` (String) The region in which to manage the user. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 

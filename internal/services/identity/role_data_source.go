@@ -69,7 +69,7 @@ func (d *roleDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
-	client, err := d.config.IdentityV3Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return

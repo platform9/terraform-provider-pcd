@@ -117,8 +117,8 @@ func (r *appCredResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"region": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "The region. Defaults to the provider's region.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()},
 			},
 		},
 	}
@@ -135,7 +135,7 @@ func (r *appCredResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -193,7 +193,7 @@ func (r *appCredResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -239,7 +239,7 @@ func (r *appCredResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return

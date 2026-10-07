@@ -57,7 +57,7 @@ resource "pcd_lb_pool" "example" {
 - `loadbalancer_id` (String) The load balancer to attach the pool to (mutually exclusive with listener_id). Changing this forces a new resource.
 - `name` (String) The name of the pool.
 - `persistence` (Attributes) Session persistence for the pool. (see [below for nested schema](#nestedatt--persistence))
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `tags` (Set of String) Tags applied to the pool.
 
 ### Read-Only

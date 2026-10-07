@@ -79,7 +79,7 @@ func (d *loadBalancerDataSource) Read(ctx context.Context, req datasource.ReadRe
 		return
 	}
 
-	client, err := d.config.LoadBalancerV2Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).LoadBalancerV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("loadbalancer: building v2 client", err.Error())
 		return

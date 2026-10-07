@@ -82,7 +82,7 @@ func (r *secgroupResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			},
 			"tenant_id": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The owning project. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 			"tags":      schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the security group.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
-			"region":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"region":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -98,7 +98,7 @@ func (r *secgroupResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -171,7 +171,7 @@ func (r *secgroupResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -199,7 +199,7 @@ func (r *secgroupResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -256,7 +256,7 @@ func (r *secgroupResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

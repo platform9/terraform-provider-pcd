@@ -65,7 +65,7 @@ func (r *portSecgroupAssociateResource) Schema(_ context.Context, _ resource.Sch
 			"security_group_ids":     schema.SetAttribute{Required: true, ElementType: types.StringType, MarkdownDescription: "The security group IDs this resource manages on the port."},
 			"enforce":                schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false), MarkdownDescription: "If true, the port's security groups become exactly `security_group_ids` (exclusive). If false, they are added to the port's existing groups."},
 			"all_security_group_ids": schema.SetAttribute{Computed: true, ElementType: types.StringType, MarkdownDescription: "All security group IDs currently on the port."},
-			"region":                 schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"region":                 schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -81,7 +81,7 @@ func (r *portSecgroupAssociateResource) Create(ctx context.Context, req resource
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -131,7 +131,7 @@ func (r *portSecgroupAssociateResource) Read(ctx context.Context, req resource.R
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -190,7 +190,7 @@ func (r *portSecgroupAssociateResource) Update(ctx context.Context, req resource
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -242,7 +242,7 @@ func (r *portSecgroupAssociateResource) Delete(ctx context.Context, req resource
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

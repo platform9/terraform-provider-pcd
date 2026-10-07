@@ -40,7 +40,7 @@ resource "pcd_dns_recordset" "example" {
 ### Optional
 
 - `description` (String) A description of the recordset.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `ttl` (Number) The recordset TTL in seconds. Omit to inherit the zone default.
 
 ### Read-Only

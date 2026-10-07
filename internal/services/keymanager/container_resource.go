@@ -112,7 +112,7 @@ func (r *containerResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				}},
 			},
 			"created_at": schema.StringAttribute{Computed: true, MarkdownDescription: "Creation timestamp (RFC3339).", PlanModifiers: useState},
-			"region":     schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":     schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -128,7 +128,7 @@ func (r *containerResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	client, err := r.config.KeyManagerV1Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).KeyManagerV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: building v1 client", err.Error())
 		return
@@ -190,7 +190,7 @@ func (r *containerResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	client, err := r.config.KeyManagerV1Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).KeyManagerV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: building v1 client", err.Error())
 		return
@@ -234,7 +234,7 @@ func (r *containerResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	client, err := r.config.KeyManagerV1Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).KeyManagerV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: building v1 client", err.Error())
 		return

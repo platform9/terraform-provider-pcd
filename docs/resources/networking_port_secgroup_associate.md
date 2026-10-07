@@ -51,7 +51,7 @@ resource "pcd_networking_port_secgroup_associate" "example" {
 ### Optional
 
 - `enforce` (Boolean) If true, the port's security groups become exactly `security_group_ids` (exclusive). If false, they are added to the port's existing groups.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 

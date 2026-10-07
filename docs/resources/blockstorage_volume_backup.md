@@ -38,7 +38,7 @@ resource "pcd_blockstorage_volume_backup" "example" {
 - `force` (Boolean) Back up the volume even if it is attached/in-use. Changing this forces a new resource.
 - `incremental` (Boolean) Whether to create an incremental backup. Changing this forces a new resource.
 - `name` (String) The name of the backup.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
 

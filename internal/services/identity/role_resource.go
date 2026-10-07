@@ -75,8 +75,8 @@ func (r *roleResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"region": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "The region in which to manage the role. Defaults to the provider's region.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				MarkdownDescription: "The region in which to manage the role. Defaults to the provider's region. Changing this forces a new resource.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()},
 			},
 		},
 	}
@@ -93,7 +93,7 @@ func (r *roleResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -119,7 +119,7 @@ func (r *roleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -148,7 +148,7 @@ func (r *roleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -173,7 +173,7 @@ func (r *roleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return

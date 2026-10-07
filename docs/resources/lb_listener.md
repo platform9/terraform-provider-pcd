@@ -54,7 +54,7 @@ resource "pcd_lb_listener" "example" {
 - `description` (String) A description of the listener.
 - `insert_headers` (Map of String) Headers to insert into requests before forwarding (e.g. X-Forwarded-For).
 - `name` (String) The name of the listener.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `sni_container_refs` (List of String) Barbican secret refs for SNI certificates.
 - `tags` (Set of String) Tags applied to the listener.
 - `timeout_client_data` (Number) Frontend client inactivity timeout (in milliseconds).

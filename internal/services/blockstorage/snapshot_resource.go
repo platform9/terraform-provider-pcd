@@ -74,7 +74,7 @@ func (r *snapshotResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"metadata":    schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key-value metadata for the snapshot."},
 			"size":        schema.Int64Attribute{Computed: true, MarkdownDescription: "The size of the snapshot in GB."},
 			"status":      schema.StringAttribute{Computed: true, MarkdownDescription: "The Cinder status (e.g. available)."},
-			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":      schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -90,7 +90,7 @@ func (r *snapshotResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -132,7 +132,7 @@ func (r *snapshotResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -158,7 +158,7 @@ func (r *snapshotResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return
@@ -213,7 +213,7 @@ func (r *snapshotResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
-	client, err := r.config.BlockStorageV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).BlockStorageV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: building v3 client", err.Error())
 		return

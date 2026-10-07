@@ -33,7 +33,7 @@ resource "pcd_networking_secgroup" "example" {
 
 - `delete_default_rules` (Boolean) Delete the default egress rules Neutron creates with the group. Changing this forces a new resource.
 - `description` (String) A description of the security group.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `stateful` (Boolean) Whether the security group is stateful.
 - `tags` (Set of String) Tags applied to the security group.
 - `tenant_id` (String) The owning project. Changing this forces a new resource.

@@ -122,8 +122,8 @@ func (r *projectResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"region": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "The region in which to manage the project. Defaults to the provider's region.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				MarkdownDescription: "The region in which to manage the project. Defaults to the provider's region. Changing this forces a new resource.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()},
 			},
 		},
 	}
@@ -151,7 +151,7 @@ func (r *projectResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -195,7 +195,7 @@ func (r *projectResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -226,7 +226,7 @@ func (r *projectResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
@@ -267,7 +267,7 @@ func (r *projectResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	client, err := r.config.IdentityV3Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return

@@ -32,7 +32,7 @@ resource "pcd_networking_qos_policy" "example" {
 
 - `description` (String) A description of the QoS policy.
 - `is_default` (Boolean) Whether this is the default policy for the project.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `shared` (Boolean) Whether the policy is shared across all projects.
 - `tags` (Set of String) Tags applied to the policy.
 - `tenant_id` (String) The owning project. Changing this forces a new resource.

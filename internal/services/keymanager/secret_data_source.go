@@ -90,7 +90,7 @@ func (d *secretDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 		return
 	}
 
-	client, err := d.config.KeyManagerV1Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).KeyManagerV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: building v1 client", err.Error())
 		return

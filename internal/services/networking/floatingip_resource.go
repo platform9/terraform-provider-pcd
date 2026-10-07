@@ -87,7 +87,7 @@ func (r *floatingIPResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"status":    schema.StringAttribute{Computed: true, MarkdownDescription: "The operational status of the floating IP."},
 			"router_id": schema.StringAttribute{Computed: true, MarkdownDescription: "The router through which the floating IP is routed."},
 			"tags":      schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Tags applied to the floating IP.", PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()}},
-			"region":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -103,7 +103,7 @@ func (r *floatingIPResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -174,7 +174,7 @@ func (r *floatingIPResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -236,7 +236,7 @@ func (r *floatingIPResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return
@@ -303,7 +303,7 @@ func (r *floatingIPResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
-	client, err := r.config.NetworkV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).NetworkV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("networking: building v2 client", err.Error())
 		return

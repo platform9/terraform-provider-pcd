@@ -123,7 +123,7 @@ func (d *authScopeDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 
-	client, err := d.config.IdentityV3Client()
+	client, err := d.config.ForRegion(m.Region.ValueString()).IdentityV3Client()
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return

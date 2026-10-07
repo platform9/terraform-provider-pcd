@@ -110,7 +110,7 @@ func (r *imageResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 			"owner":            schema.StringAttribute{Computed: true, MarkdownDescription: "Project that owns the image."},
 			"created_at":       schema.StringAttribute{Computed: true, MarkdownDescription: "Creation timestamp (RFC3339)."},
 			"updated_at":       schema.StringAttribute{Computed: true, MarkdownDescription: "Last-update timestamp (RFC3339)."},
-			"region":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: stable},
+			"region":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -143,7 +143,7 @@ func (r *imageResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 
-	client, err := r.config.ImageV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).ImageV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("images: building v2 client", err.Error())
 		return
@@ -268,7 +268,7 @@ func (r *imageResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 
-	client, err := r.config.ImageV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ImageV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("images: building v2 client", err.Error())
 		return
@@ -298,7 +298,7 @@ func (r *imageResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 
-	client, err := r.config.ImageV2Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).ImageV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("images: building v2 client", err.Error())
 		return
@@ -378,7 +378,7 @@ func (r *imageResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 		return
 	}
 
-	client, err := r.config.ImageV2Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).ImageV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("images: building v2 client", err.Error())
 		return

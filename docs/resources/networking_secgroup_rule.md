@@ -44,7 +44,7 @@ resource "pcd_networking_secgroup_rule" "example" {
 - `port_range_max` (Number) Upper bound of the port range.
 - `port_range_min` (Number) Lower bound of the port range.
 - `protocol` (String) Protocol (tcp, udp, icmp, ...).
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `remote_group_id` (String) Remote security group ID (mutually exclusive with remote_ip_prefix).
 - `remote_ip_prefix` (String) Remote CIDR (mutually exclusive with remote_group_id).
 - `tenant_id` (String) The owning project.

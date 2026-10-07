@@ -29,7 +29,7 @@ resource "pcd_compute_keypair" "example" {
 ### Optional
 
 - `public_key` (String) The public key. If omitted, one is generated. Changing this forces a new resource.
-- `region` (String) The region. Defaults to the provider's region.
+- `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `user_id` (String) The user that owns the keypair. Changing this forces a new resource.
 
 ### Read-Only

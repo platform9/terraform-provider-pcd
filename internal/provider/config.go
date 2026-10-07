@@ -144,7 +144,7 @@ func (p *pcdProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *
 			"endpoint_overrides": schema.MapAttribute{
 				Optional:            true,
 				ElementType:         types.StringType,
-				MarkdownDescription: "Map of Keystone service type to endpoint URL, overriding the catalog (escape hatch for labs).",
+				MarkdownDescription: "Map of Keystone service type to endpoint URL, overriding the catalog (escape hatch for labs). An override applies to the provider's region; a resource whose `region` differs uses that region's catalog endpoint.",
 			},
 			"max_retries": schema.Int64Attribute{
 				Optional: true,

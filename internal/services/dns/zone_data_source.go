@@ -81,7 +81,7 @@ func (d *zoneDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
-	client, err := d.config.DNSV2Client()
+	client, err := d.config.ForRegion(data.Region.ValueString()).DNSV2Client()
 	if err != nil {
 		resp.Diagnostics.AddError("dns: building v2 client", err.Error())
 		return

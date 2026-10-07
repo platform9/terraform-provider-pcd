@@ -94,7 +94,7 @@ func (r *secretResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"content_types":            schema.MapAttribute{Computed: true, ElementType: types.StringType, MarkdownDescription: "The content types the secret is available in.", PlanModifiers: []planmodifier.Map{mapplanmodifier.UseStateForUnknown()}},
 			"created_at":               schema.StringAttribute{Computed: true, MarkdownDescription: "Creation timestamp (RFC3339).", PlanModifiers: useState},
 			"updated_at":               schema.StringAttribute{Computed: true, MarkdownDescription: "Last-update timestamp (RFC3339).", PlanModifiers: useState},
-			"region":                   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region.", PlanModifiers: useState},
+			"region":                   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
 		},
 	}
 }
@@ -116,7 +116,7 @@ func (r *secretResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	client, err := r.config.KeyManagerV1Client()
+	client, err := r.config.ForRegion(plan.Region.ValueString()).KeyManagerV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: building v1 client", err.Error())
 		return
@@ -192,7 +192,7 @@ func (r *secretResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	client, err := r.config.KeyManagerV1Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).KeyManagerV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: building v1 client", err.Error())
 		return
@@ -229,7 +229,7 @@ func (r *secretResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		return
 	}
 
-	client, err := r.config.KeyManagerV1Client()
+	client, err := r.config.ForRegion(state.Region.ValueString()).KeyManagerV1Client()
 	if err != nil {
 		resp.Diagnostics.AddError("keymanager: building v1 client", err.Error())
 		return
