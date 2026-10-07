@@ -193,7 +193,7 @@ func (r *flavorResource) Read(ctx context.Context, req resource.ReadRequest, res
 }
 
 // Update reconciles extra_specs — the only in-place-mutable attribute (every
-// other flavor field forces replacement).
+// other flavor field but region forces replacement).
 func (r *flavorResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan, state flavorModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -213,11 +213,18 @@ func (r *flavorResource) Update(ctx context.Context, req resource.UpdateRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	// extra_specs is unknown when the config leaves it unset, and only a region
+	// change gets here then: the flavor's specs are not the config's to change.
+	if plan.ExtraSpecs.IsUnknown() {
+		newSpecs = oldSpecs
+	}
 
 	id := plan.ID.ValueString()
 	for k := range oldSpecs {
 		if _, ok := newSpecs[k]; !ok {
-			if err := flavors.DeleteExtraSpec(ctx, client, id, k).ExtractErr(); err != nil {
+			// A 404 is a spec an earlier update deleted before it failed.
+			if err := flavors.DeleteExtraSpec(ctx, client, id, k).ExtractErr(); err != nil &&
+				!gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 				resp.Diagnostics.AddError("compute: deleting flavor extra spec", err.Error())
 				return
 			}
