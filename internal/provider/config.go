@@ -143,8 +143,14 @@ func (p *pcdProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *
 				MarkdownDescription: "Map of Keystone service type to endpoint URL, overriding the catalog (escape hatch for labs).",
 			},
 			"max_retries": schema.Int64Attribute{
-				Optional:            true,
-				MarkdownDescription: "Number of times to retry on transient (429/5xx) errors.",
+				Optional: true,
+				MarkdownDescription: "Number of times to retry a `GET`, `HEAD` or `DELETE` request that fails with HTTP 429, " +
+					"a 5xx status, or no response at all (for example, a dropped or refused connection). The first retry " +
+					"waits 1 second, and each later retry waits twice as long as the one before, up to 30 seconds. " +
+					"`POST`, `PUT` and `PATCH` requests are never retried, because the service may already have acted on " +
+					"them. Neither are the requests that authenticate the provider, nor a request that failed because " +
+					"the endpoint's TLS certificate is not trusted, it does not speak TLS, or its host name does not " +
+					"resolve, since waiting does not fix those. Defaults to 0, which disables retries.",
 			},
 			"allow_reauth": schema.BoolAttribute{
 				Optional:            true,

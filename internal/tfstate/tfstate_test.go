@@ -5,8 +5,10 @@ package tfstate_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -174,5 +176,85 @@ func TestRecordCreatedSavesAPlanWithAKnownID(t *testing.T) {
 	}
 	if got.ID.ValueString() != "vol-1" {
 		t.Fatalf("id = %s, want vol-1: a known id must survive", got.ID)
+	}
+}
+
+// A row with no id names no object, so Read must drop it, warn, and send
+// nothing: a read with an empty ID reaches the collection URL instead.
+func TestDropRowWithoutIDDropsANullOrEmptyID(t *testing.T) {
+	ctx := context.Background()
+	s := schema.Schema{Attributes: map[string]schema.Attribute{
+		"id":    schema.StringAttribute{Computed: true},
+		"name":  schema.StringAttribute{Optional: true},
+		"tags":  schema.SetAttribute{Computed: true, ElementType: types.StringType},
+		"count": schema.Int64Attribute{Computed: true},
+	}}
+	for _, id := range []types.String{types.StringNull(), types.StringValue("")} {
+		state := tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+		if d := state.Set(ctx, &sampleModel{
+			ID:    id,
+			Name:  types.StringValue("web"),
+			Tags:  types.SetNull(types.StringType),
+			Count: types.Int64Null(),
+		}); d.HasError() {
+			t.Fatalf("building the state: %v", d)
+		}
+		resp := &resource.ReadResponse{State: state}
+
+		if !tfstate.DropRowWithoutID(ctx, resp, id, "security group", "web") {
+			t.Fatalf("id %s: DropRowWithoutID = false, want true", id)
+		}
+		if !resp.State.Raw.IsNull() {
+			t.Fatalf("id %s: state = %s, want the row removed", id, resp.State.Raw)
+		}
+		if resp.Diagnostics.HasError() || resp.Diagnostics.WarningsCount() != 1 {
+			t.Fatalf("id %s: diagnostics = %v, want exactly one warning", id, resp.Diagnostics)
+		}
+		if detail := resp.Diagnostics[0].Detail(); !strings.Contains(detail, `"web"`) {
+			t.Fatalf("id %s: warning detail %q does not name the object", id, detail)
+		}
+	}
+}
+
+// A row with an id must be left alone for Read to refresh.
+func TestDropRowWithoutIDKeepsARowWithAnID(t *testing.T) {
+	ctx := context.Background()
+	s := schema.Schema{Attributes: map[string]schema.Attribute{
+		"id": schema.StringAttribute{Computed: true},
+	}}
+	state := tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+	if d := state.SetAttribute(ctx, path.Root("id"), "sg-1"); d.HasError() {
+		t.Fatalf("building the state: %v", d)
+	}
+	resp := &resource.ReadResponse{State: state}
+
+	if tfstate.DropRowWithoutID(ctx, resp, types.StringValue("sg-1"), "security group", "") {
+		t.Fatal("DropRowWithoutID = true, want false for a row with an id")
+	}
+	if resp.State.Raw.IsNull() || len(resp.Diagnostics) != 0 {
+		t.Fatalf("state = %s, diagnostics = %v; want the row kept and no diagnostics", resp.State.Raw, resp.Diagnostics)
+	}
+}
+
+// terraform destroy -refresh=false reaches Delete without Read, so Delete must
+// skip a row with no id instead of sending a DELETE to the collection URL.
+func TestSkipDeleteWithoutID(t *testing.T) {
+	resp := &resource.DeleteResponse{}
+	if !tfstate.SkipDeleteWithoutID(resp, types.StringNull(), "subnet", "") {
+		t.Fatal("SkipDeleteWithoutID = false for a null id, want true")
+	}
+	if resp.Diagnostics.HasError() || resp.Diagnostics.WarningsCount() != 1 {
+		t.Fatalf("diagnostics = %v, want exactly one warning", resp.Diagnostics)
+	}
+	if detail := resp.Diagnostics[0].Detail(); strings.Contains(detail, "named") {
+		t.Fatalf("warning detail %q names an object, but no name was given", detail)
+	}
+
+	resp = &resource.DeleteResponse{}
+	if tfstate.SkipDeleteWithoutID(resp, types.StringValue("subnet-1"), "subnet", "") {
+		t.Fatal("SkipDeleteWithoutID = true for a row with an id, want false")
+	}
+	if len(resp.Diagnostics) != 0 {
+		t.Fatalf("diagnostics = %v, want none", resp.Diagnostics)
 	}
 }

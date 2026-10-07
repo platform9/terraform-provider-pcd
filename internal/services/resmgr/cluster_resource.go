@@ -20,6 +20,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -196,8 +197,22 @@ func (r *clusterResource) Create(ctx context.Context, req resource.CreateRequest
 		case <-time.After(15 * time.Second):
 		}
 	}
+	// resmgr keeps the cluster whatever fails next, so record it before the
+	// read-back. The settings resmgr has not reported yet are saved as null; the
+	// next refresh reads them. The Required name is the key, so there is no id
+	// to set first.
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
-	r.refresh(ctx, client, &plan, "cluster created", &resp.Diagnostics)
+	if !r.refresh(ctx, client, &plan, "cluster created", &resp.Diagnostics) {
+		// Leave the row recorded after the POST in place, untainted: an error
+		// here would make the next apply delete and re-create the cluster over
+		// one failed read.
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -251,8 +266,14 @@ func (r *clusterResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	r.refresh(ctx, client, &plan, "cluster updated", &resp.Diagnostics)
+	refreshed := r.refresh(ctx, client, &plan, "cluster updated", &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	if !refreshed {
+		// A block that leaves a leaf unset plans that leaf unknown, and
+		// Terraform refuses unknown values in state. Save it as null; the next
+		// refresh reads it.
+		resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
+	}
 }
 
 func (r *clusterResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -288,16 +309,18 @@ func (r *clusterResource) ImportState(ctx context.Context, req resource.ImportSt
 // the config has null. Nested objects are atomic to Terraform, so that is not
 // drift but a hard "inconsistent result after apply". Only attributes the user
 // left unknown are taken from the server; a read-back failure is a warning,
-// never a failed apply.
-func (r *clusterResource) refresh(ctx context.Context, client *gophercloud.ServiceClient, plan *clusterModel, what string, diags *diag.Diagnostics) {
+// never a failed apply, and refresh then reports false and leaves plan as it
+// was, unknowns included.
+func (r *clusterResource) refresh(ctx context.Context, client *gophercloud.ServiceClient, plan *clusterModel, what string, diags *diag.Diagnostics) bool {
 	saved := *plan
 	if readDiags := r.readInto(ctx, client, plan.Name.ValueString(), plan); readDiags.HasError() {
 		diags.AddWarning("resmgr: "+what+" but read-back failed",
 			"The write was applied; state reflects the plan and reconciles on the next refresh.")
 		*plan = saved
-		return
+		return false
 	}
 	mergeConfiguredCluster(plan, &saved)
+	return true
 }
 
 // mergeConfiguredCluster overlays every KNOWN nested value from src onto dst,

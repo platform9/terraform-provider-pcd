@@ -25,6 +25,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -172,6 +173,12 @@ func (r *portResource) Create(ctx context.Context, req resource.CreateRequest, r
 		resp.Diagnostics.AddError("networking: creating port", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(port.ID)
+	// Neutron keeps the port whatever fails next, so record it before the tags
+	// step.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
 	if !plan.Tags.IsNull() && !plan.Tags.IsUnknown() {
 		var tags []string
@@ -185,8 +192,17 @@ func (r *portResource) Create(ctx context.Context, req resource.CreateRequest, r
 		}
 	}
 
-	_, readDiags := r.readInto(ctx, client, port.ID, &plan)
+	notFound, readDiags := r.readInto(ctx, client, port.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("networking: reading port after create",
+			fmt.Sprintf("Port %s no longer exists.", port.ID))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -194,6 +210,9 @@ func (r *portResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	var state portModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "port", state.Name.ValueString()) {
 		return
 	}
 
@@ -296,8 +315,16 @@ func (r *portResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		}
 	}
 
-	_, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
+	notFound, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("networking: reading port after update",
+			fmt.Sprintf("Port %s no longer exists.", plan.ID.ValueString()))
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -305,6 +332,9 @@ func (r *portResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	var state portModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "port", state.Name.ValueString()) {
 		return
 	}
 
@@ -337,6 +367,13 @@ func (r *portResource) readInto(ctx context.Context, client *gophercloud.Service
 			return true, diags
 		}
 		diags.AddError("networking: reading port", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to an empty port, with no error. It is
+	// not a not-found: that would drop a port that exists from state.
+	if port.ID == "" {
+		diags.AddError("networking: reading port",
+			fmt.Sprintf("The Networking API answered without a port object for ID %q.", id))
 		return false, diags
 	}
 

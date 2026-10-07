@@ -23,6 +23,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -96,12 +97,22 @@ func (r *floatingIPAssociateResource) Create(ctx context.Context, req resource.C
 		resp.Diagnostics.AddError("networking: associating floating IP", err.Error())
 		return
 	}
+	// The association's ID is the floating IP's. Neutron keeps the association
+	// if the read-back fails, so record it first.
+	plan.ID = types.StringValue(fipID)
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
 	notFound, diags := r.readInto(ctx, client, fipID, &plan)
 	resp.Diagnostics.Append(diags...)
 	if notFound {
 		resp.Diagnostics.AddError("networking: floating IP not found", fmt.Sprintf("Floating IP %s disappeared during association.", fipID))
+		resp.State.RemoveResource(ctx)
 		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -110,6 +121,12 @@ func (r *floatingIPAssociateResource) Read(ctx context.Context, req resource.Rea
 	var state floatingIPAssociateModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	// Read and Delete key on floating_ip_id, not id. A row provider v0.1.14 and
+	// earlier left without an id still names its floating IP, and this refresh
+	// fills id in.
+	if tfstate.DropRowWithoutID(ctx, resp, state.FloatingIPID, "floating IP association", "") {
 		return
 	}
 
@@ -163,6 +180,9 @@ func (r *floatingIPAssociateResource) Update(ctx context.Context, req resource.U
 		resp.Diagnostics.AddError("networking: floating IP not found", fmt.Sprintf("Floating IP %s disappeared during update.", fipID))
 		return
 	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -170,6 +190,9 @@ func (r *floatingIPAssociateResource) Delete(ctx context.Context, req resource.D
 	var state floatingIPAssociateModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.FloatingIPID, "floating IP association", "") {
 		return
 	}
 
@@ -201,6 +224,14 @@ func (r *floatingIPAssociateResource) readInto(ctx context.Context, client *goph
 			return true, diags
 		}
 		diags.AddError("networking: reading floating IP", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to a zeroed floating IP, whose empty
+	// port would read as a lost association. It is not a not-found: that would
+	// drop an association that exists from state.
+	if fip.ID == "" {
+		diags.AddError("networking: reading floating IP",
+			fmt.Sprintf("The Networking API answered without a floatingip object for ID %q.", id))
 		return false, diags
 	}
 	// A cleared port means the association no longer exists.

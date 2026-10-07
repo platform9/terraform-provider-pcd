@@ -26,6 +26,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -147,9 +148,26 @@ func (r *memberResource) Create(ctx context.Context, req resource.CreateRequest,
 		resp.Diagnostics.AddError("loadbalancer: waiting after member create", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(member.ID)
+	// Record the member only now that the load balancer is ACTIVE again.
+	// Octavia refuses a member's DELETE while the load balancer is in ERROR, so
+	// a member recorded before a wait that failed on ERROR would be tainted and
+	// impossible to destroy. A failed wait above still returns without state.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
-	_, readDiags := r.readInto(ctx, client, poolID, member.ID, &plan)
+	notFound, readDiags := r.readInto(ctx, client, poolID, member.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("loadbalancer: reading member after create",
+			fmt.Sprintf("Member %s no longer exists.", member.ID))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -157,6 +175,9 @@ func (r *memberResource) Read(ctx context.Context, req resource.ReadRequest, res
 	var state memberModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "load balancer member", state.Name.ValueString()) {
 		return
 	}
 
@@ -247,8 +268,16 @@ func (r *memberResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	_, readDiags := r.readInto(ctx, client, poolID, plan.ID.ValueString(), &plan)
+	notFound, readDiags := r.readInto(ctx, client, poolID, plan.ID.ValueString(), &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("loadbalancer: reading member after update",
+			fmt.Sprintf("Member %s no longer exists.", plan.ID.ValueString()))
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -256,6 +285,9 @@ func (r *memberResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	var state memberModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "load balancer member", state.Name.ValueString()) {
 		return
 	}
 
@@ -304,6 +336,13 @@ func (r *memberResource) readInto(ctx context.Context, client *gophercloud.Servi
 			return true, diags
 		}
 		diags.AddError("loadbalancer: reading member", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a member that exists from state.
+	if member == nil {
+		diags.AddError("loadbalancer: reading member",
+			fmt.Sprintf("The Load Balancer API answered without a member object for ID %q.", memberID))
 		return false, diags
 	}
 

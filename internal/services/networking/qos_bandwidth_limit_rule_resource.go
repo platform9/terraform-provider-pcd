@@ -24,6 +24,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -98,13 +99,23 @@ func (r *qosBandwidthLimitRuleResource) Create(ctx context.Context, req resource
 		resp.Diagnostics.AddError("networking: creating bandwidth-limit rule", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(rule.ID)
+	// Neutron keeps the rule whatever fails next, so record it before the
+	// read-back.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
 	notFound, readDiags := r.readInto(ctx, client, policyID, rule.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
 	if notFound {
 		resp.Diagnostics.AddError("networking: bandwidth-limit rule not found after create",
 			fmt.Sprintf("Rule %s was not found immediately after creation.", rule.ID))
+		resp.State.RemoveResource(ctx)
 		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -113,6 +124,9 @@ func (r *qosBandwidthLimitRuleResource) Read(ctx context.Context, req resource.R
 	var state qosBandwidthLimitRuleModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "QoS bandwidth limit rule", "") {
 		return
 	}
 
@@ -176,6 +190,9 @@ func (r *qosBandwidthLimitRuleResource) Update(ctx context.Context, req resource
 			fmt.Sprintf("Rule %s was not found immediately after update.", plan.ID.ValueString()))
 		return
 	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -183,6 +200,9 @@ func (r *qosBandwidthLimitRuleResource) Delete(ctx context.Context, req resource
 	var state qosBandwidthLimitRuleModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "QoS bandwidth limit rule", "") {
 		return
 	}
 
@@ -217,6 +237,13 @@ func (r *qosBandwidthLimitRuleResource) readInto(ctx context.Context, client *go
 			return true, diags
 		}
 		diags.AddError("networking: reading bandwidth-limit rule", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a rule that exists from state.
+	if rule == nil {
+		diags.AddError("networking: reading bandwidth-limit rule",
+			fmt.Sprintf("The Networking API answered without a bandwidth_limit_rule object for ID %q.", ruleID))
 		return false, diags
 	}
 

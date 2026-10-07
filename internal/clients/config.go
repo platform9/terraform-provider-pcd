@@ -132,6 +132,13 @@ func (c *Config) Authenticate(ctx context.Context) error {
 		return fmt.Errorf("pcd: authenticating to %s: %w", c.AuthURL, err)
 	}
 
+	// max_retries covers the requests sent after authentication; newRetryFunc
+	// says which ones it retries. Unset, it leaves gophercloud returning every
+	// failure at once.
+	if c.MaxRetries > 0 {
+		client.RetryFunc = newRetryFunc(c.MaxRetries, sleepContext)
+	}
+
 	c.Provider = client
 	return nil
 }

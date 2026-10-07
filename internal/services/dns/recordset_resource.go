@@ -146,6 +146,9 @@ func (r *recordSetResource) Read(ctx context.Context, req resource.ReadRequest, 
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "DNS recordset", state.Name.ValueString()) {
+		return
+	}
 
 	client, err := r.config.DNSV2Client()
 	if err != nil {
@@ -205,8 +208,16 @@ func (r *recordSetResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	_, readDiags := r.readInto(ctx, client, zoneID, rrID, &plan)
+	notFound, readDiags := r.readInto(ctx, client, zoneID, rrID, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("dns: reading recordset after update",
+			fmt.Sprintf("Recordset %s no longer exists.", rrID))
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -214,6 +225,9 @@ func (r *recordSetResource) Delete(ctx context.Context, req resource.DeleteReque
 	var state recordSetModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "DNS recordset", state.Name.ValueString()) {
 		return
 	}
 
@@ -254,6 +268,14 @@ func (r *recordSetResource) readInto(ctx context.Context, client *gophercloud.Se
 			return true, diags
 		}
 		diags.AddError("dns: reading recordset", err.Error())
+		return false, diags
+	}
+	// Extract decodes the whole body, so a 200 without the recordset decodes
+	// to one with every field empty, or to nil for a JSON null. Neither is a
+	// not-found: that would drop a recordset that exists from state.
+	if rr == nil || rr.ID == "" {
+		diags.AddError("dns: reading recordset",
+			fmt.Sprintf("The DNS API answered without a recordset object for ID %q.", rrID))
 		return false, diags
 	}
 

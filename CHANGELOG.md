@@ -4,6 +4,80 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A step that fails after a create no longer loses the object or saves an entry with no ID.** When the
+  service had already created the object and a later step failed (setting tags, deleting a security group's
+  default rules, setting a flavor's extra specs, or reading the object back), the provider either left the
+  object out of state or saved a tainted entry with no ID and unknown values, which Terraform reported as
+  "Provider returned invalid result object after apply". Either way Terraform lost track of an object that
+  still existed, and the next apply created another. The object is now recorded with its ID as soon as the
+  service accepts it, and the apply returns the step's error, so Terraform marks it tainted: the next apply
+  replaces it, and a destroy deletes it. A read-back that finds the object already gone is now an error; the
+  networking resources other than the QoS ones, and `pcd_keymanager_container`, used to ignore it. This covers
+  `pcd_networking_secgroup`, `pcd_networking_subnet`, `pcd_networking_router`, `pcd_networking_network`,
+  `pcd_networking_port`, `pcd_networking_floatingip`, `pcd_networking_qos_policy`,
+  `pcd_networking_qos_bandwidth_limit_rule`, `pcd_networking_qos_dscp_marking_rule`,
+  `pcd_networking_qos_minimum_bandwidth_rule`, `pcd_keymanager_container`, and `pcd_compute_flavor`. A 502 on
+  the read-back of a new security group, for example, left exactly such an entry.
+- **A state entry with no ID no longer crashes the provider.** Refreshing such an entry sent a read to the
+  service's collection URL. For `pcd_networking_secgroup`, `pcd_networking_subnet`, `pcd_networking_router`,
+  the four QoS resources, `pcd_lb_loadbalancer`, `pcd_lb_listener`, `pcd_lb_pool`, `pcd_lb_member`, and
+  `pcd_lb_monitor`, the answer decoded to nothing and the plugin crashed on every plan, apply, and destroy. For
+  `pcd_networking_network`, `pcd_networking_port`, `pcd_networking_floatingip`, `pcd_keymanager_container`,
+  `pcd_keymanager_secret`, `pcd_dns_zone`, and `pcd_dns_recordset`, the refresh silently saved the entry back
+  with an empty ID, and every later replace or destroy sent its delete to the collection URL and failed. A
+  refresh now removes an entry with no ID, with a warning and without contacting the service, and a destroy
+  run with `-refresh=false` skips it. Terraform does not show the refresh warning during `terraform destroy`.
+  Provider v0.1.14 and earlier wrote such entries (for `pcd_dns_zone`, `pcd_dns_recordset`,
+  `pcd_keymanager_secret`, and `pcd_lb_loadbalancer`, v0.1.13 and earlier), and a failed create could also
+  leave no entry at all, so the object it made may still exist: find it by name (a floating IP by its address,
+  a QoS rule by its policy) and delete it, or import it. On these resources, the three quota resources,
+  `pcd_compute_flavor`, and the two route resources, a read whose answer lacks the object is now an error,
+  instead of a crash or an entry with an empty ID.
+- **An update whose read-back fails keeps the previous state**, so the next plan retries the update, on
+  `pcd_networking_secgroup`, `pcd_networking_subnet`, `pcd_networking_router`, `pcd_networking_network`,
+  `pcd_networking_port`, `pcd_networking_floatingip`, `pcd_networking_floatingip_associate`, the four QoS
+  resources, the five load balancer resources, `pcd_dns_zone`, `pcd_dns_recordset`, and `pcd_compute_flavor`,
+  and a read-back that finds the object gone is now an error. Before, the update could write unknown values,
+  such as `stateful` on `pcd_networking_secgroup`, `enable_snat` on `pcd_networking_router`, `shared`,
+  `external`, `port_security_enabled`, and `mtu` on `pcd_networking_network`, `status` and `all_fixed_ips` on
+  `pcd_networking_port`, `status` and `router_id` on `pcd_networking_floatingip`, `backup` on
+  `pcd_lb_member`, and `extra_specs` on `pcd_compute_flavor`.
+- `pcd_lb_listener`, `pcd_lb_pool`, `pcd_lb_member`, and `pcd_lb_monitor` are recorded once their load
+  balancer is `ACTIVE` again after the create, so a failed read-back keeps the child in state with its ID, and
+  a read-back that finds the child gone is now an error. A child whose load balancer does not return to
+  `ACTIVE` after the child's create request (it enters `ERROR`, cannot be polled, or the 10-minute wait runs
+  out) is still not recorded: Octavia refuses to delete a child while its load balancer is in `ERROR`, so a
+  recorded child could never be destroyed. Setting `max_retries` lets that wait ride out a failed poll. An
+  empty `loadbalancer_id` or `pool_id` now fails with an error instead of crashing the provider.
+- `pcd_cluster_blueprint` and `pcd_cluster` are recorded right after the create request. A blueprint whose
+  `vnc_floating_ip` update fails after its create now stays in state, so the next apply replaces it; before,
+  Terraform forgot a blueprint PCD kept. A failed read-back after the create keeps its warning, but the
+  attributes PCD has not reported yet are saved as null instead of unknown, so the create succeeds and the next
+  refresh fills them in; before, Terraform rejected the unknown values and marked the blueprint or cluster for
+  replacement. After an update, `pcd_cluster_blueprint`, `pcd_cluster`, and `pcd_host_config` (`gpu_pci`)
+  likewise save null instead of unknown when the read-back fails.
+- `pcd_networking_floatingip_associate` and `pcd_networking_router_interface` record the association or
+  interface with its ID before reading it back, so a failed read-back returns its error with a fully known
+  entry, which Terraform taints and the next apply replaces. Before, the apply failed with "Provider returned
+  invalid result object after apply" for the attributes the read-back would have filled, and
+  `pcd_networking_router_interface` hid the read-back's own error. `pcd_networking_router_interface` now also
+  reports a failed read of its port during refresh, instead of keeping its state as if the read had worked.
+- `pcd_networking_quota`, `pcd_compute_quotaset`, and `pcd_blockstorage_quotaset` refuse an import ID without
+  a project, such as `/region-one`; importing `pcd_networking_quota` that way crashed the provider.
+  `pcd_networking_router_route` and `pcd_networking_subnet_route` refuse an empty `router_id` or `subnet_id`
+  at plan time, instead of crashing the provider during apply.
+- **`max_retries` now takes effect.** It was documented to retry transient errors but did nothing. When it is
+  set above 0, the provider retries a `GET`, `HEAD`, or `DELETE` request that fails with HTTP 429, a 5xx
+  status, or no response (a dropped or refused connection), waiting 1 second before the first retry and
+  doubling the wait up to 30 seconds. `POST`, `PUT`, and `PATCH` requests are never retried, because the
+  service may already have acted on them, and neither are the requests that authenticate the provider or a
+  request that failed because the endpoint's TLS certificate is not trusted, the endpoint does not speak TLS,
+  or its host name does not resolve. The default stays 0.
+
 ## [0.1.14] - 2026-09-20
 
 ### Added

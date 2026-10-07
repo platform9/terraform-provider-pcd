@@ -25,6 +25,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -119,6 +120,12 @@ func (r *routerResource) Create(ctx context.Context, req resource.CreateRequest,
 		resp.Diagnostics.AddError("networking: creating router", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(router.ID)
+	// Neutron keeps the router whatever fails next, so record it before the
+	// tags step.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
 	if !plan.Tags.IsNull() && !plan.Tags.IsUnknown() {
 		var tags []string
@@ -132,8 +139,17 @@ func (r *routerResource) Create(ctx context.Context, req resource.CreateRequest,
 		}
 	}
 
-	_, readDiags := r.readInto(ctx, client, router.ID, &plan)
+	notFound, readDiags := r.readInto(ctx, client, router.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("networking: reading router after create",
+			fmt.Sprintf("Router %s no longer exists.", router.ID))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -141,6 +157,9 @@ func (r *routerResource) Read(ctx context.Context, req resource.ReadRequest, res
 	var state routerModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "router", state.Name.ValueString()) {
 		return
 	}
 
@@ -205,8 +224,16 @@ func (r *routerResource) Update(ctx context.Context, req resource.UpdateRequest,
 		}
 	}
 
-	_, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
+	notFound, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("networking: reading router after update",
+			fmt.Sprintf("Router %s no longer exists.", plan.ID.ValueString()))
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -214,6 +241,9 @@ func (r *routerResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	var state routerModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "router", state.Name.ValueString()) {
 		return
 	}
 
@@ -242,6 +272,13 @@ func (r *routerResource) readInto(ctx context.Context, client *gophercloud.Servi
 			return true, diags
 		}
 		diags.AddError("networking: reading router", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a router that exists from state.
+	if router == nil {
+		diags.AddError("networking: reading router",
+			fmt.Sprintf("The Networking API answered without a router object for ID %q.", id))
 		return false, diags
 	}
 

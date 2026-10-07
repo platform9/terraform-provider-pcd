@@ -25,6 +25,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -105,6 +106,12 @@ func (r *qosPolicyResource) Create(ctx context.Context, req resource.CreateReque
 		resp.Diagnostics.AddError("networking: creating qos policy", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(policy.ID)
+	// Neutron keeps the policy whatever fails next, so record it before the
+	// tags step.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
 	if !plan.Tags.IsNull() && !plan.Tags.IsUnknown() {
 		var tags []string
@@ -123,7 +130,11 @@ func (r *qosPolicyResource) Create(ctx context.Context, req resource.CreateReque
 	if notFound {
 		resp.Diagnostics.AddError("networking: qos policy not found after create",
 			fmt.Sprintf("QoS policy %s was not found immediately after creation.", policy.ID))
+		resp.State.RemoveResource(ctx)
 		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -132,6 +143,9 @@ func (r *qosPolicyResource) Read(ctx context.Context, req resource.ReadRequest, 
 	var state qosPolicyModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "QoS policy", state.Name.ValueString()) {
 		return
 	}
 
@@ -213,6 +227,9 @@ func (r *qosPolicyResource) Update(ctx context.Context, req resource.UpdateReque
 			fmt.Sprintf("QoS policy %s was not found immediately after update.", id))
 		return
 	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -220,6 +237,9 @@ func (r *qosPolicyResource) Delete(ctx context.Context, req resource.DeleteReque
 	var state qosPolicyModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "QoS policy", state.Name.ValueString()) {
 		return
 	}
 
@@ -248,6 +268,13 @@ func (r *qosPolicyResource) readInto(ctx context.Context, client *gophercloud.Se
 			return true, diags
 		}
 		diags.AddError("networking: reading qos policy", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a policy that exists from state.
+	if policy == nil {
+		diags.AddError("networking: reading qos policy",
+			fmt.Sprintf("The Networking API answered without a policy object for ID %q.", id))
 		return false, diags
 	}
 

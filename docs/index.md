@@ -69,7 +69,7 @@ output "project" {
 - `endpoint_overrides` (Map of String) Map of Keystone service type to endpoint URL, overriding the catalog (escape hatch for labs).
 - `insecure` (Boolean) Skip TLS certificate verification (required for CE's self-signed cert). Falls back to `OS_INSECURE`.
 - `key` (String) Path to the client private key (PEM) for mutual TLS. Falls back to `OS_KEY`.
-- `max_retries` (Number) Number of times to retry on transient (429/5xx) errors.
+- `max_retries` (Number) Number of times to retry a `GET`, `HEAD` or `DELETE` request that fails with HTTP 429, a 5xx status, or no response at all (for example, a dropped or refused connection). The first retry waits 1 second, and each later retry waits twice as long as the one before, up to 30 seconds. `POST`, `PUT` and `PATCH` requests are never retried, because the service may already have acted on them. Neither are the requests that authenticate the provider, nor a request that failed because the endpoint's TLS certificate is not trusted, it does not speak TLS, or its host name does not resolve, since waiting does not fix those. Defaults to 0, which disables retries.
 - `password` (String, Sensitive) Password for password auth. Falls back to `OS_PASSWORD`.
 - `project_domain_id` (String) Domain ID of the scoped project. Falls back to `OS_PROJECT_DOMAIN_ID`.
 - `project_domain_name` (String) Domain name of the scoped project. Falls back to `OS_PROJECT_DOMAIN_NAME`.

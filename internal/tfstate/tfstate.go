@@ -7,6 +7,7 @@ package tfstate
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -63,4 +64,45 @@ func RecordCreated(ctx context.Context, resp *resource.CreateResponse, plan any)
 		return false
 	}
 	return true
+}
+
+// DropRowWithoutID removes a state row whose id is null or empty, before Read
+// sends anything for it, and reports whether it did. A row like that names no
+// object: a read with an empty ID reaches the service's collection URL instead,
+// whose answer the resource then misreads (a nil object, or a zeroed one that
+// would be saved back as id ""), and a delete there fails. Provider v0.1.14 and
+// earlier wrote such rows when a step after a successful create failed, so the
+// object that create made may still exist; the warning says so, and names it
+// when name is not empty.
+func DropRowWithoutID(ctx context.Context, resp *resource.ReadResponse, id types.String, what, name string) bool {
+	if id.ValueString() != "" {
+		return false
+	}
+	resp.Diagnostics.AddWarning(missingIDWarning(what, name))
+	resp.State.RemoveResource(ctx)
+	return true
+}
+
+// SkipDeleteWithoutID reports whether Delete should return without calling the
+// service, because the row has no id (see DropRowWithoutID). A destroy run with
+// -refresh=false reaches Delete without Read dropping such a row first.
+// Returning with no error lets Terraform forget it.
+func SkipDeleteWithoutID(resp *resource.DeleteResponse, id types.String, what, name string) bool {
+	if id.ValueString() != "" {
+		return false
+	}
+	resp.Diagnostics.AddWarning(missingIDWarning(what, name))
+	return true
+}
+
+func missingIDWarning(what, name string) (summary, detail string) {
+	called := ""
+	if name != "" {
+		called = fmt.Sprintf(" (named %q)", name)
+	}
+	return fmt.Sprintf("Removed a %s with no ID from state", what),
+		fmt.Sprintf("The state entry for this %s has no ID, so it names nothing to refresh or delete, "+
+			"and it was removed from state. An earlier provider version left entries like this when a step "+
+			"after a successful create failed, so the %s that create made may still exist%s. "+
+			"Find it and delete it, or import it.", what, what, called)
 }

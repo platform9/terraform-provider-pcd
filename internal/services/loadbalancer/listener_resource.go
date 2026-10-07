@@ -26,6 +26,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -162,9 +163,27 @@ func (r *listenerResource) Create(ctx context.Context, req resource.CreateReques
 		resp.Diagnostics.AddError("loadbalancer: waiting after listener create", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(listener.ID)
+	// Record the listener only now that the load balancer is ACTIVE again.
+	// Octavia refuses a listener's DELETE while the load balancer is in ERROR,
+	// so a listener recorded before a wait that failed on ERROR would be
+	// tainted and impossible to destroy. A failed wait above still returns
+	// without state.
+	if !tfstate.RecordCreated(ctx, resp, &plan) {
+		return
+	}
 
-	_, readDiags := r.readInto(ctx, client, listener.ID, &plan)
+	notFound, readDiags := r.readInto(ctx, client, listener.ID, &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("loadbalancer: reading listener after create",
+			fmt.Sprintf("Listener %s no longer exists.", listener.ID))
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // leave the row RecordCreated wrote in place
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -172,6 +191,9 @@ func (r *listenerResource) Read(ctx context.Context, req resource.ReadRequest, r
 	var state listenerModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.DropRowWithoutID(ctx, resp, state.ID, "load balancer listener", state.Name.ValueString()) {
 		return
 	}
 
@@ -282,8 +304,16 @@ func (r *listenerResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	_, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
+	notFound, readDiags := r.readInto(ctx, client, plan.ID.ValueString(), &plan)
 	resp.Diagnostics.Append(readDiags...)
+	if notFound {
+		resp.Diagnostics.AddError("loadbalancer: reading listener after update",
+			fmt.Sprintf("Listener %s no longer exists.", plan.ID.ValueString()))
+		return
+	}
+	if resp.Diagnostics.HasError() {
+		return // keep the prior state, so the next plan retries the update
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -291,6 +321,9 @@ func (r *listenerResource) Delete(ctx context.Context, req resource.DeleteReques
 	var state listenerModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if tfstate.SkipDeleteWithoutID(resp, state.ID, "load balancer listener", state.Name.ValueString()) {
 		return
 	}
 
@@ -329,6 +362,13 @@ func (r *listenerResource) readInto(ctx context.Context, client *gophercloud.Ser
 			return true, diags
 		}
 		diags.AddError("loadbalancer: reading listener", err.Error())
+		return false, diags
+	}
+	// A 200 without the object decodes to nil. It is not a not-found: that
+	// would drop a listener that exists from state.
+	if l == nil {
+		diags.AddError("loadbalancer: reading listener",
+			fmt.Sprintf("The Load Balancer API answered without a listener object for ID %q.", id))
 		return false, diags
 	}
 

@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
+	"github.com/platform9/terraform-provider-pcd/internal/tfstate"
 )
 
 var (
@@ -227,13 +228,17 @@ func (r *hostConfigResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	// On a read-back failure keep state consistent with the applied plan (which
-	// is fully known) rather than reverting to the stale pre-update state.
+	// On a read-back failure keep state consistent with the applied plan rather
+	// than reverting to the stale pre-update state. That plan still holds
+	// gpu_pci unknown when the configuration leaves it unset, and Terraform
+	// refuses unknown values in state, so it is saved as null; the next refresh
+	// reads it. After a successful read-back every attribute is known.
 	if readDiags := r.readInto(ctx, client, id, &plan); readDiags.HasError() {
 		resp.Diagnostics.AddWarning("resmgr: host config updated but read-back failed",
 			"The update was applied; state reflects the plan and reconciles on the next refresh.")
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
 }
 
 func (r *hostConfigResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
