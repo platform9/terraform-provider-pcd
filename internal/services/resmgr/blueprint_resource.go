@@ -226,7 +226,13 @@ func (r *blueprintResource) Update(ctx context.Context, req resource.UpdateReque
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if err := putJSON(ctx, client, client.ServiceURL("blueprint", plan.Name.ValueString()), body, nil); err != nil {
+	url := client.ServiceURL("blueprint", plan.Name.ValueString())
+	merged, err := overStoredBlueprint(ctx, client, url, body)
+	if err != nil {
+		resp.Diagnostics.AddError("resmgr: reading blueprint before update", err.Error())
+		return
+	}
+	if err := putJSON(ctx, client, url, merged, nil); err != nil {
 		resp.Diagnostics.AddError("resmgr: updating blueprint", err.Error())
 		return
 	}
@@ -239,6 +245,29 @@ func (r *blueprintResource) Update(ctx context.Context, req resource.UpdateReque
 		// null; the next refresh reads it.
 		resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
 	}
+}
+
+// overStoredBlueprint returns the stored blueprint at url with body's fields
+// laid over it. resmgr's update replaces the whole row, so a field the PUT
+// leaves out, such as imageLibraryStores, which the provider does not model,
+// would be stored as null.
+func overStoredBlueprint(ctx context.Context, client *gophercloud.ServiceClient, url string, body *blueprintAPI) (map[string]json.RawMessage, error) {
+	var stored map[string]json.RawMessage
+	if err := getJSON(ctx, client, url, &stored); err != nil {
+		return nil, err
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	var ours map[string]json.RawMessage
+	if err := json.Unmarshal(b, &ours); err != nil {
+		return nil, err
+	}
+	for k, v := range ours {
+		stored[k] = v
+	}
+	return stored, nil
 }
 
 // refresh reconciles state after a write. It reads the server object but keeps

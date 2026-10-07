@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -178,5 +180,97 @@ func TestBlueprintUpdateSendsTheCurrentValueOfUnsetVirtualNetworkingLeaves(t *te
 	}
 	if want := (virtualNetworkingAPI{Enabled: true, UnderlayType: "geneve", VnidRange: "1000:2000"}); sent.VirtualNetworking == nil || *sent.VirtualNetworking != want {
 		t.Fatalf("PUT sent virtualNetworking %+v; want %+v, the blueprint's current values", sent.VirtualNetworking, want)
+	}
+}
+
+// resmgr's blueprint update replaces the whole row, so a field a PUT leaves
+// out is stored as null. The provider does not model the image library stores,
+// and an update used to drop them; with a host holding the image library role,
+// resmgr refuses that removal, so every update failed instead. An update must
+// send back the stored fields the provider does not manage.
+func TestBlueprintUpdateKeepsFieldsTheProviderDoesNotModel(t *testing.T) {
+	t.Parallel()
+	stored := strings.Replace(blueprintJSON, `"vncFloatingIp": "10.0.0.5",`,
+		`"vncFloatingIp": "10.0.0.5", "imageLibraryStores": ["nfs"], "defaultImageLibraryStore": "nfs",`, 1)
+	var sent map[string]json.RawMessage
+	routes := blueprintRoutes()
+	routes["GET "+blueprintPath] = reply(http.StatusOK, stored)
+	routes["PUT "+blueprintPath] = func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+			t.Errorf("decoding the PUT body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}
+	r := &blueprintResource{config: newRoutedResmgr(t, routes).config}
+	s := schemaOf(t, r)
+
+	prior := blueprintResourceModel{
+		Name:                      types.StringValue(blueprintName),
+		NetworkingType:            types.StringValue("ovn"),
+		EnableDistributedRouting:  types.BoolValue(true),
+		DNSDomainName:             types.StringValue("pcd.local"),
+		VirtualNetworking:         geneveNetworking(types.StringValue("1000:2000")),
+		ImageLibraryStorage:       types.StringValue(""),
+		ImageLibrarySharedStorage: types.BoolValue(false),
+		InstanceSharedStorage:     types.BoolValue(false),
+		VMStorage:                 types.StringValue("/opt/data/instances"),
+		VNCFloatingIP:             types.StringValue(blueprintVNCIP),
+		StorageBackendsJSON:       types.StringValue(blueprintBackends),
+	}
+	planned := prior
+	planned.DNSDomainName = types.StringValue("pcd.example")
+
+	resp := runUpdate(r, newPlan(t, s, &planned), newState(t, s, &prior))
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("update: %v", resp.Diagnostics)
+	}
+	if got := string(sent["imageLibraryStores"]); got != `["nfs"]` {
+		t.Errorf("PUT sent imageLibraryStores %s, want the stored [\"nfs\"]", got)
+	}
+	if got := string(sent["defaultImageLibraryStore"]); got != `"nfs"` {
+		t.Errorf("PUT sent defaultImageLibraryStore %s, want the stored \"nfs\"", got)
+	}
+	if got := string(sent["dnsDomainName"]); got != `"pcd.example"` {
+		t.Errorf("PUT sent dnsDomainName %s, want the planned \"pcd.example\"", got)
+	}
+}
+
+// Without the stored blueprint, a PUT would null the fields the provider does
+// not manage, so an update whose read of it fails must send nothing and report
+// the error; the next apply retries it.
+func TestBlueprintUpdateSendsNothingWhenTheStoredBlueprintCannotBeRead(t *testing.T) {
+	t.Parallel()
+	routes := blueprintRoutes()
+	routes["GET "+blueprintPath] = badGateway
+	fake := newRoutedResmgr(t, routes)
+	r := &blueprintResource{config: fake.config}
+	s := schemaOf(t, r)
+
+	prior := blueprintResourceModel{
+		Name:                      types.StringValue(blueprintName),
+		NetworkingType:            types.StringValue("ovn"),
+		EnableDistributedRouting:  types.BoolValue(true),
+		DNSDomainName:             types.StringValue("pcd.local"),
+		VirtualNetworking:         geneveNetworking(types.StringValue("1000:2000")),
+		ImageLibraryStorage:       types.StringValue(""),
+		ImageLibrarySharedStorage: types.BoolValue(false),
+		InstanceSharedStorage:     types.BoolValue(false),
+		VMStorage:                 types.StringValue("/opt/data/instances"),
+		VNCFloatingIP:             types.StringValue(blueprintVNCIP),
+		StorageBackendsJSON:       types.StringValue(blueprintBackends),
+	}
+	planned := prior
+	planned.DNSDomainName = types.StringValue("pcd.example")
+	priorState := newState(t, s, &prior)
+
+	resp := runUpdate(r, newPlan(t, s, &planned), priorState)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("update succeeded without reading the stored blueprint")
+	}
+	if sent := fake.received(); slices.Contains(sent, "PUT "+blueprintPath) {
+		t.Fatalf("update sent %v; it must not write without the stored blueprint", sent)
+	}
+	if !resp.State.Raw.Equal(priorState.Raw) {
+		t.Fatalf("update state = %v, want the prior state", resp.State.Raw)
 	}
 }
