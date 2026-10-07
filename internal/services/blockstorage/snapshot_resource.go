@@ -174,15 +174,17 @@ func (r *snapshotResource) Update(ctx context.Context, req resource.UpdateReques
 		}
 	}
 
-	if !plan.Metadata.Equal(state.Metadata) {
-		meta := map[string]any{}
+	// metadata is unknown when the config leaves it unset, and the snapshot's
+	// metadata is not the config's to change then.
+	if !plan.Metadata.IsUnknown() && !plan.Metadata.Equal(state.Metadata) {
+		meta := snapshotMetadata{}
 		for k, v := range mapToStrings(ctx, plan.Metadata, &resp.Diagnostics) {
 			meta[k] = v
 		}
 		if resp.Diagnostics.HasError() {
 			return
 		}
-		if _, err := snapshots.UpdateMetadata(ctx, client, id, snapshots.UpdateMetadataOpts{Metadata: meta}).Extract(); err != nil {
+		if _, err := snapshots.UpdateMetadata(ctx, client, id, meta).Extract(); err != nil {
 			resp.Diagnostics.AddError("blockstorage: updating snapshot metadata", err.Error())
 			return
 		}
@@ -193,6 +195,15 @@ func (r *snapshotResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+// snapshotMetadata is the body of a snapshot metadata update. It always carries
+// the metadata element: snapshots.UpdateMetadataOpts drops an empty map, and
+// Cinder refuses a body without it, so metadata = {} could not clear it.
+type snapshotMetadata map[string]any
+
+func (m snapshotMetadata) ToSnapshotUpdateMetadataMap() (map[string]any, error) {
+	return map[string]any{"metadata": map[string]any(m)}, nil
 }
 
 func (r *snapshotResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
