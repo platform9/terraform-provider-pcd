@@ -90,13 +90,19 @@ func (c *Config) authOptions() gophercloud.AuthOptions {
 		DomainName: c.UserDomainName,
 	}
 
-	// Application-credential auth must not carry a scope.
-	if c.AppCredID == "" && c.AppCredName == "" && (c.TenantID != "" || c.TenantName != "") {
-		ao.Scope = &gophercloud.AuthScope{
-			ProjectID:   c.TenantID,
-			ProjectName: c.TenantName,
-			DomainID:    firstNonEmpty(c.ProjectDomainID, c.UserDomainID),
-			DomainName:  firstNonEmpty(c.ProjectDomainName, c.UserDomainName),
+	// Application-credential auth must not carry a scope. Keystone takes a
+	// project as an ID alone or as a name plus its domain, and gophercloud
+	// rejects any other mix, so a project ID wins and is sent without a domain.
+	if c.AppCredID == "" && c.AppCredName == "" {
+		switch {
+		case c.TenantID != "":
+			ao.Scope = &gophercloud.AuthScope{ProjectID: c.TenantID}
+		case c.TenantName != "":
+			ao.Scope = &gophercloud.AuthScope{
+				ProjectName: c.TenantName,
+				DomainID:    firstNonEmpty(c.ProjectDomainID, c.UserDomainID),
+				DomainName:  firstNonEmpty(c.ProjectDomainName, c.UserDomainName),
+			}
 		}
 	}
 
