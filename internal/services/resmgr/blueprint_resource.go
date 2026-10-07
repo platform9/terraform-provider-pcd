@@ -271,9 +271,9 @@ func restoreKnown(m, saved *blueprintResourceModel) {
 	if knownStr(saved.DNSDomainName) {
 		m.DNSDomainName = saved.DNSDomainName
 	}
-	if knownObj(saved.VirtualNetworking) {
-		m.VirtualNetworking = saved.VirtualNetworking
-	}
+	// Per leaf: a block that leaves a leaf unset plans it unknown, and that leaf
+	// takes the server's value.
+	m.VirtualNetworking = mergeObject(m.VirtualNetworking, saved.VirtualNetworking)
 	if knownStr(saved.ImageLibraryStorage) {
 		m.ImageLibraryStorage = saved.ImageLibraryStorage
 	}
@@ -296,7 +296,6 @@ func restoreKnown(m, saved *blueprintResourceModel) {
 
 func knownStr(v types.String) bool { return !v.IsNull() && !v.IsUnknown() }
 func knownBool(v types.Bool) bool  { return !v.IsNull() && !v.IsUnknown() }
-func knownObj(v types.Object) bool { return !v.IsNull() && !v.IsUnknown() }
 
 // Delete removes the blueprint from PCD. It used to be a no-op that only dropped
 // the resource from state, so a `terraform destroy` reported success while the
