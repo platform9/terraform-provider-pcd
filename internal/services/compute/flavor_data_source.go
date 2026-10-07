@@ -87,7 +87,7 @@ func (d *flavorDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 
 	var flavor *flavors.Flavor
 	if v := data.FlavorID.ValueString(); v != "" {
-		flavor, err = flavors.Get(ctx, client, v).Extract()
+		flavor, err = clients.RequireObject(flavors.Get(ctx, client, v).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("compute: getting flavor by id", err.Error())
 			return

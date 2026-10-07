@@ -124,7 +124,7 @@ func (r *servergroupResource) Read(ctx context.Context, req resource.ReadRequest
 		return
 	}
 
-	sg, err := servergroups.Get(ctx, client, state.ID.ValueString()).Extract()
+	sg, err := clients.RequireObject(servergroups.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Server group not found",

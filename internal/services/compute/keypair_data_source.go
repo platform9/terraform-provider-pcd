@@ -76,7 +76,7 @@ func (d *keypairDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
-	kp, err := keypairs.Get(ctx, client, data.Name.ValueString(), keypairs.GetOpts{}).Extract()
+	kp, err := clients.RequireObject(keypairs.Get(ctx, client, data.Name.ValueString(), keypairs.GetOpts{}).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("compute: getting keypair", err.Error())
 		return
