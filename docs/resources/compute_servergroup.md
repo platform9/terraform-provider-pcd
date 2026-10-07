@@ -16,7 +16,6 @@ Manages a server group (affinity/anti-affinity policy) in PCD's Nova service. Se
 resource "pcd_compute_servergroup" "example" {
   name     = "tf-example-servergroup"
   policies = ["anti-affinity"]
-  region   = "RegionOne"
 }
 ```
 
