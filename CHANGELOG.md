@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`region` on a resource or data source now takes effect.** It was documented as the region to manage the
+  object in, but every request went to the provider's region. A resource whose `region` named another region
+  was created, read, updated, and deleted in the provider's region while its state recorded the other one; a
+  data source looked its object up in the provider's region; and the three quota resources wrote every
+  region's quota to the provider's. Each resource and data source now reaches its own region, and the
+  provider's region when `region` is unset. Changing a resource's `region` now replaces it, since an object
+  cannot move between regions. `endpoint_overrides` applies to the provider's region only; a resource in
+  another region uses that region's catalog endpoint. Configurations that leave `region` unset, or set it to
+  the provider's region, plan no changes after the upgrade.
+
+  **Upgrade note:** earlier versions created a resource whose `region` named another region in the provider's
+  region instead. After the upgrade, its refresh looks for it in the region its state records: the refresh
+  fails if that region has no endpoint for the service, and if the region exists but does not hold the
+  object, Terraform drops the entry and the next apply creates a new object there, leaving the original
+  behind. To keep such an object where it is, remove its entry with `terraform state rm` and import it again
+  with `region` unset or set to the provider's region.
 - **Setting `tenant_id` no longer fails to authenticate when a domain is also set.** The provider sent the
   project ID together with a domain from `project_domain_id` or `project_domain_name`, falling back to
   `user_domain_id` or `user_domain_name` and their `OS_*` variables, and the request failed before reaching
@@ -133,10 +149,8 @@ All notable changes to this project are documented here. The format is based on
   after apply" when its `virtual_networking` block leaves a setting such as `vnid_range` unset. The setting
   takes PCD's value. An update now also sends the blueprint's current value for such a setting; before, it
   sent `false` for an unset `enabled` and an empty `vnid_range`.
-- A `region` change on `pcd_compute_flavor` no longer deletes the extra specs the configuration does not set,
-  and an update retried with `-refresh=false` after a failed one no longer fails on an extra spec the failed
-  update had already deleted. A `region` change on `pcd_keymanager_container` no longer fails with "Provider
-  returned invalid result object after apply".
+- A `pcd_compute_flavor` update retried with `-refresh=false` after a failed one no longer fails on an extra
+  spec the failed update had already deleted.
 - An update of a `pcd_dns_zone` no longer fails with "Provider produced inconsistent result after apply" when
   Designate increments the zone's serial. An update now plans `serial` as known after apply.
 - Renaming a `pcd_blockstorage_snapshot` whose configuration leaves `metadata` unset no longer fails with 400
