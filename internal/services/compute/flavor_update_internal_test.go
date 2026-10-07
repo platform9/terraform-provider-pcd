@@ -12,12 +12,11 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-// region is the one attribute besides extra_specs that does not force a new
-// flavor, so a change to it reaches Update. extra_specs has no plan modifier,
-// so a config that leaves it unset plans it unknown then. Update used to read
-// that as "no extra specs" and delete every spec the flavor had. It must leave
-// the specs it does not manage alone.
-func TestFlavorRegionChangeKeepsUnmanagedExtraSpecs(t *testing.T) {
+// extra_specs has no plan modifier, so a config that leaves it unset would plan
+// it unknown in any update. Update used to read that as "no extra specs" and
+// delete every spec the flavor had. It must leave the specs the config does
+// not manage alone.
+func TestFlavorUpdateKeepsUnmanagedExtraSpecs(t *testing.T) {
 	t.Parallel()
 	nova := newFakeNova(t, flavorRoutes())
 	r := &flavorResource{config: nova.config}
@@ -25,7 +24,6 @@ func TestFlavorRegionChangeKeepsUnmanagedExtraSpecs(t *testing.T) {
 
 	prior := flavorInState(t, map[string]string{"hw:cpu_policy": "dedicated"})
 	planned := prior
-	planned.Region = types.StringValue("region-two")
 	planned.ExtraSpecs = types.MapUnknown(types.StringType)
 
 	resp := runUpdate(r, newPlan(t, s, &planned), newState(t, s, &prior))
@@ -34,7 +32,7 @@ func TestFlavorRegionChangeKeepsUnmanagedExtraSpecs(t *testing.T) {
 	}
 	for _, call := range nova.received() {
 		if strings.HasPrefix(call, "DELETE ") {
-			t.Fatalf("a region change sent %s, deleting an extra spec the config does not manage", call)
+			t.Fatalf("the update sent %s, deleting an extra spec the config does not manage", call)
 		}
 	}
 	if got := flavorRow(t, resp.State); !got.ExtraSpecs.Equal(prior.ExtraSpecs) {

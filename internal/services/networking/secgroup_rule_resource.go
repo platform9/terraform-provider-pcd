@@ -150,8 +150,8 @@ func (r *secgroupRuleResource) Read(ctx context.Context, req resource.ReadReques
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-// Update runs only for a change to region, the one attribute that does not
-// force replacement. Neutron cannot change a rule, so it sends nothing.
+// Update is required by the interface but never invoked: every attribute
+// forces replacement.
 func (r *secgroupRuleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan secgroupRuleModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)

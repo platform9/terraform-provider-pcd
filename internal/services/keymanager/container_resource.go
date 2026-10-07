@@ -210,9 +210,9 @@ func (r *containerResource) Read(ctx context.Context, req resource.ReadRequest, 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-// Update runs only for a change to region, the one attribute that does not
-// force replacement, and has nothing to send. consumers has no plan modifier,
-// so the plan holds it unknown; it keeps the prior value.
+// Update is required by the interface but never invoked: every attribute
+// forces replacement. Were it to run, consumers, which has no plan modifier,
+// would be planned unknown, so it keeps the prior value.
 func (r *containerResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan, state containerModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)

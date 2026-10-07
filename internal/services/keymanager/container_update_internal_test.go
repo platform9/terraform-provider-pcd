@@ -9,11 +9,11 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-// region is the one attribute that does not force a new container, so a change
-// to it reaches Update. consumers has no plan modifier, so the plan holds it
-// unknown then, and Update used to save the plan as it was: Terraform failed
-// the apply with "Provider returned invalid result object after apply".
-func TestContainerRegionChangeKeepsStateKnown(t *testing.T) {
+// Every attribute forces a new container, so Update is not expected to run.
+// consumers has no plan modifier, so a plan that reached it would hold
+// consumers unknown, and Update used to save the plan as it was, which
+// Terraform rejects. It must keep the prior consumers.
+func TestContainerUpdateKeepsStateKnown(t *testing.T) {
 	t.Parallel()
 	barbican := newFakeBarbican(t, containerRoutes())
 	r := &containerResource{config: barbican.config}
@@ -31,7 +31,6 @@ func TestContainerRegionChangeKeepsStateKnown(t *testing.T) {
 		Region:       types.StringValue("region-one"),
 	}
 	planned := prior
-	planned.Region = types.StringValue("region-two")
 	planned.Consumers = types.ListUnknown(containerConsumerObjType)
 
 	resp := runUpdate(r, newPlan(t, s, &planned), newState(t, s, &prior))
@@ -45,7 +44,7 @@ func TestContainerRegionChangeKeepsStateKnown(t *testing.T) {
 	if d := resp.State.Get(t.Context(), &got); d.HasError() {
 		t.Fatalf("reading the state: %v", d)
 	}
-	if !got.Region.Equal(planned.Region) || !got.Consumers.Equal(prior.Consumers) {
-		t.Fatalf("update state region=%s consumers=%s; want region-two and the prior consumers", got.Region, got.Consumers)
+	if !got.Consumers.Equal(prior.Consumers) {
+		t.Fatalf("update state consumers = %s, want the prior consumers", got.Consumers)
 	}
 }
