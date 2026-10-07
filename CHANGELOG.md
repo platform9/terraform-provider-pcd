@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Setting `tenant_id` no longer fails to authenticate when a domain is also set.** The provider sent the
+  project ID together with a domain from `project_domain_id` or `project_domain_name`, falling back to
+  `user_domain_id` or `user_domain_name` and their `OS_*` variables, and the request failed before reaching
+  Keystone with "ProjectID must be supplied alone in a Scope". Most setups name a user domain, so a provider
+  block or alias that set `tenant_id` could not authenticate. A project ID is now sent on its own, and a domain
+  is sent only with `tenant_name`. When both a project ID and a name are set, the ID is used; before, an
+  environment exporting both `OS_PROJECT_ID` and `OS_PROJECT_NAME` failed with "You must provide at most one of
+  ProjectID or ProjectName in a Scope". The project ID and name are now taken together from the first source
+  that sets either one: the provider block, then the environment, then `clouds.yaml`. A provider block or alias
+  that sets `tenant_name` therefore no longer fails when `OS_PROJECT_ID` or `OS_TENANT_ID` is exported, or when
+  its `clouds.yaml` entry has a `project_id`, and it scopes to the project it names.
 - **A step that fails after a create no longer loses the object or saves an entry with no ID.** When the
   service had already created the object and a later step failed (setting tags, deleting a security group's
   default rules, setting a flavor's extra specs, or reading the object back), the provider either left the

@@ -73,12 +73,16 @@ func (p *pcdProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *
 				MarkdownDescription: "Password for password auth. Falls back to `OS_PASSWORD`.",
 			},
 			"tenant_name": schema.StringAttribute{
-				Optional:            true,
-				MarkdownDescription: "Project (tenant) name to scope to. Falls back to `OS_PROJECT_NAME`/`OS_TENANT_NAME`.",
+				Optional: true,
+				MarkdownDescription: "Project (tenant) name to scope to. Falls back to `OS_PROJECT_NAME`/`OS_TENANT_NAME`. " +
+					"`tenant_id` takes precedence when both are set. Setting `tenant_id` or `tenant_name` here " +
+					"ignores the project ID and name from the environment and `clouds.yaml`.",
 			},
 			"tenant_id": schema.StringAttribute{
-				Optional:            true,
-				MarkdownDescription: "Project (tenant) ID to scope to. Falls back to `OS_PROJECT_ID`/`OS_TENANT_ID`.",
+				Optional: true,
+				MarkdownDescription: "Project (tenant) ID to scope to. Falls back to `OS_PROJECT_ID`/`OS_TENANT_ID`. " +
+					"Takes precedence over `tenant_name` when both are set. Setting `tenant_id` or `tenant_name` " +
+					"here ignores the project ID and name from the environment and `clouds.yaml`.",
 			},
 			"user_domain_id": schema.StringAttribute{
 				Optional:            true,
@@ -184,14 +188,16 @@ func (p *pcdProvider) Configure(ctx context.Context, req provider.ConfigureReque
 		}
 	}
 
+	tenantID, tenantName := pickProject(m.TenantID, m.TenantName, cv.TenantID, cv.TenantName)
+
 	cfg := &clients.Config{
 		AuthURL:           pick(m.AuthURL, cv.AuthURL, "OS_AUTH_URL"),
 		Region:            pick(m.Region, cv.Region, "OS_REGION_NAME"),
 		Username:          pick(m.UserName, cv.Username, "OS_USERNAME"),
 		UserID:            pick(m.UserID, cv.UserID, "OS_USER_ID"),
 		Password:          pick(m.Password, cv.Password, "OS_PASSWORD"),
-		TenantName:        pick(m.TenantName, cv.TenantName, "OS_PROJECT_NAME", "OS_TENANT_NAME"),
-		TenantID:          pick(m.TenantID, cv.TenantID, "OS_PROJECT_ID", "OS_TENANT_ID"),
+		TenantName:        tenantName,
+		TenantID:          tenantID,
 		UserDomainID:      pick(m.UserDomainID, cv.UserDomainID, "OS_USER_DOMAIN_ID"),
 		UserDomainName:    pick(m.UserDomainName, cv.UserDomainName, "OS_USER_DOMAIN_NAME"),
 		ProjectDomainID:   pick(m.ProjectDomainID, cv.ProjectDomainID, "OS_PROJECT_DOMAIN_ID"),
@@ -243,6 +249,22 @@ func pick(v types.String, fallback string, envVars ...string) string {
 		return s
 	}
 	return fallback
+}
+
+// pickProject resolves the project ID and name together, from the first source
+// that sets either one: explicit config, then the environment, then the
+// clouds.yaml fallback. The scope prefers an ID over a name, so taking each from
+// a different source would let, say, an exported OS_PROJECT_ID override the
+// tenant_name set in a provider block and scope it to another project.
+func pickProject(id, name types.String, cloudID, cloudName string) (string, string) {
+	if i, n := strval(id), strval(name); i != "" || n != "" {
+		return i, n
+	}
+	unset := types.StringNull()
+	if i, n := strval(unset, "OS_PROJECT_ID", "OS_TENANT_ID"), strval(unset, "OS_PROJECT_NAME", "OS_TENANT_NAME"); i != "" || n != "" {
+		return i, n
+	}
+	return cloudID, cloudName
 }
 
 // strval returns the configured value if set to a non-empty string, otherwise
