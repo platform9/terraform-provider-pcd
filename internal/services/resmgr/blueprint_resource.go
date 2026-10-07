@@ -86,10 +86,12 @@ func (r *blueprintResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Computed:            true,
 				MarkdownDescription: "Virtual (tenant) networking settings.",
 				PlanModifiers:       objUseState,
+				// The write API takes the whole blueprint, so a leaf the block leaves
+				// unset must plan, and send, the blueprint's current value.
 				Attributes: map[string]schema.Attribute{
-					"enabled":       schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Whether virtual networking is enabled."},
-					"underlay_type": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "How tenant networks are carried between hosts: `vlan`, `vxlan`, or `geneve`."},
-					"vnid_range":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The VLAN/VNI segmentation ID range (e.g. `1000:2000`)."},
+					"enabled":       schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Whether virtual networking is enabled.", PlanModifiers: boolUseState},
+					"underlay_type": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "How tenant networks are carried between hosts: `vlan`, `vxlan`, or `geneve`.", PlanModifiers: useState},
+					"vnid_range":    schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The VLAN/VNI segmentation ID range (e.g. `1000:2000`).", PlanModifiers: useState},
 				},
 			},
 			"image_library_storage":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The name of the volume type the image library stores images on. Create it with `pcd_blockstorage_volume_type` first.", PlanModifiers: useState},

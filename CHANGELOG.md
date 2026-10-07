@@ -104,7 +104,8 @@ All notable changes to this project are documented here. The format is based on
   router's gateway, which made Neutron reset SNAT to its default: renaming a router with SNAT off turned it on.
 - `pcd_cluster_blueprint` no longer fails a create or update with "Provider returned invalid result object
   after apply" when its `virtual_networking` block leaves a setting such as `vnid_range` unset. The setting
-  takes PCD's value.
+  takes PCD's value. An update now also sends the blueprint's current value for such a setting; before, it
+  sent `false` for an unset `enabled` and an empty `vnid_range`.
 - A `region` change on `pcd_compute_flavor` no longer deletes the extra specs the configuration does not set,
   and an update retried with `-refresh=false` after a failed one no longer fails on an extra spec the failed
   update had already deleted. A `region` change on `pcd_keymanager_container` no longer fails with "Provider
