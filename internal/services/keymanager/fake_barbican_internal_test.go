@@ -166,6 +166,14 @@ func runRead(r resource.Resource, state tfsdk.State) resource.ReadResponse {
 	return resp
 }
 
+// runUpdate calls Update with a response state that starts as the prior state,
+// so an Update that returns early keeps it.
+func runUpdate(r resource.Resource, plan tfsdk.Plan, prior tfsdk.State) resource.UpdateResponse {
+	resp := resource.UpdateResponse{State: prior}
+	r.Update(context.Background(), resource.UpdateRequest{Plan: plan, State: prior}, &resp)
+	return resp
+}
+
 // runDelete calls Delete with a response state that starts as the prior state.
 func runDelete(r resource.Resource, prior tfsdk.State) resource.DeleteResponse {
 	resp := resource.DeleteResponse{State: prior}
