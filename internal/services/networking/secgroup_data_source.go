@@ -79,7 +79,7 @@ func (d *secgroupDataSource) Read(ctx context.Context, req datasource.ReadReques
 
 	var sg *groups.SecGroup
 	if v := data.SecgroupID.ValueString(); v != "" {
-		sg, err = groups.Get(ctx, client, v).Extract()
+		sg, err = clients.RequireObject(groups.Get(ctx, client, v).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("networking: getting security group", err.Error())
 			return

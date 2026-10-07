@@ -134,7 +134,7 @@ func (r *secgroupRuleResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 
-	rule, err := rules.Get(ctx, client, state.ID.ValueString()).Extract()
+	rule, err := clients.RequireObject(rules.Get(ctx, client, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Security group rule not found",

@@ -87,7 +87,7 @@ func (d *routerDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 
 	var router *routers.Router
 	if v := data.RouterID.ValueString(); v != "" {
-		router, err = routers.Get(ctx, client, v).Extract()
+		router, err = clients.RequireObject(routers.Get(ctx, client, v).Extract())
 		if err != nil {
 			resp.Diagnostics.AddError("networking: getting router", err.Error())
 			return
