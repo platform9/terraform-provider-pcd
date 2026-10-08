@@ -17,7 +17,9 @@ resource "pcd_networking_network" "example" {
   name = "tf-example-network"
 }
 
-# Boot from an image (ephemeral root disk on the hypervisor).
+# Boot from an image (ephemeral root disk on the hypervisor). Changing the
+# image later rebuilds this instance in place: the root disk is rewritten from
+# the new image, and the instance keeps its ID, addresses and volumes.
 resource "pcd_compute_instance" "from_image" {
   name        = "tf-example-instance"
   image_name  = "Ubuntu-22.04"
@@ -223,8 +225,8 @@ resource "pcd_compute_instance" "web" {
 - `config_drive` (Boolean) Whether to use a config drive. Changing this forces a new resource.
 - `flavor_id` (String) The flavor ID (alternative to flavor_name). Changing this triggers an in-place resize.
 - `flavor_name` (String) The flavor name (alternative to flavor_id). Changing this triggers an in-place resize.
-- `image_id` (String) The image ID to boot from (alternative to image_name). Required unless a `block_device` with `boot_index = 0` supplies the boot disk. Changing this forces a new resource.
-- `image_name` (String) The image name to boot from, resolved via Glance (alternative to image_id). Required unless a `block_device` with `boot_index = 0` supplies the boot disk. Changing this forces a new resource.
+- `image_id` (String) The image ID to boot from (alternative to image_name). Required unless a `block_device` with `boot_index = 0` supplies the boot disk. Changing this **rebuilds the instance in place** (a Nova rebuild): the root disk is erased and rewritten from the new image, while the instance ID, ports and IP addresses, attached volumes, metadata, key pair and user data are kept. Read reports the image the instance runs, so a rebuild done outside Terraform shows as drift. An `image_id` taken from another resource (a `pcd_compute_instance_snapshot`, say) rebuilds the instance whenever that resource is replaced. Not used for an instance that boots from a volume.
+- `image_name` (String) The image name to boot from, resolved via Glance (alternative to image_id). Required unless a `block_device` with `boot_index = 0` supplies the boot disk. Changing this **rebuilds the instance in place**, as for `image_id`; the name is resolved only when it changes, so an image uploaded again under the same name does not rebuild the instance. When the instance is rebuilt outside Terraform, Read sets this to the new image's name.
 - `key_pair` (String) The name of a keypair to inject. Changing this forces a new resource.
 - `metadata` (Map of String) Key-value metadata attached to the instance. The key `migration-priority` is reserved — set it through `migration_priority` instead.
 - `migration_priority` (String) How PCD's Dynamic Resource Rebalancing (DRR) service treats this VM when balancing hosts: `normal`, `low`, `high`, or `never` (excluded from automatic migration). Unset means DRR's default. Stored as the `migration-priority` server metadata key, exactly as the PCD UI's Set Migration Priority dialog does. Updatable in place; set `""` to clear.

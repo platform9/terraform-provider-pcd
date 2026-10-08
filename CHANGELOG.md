@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`pcd_compute_instance` rebuilds in place when its image changes.** Changing `image_id` or `image_name`
+  used to destroy the instance and create a new one; it now rebuilds the existing instance from the new
+  image, as the OpenStack provider does and as the PCD UI's Rebuild action does. The root disk is still
+  erased and rewritten, but the instance keeps its ID, its ports and IP addresses, its attached volumes, its
+  metadata, its key pair and its user data, so nothing that refers to it is replaced. The plan shows this as
+  `~ update in-place` where it used to show `-/+ destroy and then create replacement`: read an image change in
+  a plan as a wipe of the root disk. To replace the instance instead, run
+  `terraform apply -replace=pcd_compute_instance.<name>`, or keep the image ID in a `terraform_data` resource
+  and list that resource in the instance's `lifecycle { replace_triggered_by = [...] }`. Nova rebuilds only an
+  `ACTIVE`, `SHUTOFF` or `ERROR` instance with no task in progress; a paused, suspended or rescued instance is
+  refused with a message that says what to change (with `power_state = "active"`, a paused or suspended
+  instance is resumed first, in the same apply), and a stopped instance is stopped again after the rebuild.
+  A rebuild onto the snapshot of an instance that boots from a volume is refused, because that image holds no
+  disk data. Refresh now records the image the instance runs, so a rebuild done outside Terraform shows as
+  drift and the next apply rebuilds the instance back to its configured image; with `image_name`, the name
+  follows the new image. An import now records `image_id` too. An instance that boots from a volume is
+  unaffected. **After upgrading, review the first plan:** an instance rebuilt outside Terraform before the
+  upgrade (in the PCD UI, say) now plans an in-place rebuild back to its configured image, which erases its
+  root disk. To keep the image it runs, change `image_id` or `image_name` in the configuration to match, or add
+  `lifecycle { ignore_changes = [image_id, image_name] }`. When `image_id` is not configured, it shows as
+  `(known after apply)` in the plan of any other change to the instance; its value does not change. The new
+  image must be in the image library of the instance's host, or Nova leaves the instance in `ERROR`. An
+  instance in `ERROR` is rebuilt before any `power_state` change in the same apply, since a rebuild is how
+  Nova recovers it.
+
 ## [0.1.16] - 2026-10-08
 
 ### Added
