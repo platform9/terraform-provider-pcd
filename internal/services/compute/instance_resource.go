@@ -308,7 +308,8 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 					"source. Nova does not apply this list to pre-created ports passed in `network.port`: set their groups " +
 					"on the port. Leave the attribute unset to take Nova's default group without managing it (it then " +
 					"shows as `(known after apply)` in the plan of any other change to the instance); an empty list " +
-					"removes every group.",
+					"removes every group, on a new instance too (Nova adds the project's `default` group at boot, which " +
+					"is then removed).",
 			},
 			"metadata": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key-value metadata attached to the instance. The key `migration-priority` is reserved — set it through `migration_priority` instead.", PlanModifiers: []planmodifier.Map{mapplanmodifier.UseStateForUnknown()}},
 			"migration_priority": schema.StringAttribute{Optional: true, Computed: true,
@@ -592,6 +593,28 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	if err != nil {
 		resp.Diagnostics.AddError("compute: waiting for instance to become active", err.Error())
 		return
+	}
+
+	// An empty list is not sent, and Nova then boots the instance with the
+	// project's default group; remove what it added so the instance has none.
+	if !plan.SecurityGroups.IsNull() && !plan.SecurityGroups.IsUnknown() && len(sgs) == 0 {
+		have := make([]string, 0, len(server.SecurityGroups))
+		for _, sg := range server.SecurityGroups {
+			if name, ok := sg["name"].(string); ok && !slices.Contains(have, name) {
+				have = append(have, name)
+			}
+		}
+		_, remove := securityGroupDelta(have, nil)
+		for _, g := range remove {
+			if err := secgroups.RemoveServer(ctx, client, server.ID, g).ExtractErr(); err != nil && !gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+				resp.Diagnostics.AddError("compute: removing security group "+g, err.Error())
+				return
+			}
+		}
+		if server, err = servers.Get(ctx, client, server.ID).Extract(); err != nil {
+			resp.Diagnostics.AddError("compute: reading instance", err.Error())
+			return
+		}
 	}
 
 	// Nova boots every instance running; stop, pause or suspend it now when

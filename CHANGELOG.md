@@ -52,6 +52,7 @@ All notable changes to this project are documented here. The format is based on
   address, and for groups managed per port, and the `pcd_networking_port_secgroup_associate` example now
   shows how to manage groups per NIC instead. A configuration that sets `security_groups` together with
   `network.port` now gets a plan-time warning, because Nova does not apply the list to a pre-created port.
+  An empty list also applies to a new instance: the `default` group Nova adds at boot is removed.
 
 ### Fixed
 

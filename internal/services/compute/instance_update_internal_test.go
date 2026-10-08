@@ -712,6 +712,28 @@ func TestCreateAppliesPowerState(t *testing.T) {
 	}
 }
 
+// Nova boots an instance created without groups (an empty list is not sent)
+// with the project's default group. An empty security_groups asks for none,
+// so Create removes what Nova added and records the empty set; otherwise the
+// apply fails with an inconsistent result.
+func TestCreateRemovesEveryGroupForAnEmptyList(t *testing.T) {
+	shortPolls(t)
+	nova, r := newInstanceNova(t, "ACTIVE")
+	plan := instanceCreatePlan(t, r, types.StringUnknown())
+	plan.SecurityGroups = types.SetValueMust(types.StringType, []attr.Value{})
+
+	got, resp := runInstanceCreate(t, r, plan)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("create: %v", resp.Diagnostics)
+	}
+	if !slices.Contains(nova.recorded(), "removeSecurityGroup default") {
+		t.Fatalf("server actions = %v, want removeSecurityGroup default", nova.recorded())
+	}
+	if got.SecurityGroups.IsNull() || got.SecurityGroups.IsUnknown() || len(got.SecurityGroups.Elements()) != 0 {
+		t.Fatalf("state security_groups = %s, want an empty set", got.SecurityGroups)
+	}
+}
+
 // A status that is not a power state keeps the last known power_state, so a
 // reboot or a rescue in flight shows no drift; with nothing known (import,
 // or a create that ended in such a status) it is null, never unknown.
