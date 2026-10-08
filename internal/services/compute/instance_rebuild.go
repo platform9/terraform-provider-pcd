@@ -15,6 +15,8 @@ import (
 	"github.com/gophercloud/gophercloud/v2/openstack/image/v2/images"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+
+	"github.com/platform9/terraform-provider-pcd/internal/clients"
 )
 
 // rebuildTimeout bounds the wait for Nova to finish a rebuild, matching the
@@ -129,7 +131,7 @@ func imageBlockDeviceMapping(img *images.Image) ([]map[string]any, error) {
 // data lives in Cinder snapshots, which a rebuild cannot use. The PCD UI does
 // not offer such images as rebuild targets either.
 func checkRebuildTarget(ctx context.Context, imgClient *gophercloud.ServiceClient, imageID string) error {
-	img, err := images.Get(ctx, imgClient, imageID).Extract()
+	img, err := clients.RequireObject(images.Get(ctx, imgClient, imageID).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			return fmt.Errorf("image %s does not exist", imageID)
@@ -191,7 +193,10 @@ func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *go
 	server, err := waitForServerSettled(ctx, client, id, rebuildSettleTarget(before.Status), rebuildTimeout)
 	if err != nil {
 		diags.AddError("compute: waiting for instance rebuild", err.Error()+
-			"\n\nAn instance whose rebuild failed stays in ERROR until a rebuild succeeds; apply again to retry.")
+			"\n\nA rebuild that fails leaves the instance in ERROR with the new image already recorded by Nova, "+
+			"so the next apply does not rebuild it again. A hard reboot (the pcd_compute_instance_reboot action "+
+			"with type = \"HARD\") may bring it back up on the new image; otherwise replace the instance with "+
+			"terraform apply -replace=pcd_compute_instance.<name>.")
 		return ""
 	}
 	if got := serverImageID(server); got != target {
@@ -255,7 +260,7 @@ func (r *instanceResource) refreshImageName(ctx context.Context, m *instanceMode
 	imgClient, err := r.config.ForRegion(m.Region.ValueString()).ImageV2Client()
 	if err == nil {
 		var img *images.Image
-		img, err = images.Get(ctx, imgClient, m.ImageID.ValueString()).Extract()
+		img, err = clients.RequireObject(images.Get(ctx, imgClient, m.ImageID.ValueString()).Extract())
 		if err == nil {
 			m.ImageName = types.StringValue(img.Name)
 			return

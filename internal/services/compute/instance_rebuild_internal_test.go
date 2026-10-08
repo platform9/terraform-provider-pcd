@@ -19,6 +19,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+
+	"github.com/platform9/terraform-provider-pcd/internal/clients"
 )
 
 // rebuildFastPolls shortens the server poll interval for one test through
@@ -423,25 +425,41 @@ func TestUpdateRebuildRefusals(t *testing.T) {
 	}
 }
 
-// A rebuild that ends in ERROR fails the update, so Terraform keeps the old
-// image in state and the next apply retries.
+// Nova records the new image before the compute host rebuilds the instance,
+// so a rebuild that fails there leaves the instance in ERROR already
+// reporting the new image. The update fails and says how to recover, since
+// nothing retries on its own: the next refresh records the new image, and
+// the plan then shows no image change.
 func TestUpdateRebuildEndingInError(t *testing.T) {
 	rebuildFastPolls(t)
 	f := &rebuildFake{t: t,
 		before: rebuildServerJSON("ACTIVE", "", "img-1"),
 		after: []string{
-			rebuildServerJSON("REBUILD", "rebuilding", ""),
-			rebuildServerJSON("ERROR", "", "img-1"),
+			rebuildServerJSON("REBUILD", "rebuilding", "img-2"),
+			rebuildServerJSON("ERROR", "", "img-2"),
 		},
 		images: map[string]string{"img-2": rebuildImageJSON("img-2", "ubuntu", "")},
 	}
 	r := f.start()
 	s := rebuildSchema(t)
-	resp, _ := rebuildUpdate(t, r, s,
-		rebuildTestModel(t, s, types.StringValue("img-2"), types.StringNull()),
-		rebuildTestModel(t, s, types.StringValue("img-1"), types.StringNull()))
+	state := rebuildTestModel(t, s, types.StringValue("img-1"), types.StringNull())
+	resp, _ := rebuildUpdate(t, r, s, rebuildTestModel(t, s, types.StringValue("img-2"), types.StringNull()), state)
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("update succeeded although the rebuild ended in ERROR")
+	}
+	if len(f.rebuilds) != 1 || f.rebuilds[0]["rebuild"] == nil {
+		t.Fatalf("server actions %v, want the one rebuild", f.rebuilds)
+	}
+	detail := resp.Diagnostics.Errors()[0].Detail()
+	for _, want := range []string{`type = "HARD"`, "terraform apply -replace="} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("error %q does not mention %q", detail, want)
+		}
+	}
+
+	_, got := rebuildRead(t, r, s, state)
+	if got.ImageID.ValueString() != "img-2" || got.Status.ValueString() != "ERROR" {
+		t.Errorf("refresh after the failed rebuild: image_id=%s status=%s, want img-2 and ERROR", got.ImageID, got.Status)
 	}
 }
 
@@ -597,5 +615,41 @@ func TestReadRecordsImageOnImport(t *testing.T) {
 	_, got = rebuildRead(t, f2.start(), s, imported)
 	if got.ImageID.IsNull() || got.ImageID.ValueString() != "" {
 		t.Errorf("volume-backed import: image_id = %s, want \"\"", got.ImageID)
+	}
+}
+
+// Glance can answer 200 without an image in the body. Reading a rebuild
+// target then fails the update instead of crashing the provider, and
+// following an outside rebuild warns and keeps the prior image.
+func TestRebuildImageReadsWithoutObject(t *testing.T) {
+	rebuildFastPolls(t)
+	s := rebuildSchema(t)
+	f := &rebuildFake{t: t,
+		before: rebuildServerJSON("ACTIVE", "", "img-1"),
+		images: map[string]string{"img-2": "null"},
+	}
+	resp, _ := rebuildUpdate(t, f.start(), s,
+		rebuildTestModel(t, s, types.StringValue("img-2"), types.StringNull()),
+		rebuildTestModel(t, s, types.StringValue("img-1"), types.StringNull()))
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("update succeeded although Glance returned no image")
+	}
+	if len(f.rebuilds) != 0 {
+		t.Fatal("a rebuild request was sent")
+	}
+	if detail := resp.Diagnostics.Errors()[0].Detail(); !strings.Contains(detail, clients.ErrNoObject.Error()) {
+		t.Errorf("error %q does not report the missing object", detail)
+	}
+
+	f2 := &rebuildFake{t: t,
+		before: rebuildServerJSON("ACTIVE", "", "img-2"),
+		images: map[string]string{"img-2": "null"},
+	}
+	readResp, got := rebuildRead(t, f2.start(), s, rebuildTestModel(t, s, types.StringValue("img-1"), types.StringValue("cirros")))
+	if readResp.Diagnostics.HasError() || len(readResp.Diagnostics.Warnings()) != 1 {
+		t.Fatalf("diagnostics %v, want one warning and no error", readResp.Diagnostics)
+	}
+	if got.ImageID.ValueString() != "img-1" || got.ImageName.ValueString() != "cirros" {
+		t.Errorf("image_id=%s image_name=%s, want img-1 and cirros until Glance answers", got.ImageID, got.ImageName)
 	}
 }
