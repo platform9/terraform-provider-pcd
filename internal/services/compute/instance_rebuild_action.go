@@ -26,6 +26,12 @@ var (
 // still working. A var so unit tests can shorten it.
 var actionProgressInterval = 30 * time.Second
 
+// rebuildActionRerun ends the action's refusal advice. A plain apply does not
+// run the action again once its trigger has fired, so it names the ways that do.
+const rebuildActionRerun = "run the action again with terraform apply " +
+	"-invoke=action.pcd_compute_instance_rebuild.<name>, or change the input of the resource whose " +
+	"action_trigger runs it"
+
 // NewInstanceRebuildAction is the factory registered with the provider.
 func NewInstanceRebuildAction() action.Action {
 	return &instanceRebuildAction{}
@@ -85,7 +91,12 @@ func (a *instanceRebuildAction) Invoke(ctx context.Context, req action.InvokeReq
 	}
 	before, err := getRebuildable(ctx, client, id)
 	if err != nil {
-		resp.Diagnostics.AddError("compute: rebuilding instance", err.Error())
+		resp.Diagnostics.AddError("compute: rebuilding instance", withRebuildAdvice(err,
+			"Once the task finishes, "+rebuildActionRerun,
+			"Unpause or resume it first (with power_state = \"active\" on its pcd_compute_instance in a "+
+				"separate apply, for example), then "+rebuildActionRerun,
+			"Unrescue it first, by removing its pcd_compute_instance_rescue or with Unrescue in the PCD UI, "+
+				"then "+rebuildActionRerun))
 		return
 	}
 	image := serverImageID(before)

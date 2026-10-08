@@ -100,13 +100,19 @@ func TestInstanceRebuildActionWaitsForShutoff(t *testing.T) {
 	}
 }
 
+// A refusal says how to run the action again, not the resource's advice: a
+// plain apply does not run an action whose trigger has already fired, and the
+// action has no power_state step to resume an instance in the same apply.
 func TestInstanceRebuildActionRefusals(t *testing.T) {
+	const rerun = "-invoke=action.pcd_compute_instance_rebuild"
 	for _, tc := range []struct {
 		name   string
 		server string
 		want   string
 	}{
-		{name: "paused", server: rebuildServerJSON("PAUSED", "", "img-1"), want: "power_state"},
+		{name: "paused", server: rebuildServerJSON("PAUSED", "", "img-1"), want: rerun},
+		{name: "task in progress", server: rebuildServerJSON("ACTIVE", "image_uploading", "img-1"), want: rerun},
+		{name: "rescued", server: rebuildServerJSON("RESCUE", "", "img-1"), want: rerun},
 		{name: "volume-backed", server: rebuildServerJSON("ACTIVE", "", ""), want: "boots from a volume"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -119,8 +125,14 @@ func TestInstanceRebuildActionRefusals(t *testing.T) {
 			if len(f.rebuilds) != 0 {
 				t.Fatal("a rebuild request was sent")
 			}
-			if detail := resp.Diagnostics.Errors()[0].Detail(); !strings.Contains(detail, tc.want) {
+			detail := resp.Diagnostics.Errors()[0].Detail()
+			if !strings.Contains(detail, tc.want) {
 				t.Errorf("error %q does not mention %q", detail, tc.want)
+			}
+			for _, resourceOnly := range []string{"Apply again", "same apply"} {
+				if strings.Contains(detail, resourceOnly) {
+					t.Errorf("error %q gives the resource's advice %q", detail, resourceOnly)
+				}
 			}
 		})
 	}

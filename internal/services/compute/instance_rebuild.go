@@ -6,6 +6,7 @@ package compute
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -42,31 +43,64 @@ func serverImageID(server *servers.Server) string {
 // getRebuildable reads a server and checks that Nova will accept a rebuild of
 // it now: Nova rebuilds only an ACTIVE, SHUTOFF or ERROR server with no task
 // in progress, and answers anything else with a 409 that does not say how to
-// get out of it.
+// get out of it. A server Nova would refuse returns a *rebuildRefusal.
 func getRebuildable(ctx context.Context, client *gophercloud.ServiceClient, id string) (*servers.Server, error) {
 	server, err := servers.Get(ctx, client, id).Extract()
 	if err != nil {
 		return nil, err
 	}
 	if server.TaskState != "" {
-		return nil, fmt.Errorf("instance %s has task %q in progress; Nova rebuilds an instance only "+
-			"when no task is running. Apply again once the task finishes", id, server.TaskState)
+		return nil, &rebuildRefusal{id: id, status: server.Status, task: server.TaskState}
 	}
 	switch server.Status {
 	case "ACTIVE", "SHUTOFF", "ERROR":
 		return server, nil
-	case "PAUSED", "SUSPENDED":
-		return nil, fmt.Errorf("instance %s is %s, and Nova rebuilds only an ACTIVE, SHUTOFF or ERROR "+
-			"instance. Unpause or resume it first; on pcd_compute_instance, power_state = \"active\" in "+
-			"the same apply does that before the rebuild", id, server.Status)
-	case "RESCUE":
-		return nil, fmt.Errorf("instance %s is in rescue mode, and Nova rebuilds only an ACTIVE, SHUTOFF "+
-			"or ERROR instance. Unrescue it first: remove its pcd_compute_instance_rescue in a separate "+
-			"apply, or use Unrescue in the PCD UI if it was rescued there", id)
 	default:
-		return nil, fmt.Errorf("instance %s is %s, and Nova rebuilds only an ACTIVE, SHUTOFF or ERROR "+
-			"instance", id, server.Status)
+		return nil, &rebuildRefusal{id: id, status: server.Status}
 	}
+}
+
+// rebuildRefusal is an instance Nova would not rebuild now. Its message says
+// only what Nova refuses: the way out depends on the caller, since an apply
+// runs the resource again but not an action whose trigger already fired.
+type rebuildRefusal struct {
+	id, status, task string
+}
+
+func (e *rebuildRefusal) Error() string {
+	switch {
+	case e.task != "":
+		return fmt.Sprintf("instance %s has task %q in progress; Nova rebuilds an instance only when no task is running",
+			e.id, e.task)
+	case e.status == "RESCUE":
+		return fmt.Sprintf("instance %s is in rescue mode, and Nova rebuilds only an ACTIVE, SHUTOFF or ERROR instance", e.id)
+	default:
+		return fmt.Sprintf("instance %s is %s, and Nova rebuilds only an ACTIVE, SHUTOFF or ERROR instance", e.id, e.status)
+	}
+}
+
+// withRebuildAdvice returns err's message and, when err is a rebuildRefusal,
+// the caller's advice for its cause: busy for a task in progress, paused for
+// a PAUSED or SUSPENDED instance, rescued for one in rescue mode. Any other
+// error or status comes back as it is.
+func withRebuildAdvice(err error, busy, paused, rescued string) string {
+	var r *rebuildRefusal
+	if !errors.As(err, &r) {
+		return err.Error()
+	}
+	advice := ""
+	switch {
+	case r.task != "":
+		advice = busy
+	case r.status == "PAUSED" || r.status == "SUSPENDED":
+		advice = paused
+	case r.status == "RESCUE":
+		advice = rescued
+	}
+	if advice == "" {
+		return err.Error()
+	}
+	return err.Error() + ". " + advice
 }
 
 // sendRebuild asks Nova to reimage server id with imageID. Only the image is
@@ -168,7 +202,12 @@ func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *go
 
 	before, err := getRebuildable(ctx, client, id)
 	if err != nil {
-		diags.AddError("compute: rebuilding instance", err.Error())
+		diags.AddError("compute: rebuilding instance", withRebuildAdvice(err,
+			"Apply again once the task finishes",
+			"Unpause or resume it first; on pcd_compute_instance, power_state = \"active\" in the same apply "+
+				"does that before the rebuild",
+			"Unrescue it first: remove its pcd_compute_instance_rescue in a separate apply, or use Unrescue "+
+				"in the PCD UI if it was rescued there"))
 		return ""
 	}
 	if serverImageID(before) == "" {
