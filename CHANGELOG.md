@@ -17,6 +17,17 @@ All notable changes to this project are documented here. The format is based on
   stopped again afterward. An optional `region` names the region the instance is in; it defaults to the
   provider's region. Actions need Terraform 1.14 or later; resources and data sources are expected to keep
   working on older Terraform versions.
+- **`pcd_compute_instance_snapshot`**, which takes a snapshot of an instance as an image, as the PCD UI's
+  Snapshot action does, so a golden image can be captured and used in the same configuration. Create waits
+  until the image is active and, for an instance that boots from a volume, until the Cinder volume snapshots
+  the image refers to are available, so an instance booted from it right away works. Renaming is done in
+  place. Destroy deletes the image and then those volume snapshots, and waits for them to go, so a root volume
+  deleted in the same destroy is not left with snapshots. The image ID is the import ID. A volume-backed
+  snapshot needs a Cinder backend that takes snapshots; the NFS driver needs `nfs_snapshot_support = true`.
+  A snapshot is taken after any change to its instance in the same apply, and replacing the instance
+  replaces its snapshot. An instance whose `image_id` refers to a snapshot is rebuilt in place, its root disk
+  erased, whenever the snapshot is replaced (for example when `instance_id` changes); add
+  `lifecycle { ignore_changes = [image_id] }` to that instance to keep it on the image it booted from.
 
 ### Changed
 
