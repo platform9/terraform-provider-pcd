@@ -38,6 +38,11 @@ resource "pcd_networking_network" "example" {
   name = "tf-example-network"
 }
 
+resource "pcd_networking_subnet" "example" {
+  network_id = pcd_networking_network.example.id
+  cidr       = "10.0.0.0/24"
+}
+
 resource "pcd_compute_instance" "web" {
   name        = "tf-example-web"
   image_name  = "Ubuntu-22.04"
@@ -46,6 +51,8 @@ resource "pcd_compute_instance" "web" {
   network {
     uuid = pcd_networking_network.example.id
   }
+
+  depends_on = [pcd_networking_subnet.example]
 }
 
 # The PCD UI's Hard Reboot. Omit type (or set "SOFT") for a plain Reboot.
