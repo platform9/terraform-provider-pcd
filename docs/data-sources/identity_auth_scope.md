@@ -14,8 +14,7 @@ Details about the authentication scope (user, project, domain, and roles) of the
 
 ```terraform
 data "pcd_identity_auth_scope" "example" {
-  name   = "tf-example-scope"
-  region = "RegionOne"
+  name = "tf-example-scope"
 }
 ```
 
