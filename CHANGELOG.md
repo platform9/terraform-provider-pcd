@@ -59,6 +59,7 @@ All notable changes to this project are documented here. The format is based on
   address, and for groups managed per port, and the `pcd_networking_port_secgroup_associate` example now
   shows how to manage groups per NIC instead. A configuration that sets `security_groups` together with
   `network.port` now gets a plan-time warning, because Nova does not apply the list to a pre-created port.
+  An empty list also applies to a new instance: the `default` group Nova adds at boot is removed.
 
 ### Fixed
 
@@ -69,7 +70,8 @@ All notable changes to this project are documented here. The format is based on
   for the new flavor, now fails as soon as the instance settles back, with a pointer to the
   instance's action log (`openstack server event list`), instead of after 30 minutes. A resize that
   the cloud confirms on its own (Nova's `resize_confirm_window`) before the provider confirms it
-  counts as done.
+  counts as done. An apply interrupted while a resize was in flight no longer leaves that resize
+  unconfirmed: the next apply confirms it.
 - `pcd_compute_interface_attach`: destroy now waits, for up to 10 minutes, until Nova has detached the
   interface, sending the detach again while the interface is still listed. Nova answers the detach
   request before it acts on it, so a port, subnet or network removed in the same apply could still be

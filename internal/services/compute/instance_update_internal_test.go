@@ -712,6 +712,28 @@ func TestCreateAppliesPowerState(t *testing.T) {
 	}
 }
 
+// Nova boots an instance created without groups (an empty list is not sent)
+// with the project's default group. An empty security_groups asks for none,
+// so Create removes what Nova added and records the empty set; otherwise the
+// apply fails with an inconsistent result.
+func TestCreateRemovesEveryGroupForAnEmptyList(t *testing.T) {
+	shortPolls(t)
+	nova, r := newInstanceNova(t, "ACTIVE")
+	plan := instanceCreatePlan(t, r, types.StringUnknown())
+	plan.SecurityGroups = types.SetValueMust(types.StringType, []attr.Value{})
+
+	got, resp := runInstanceCreate(t, r, plan)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("create: %v", resp.Diagnostics)
+	}
+	if !slices.Contains(nova.recorded(), "removeSecurityGroup default") {
+		t.Fatalf("server actions = %v, want removeSecurityGroup default", nova.recorded())
+	}
+	if got.SecurityGroups.IsNull() || got.SecurityGroups.IsUnknown() || len(got.SecurityGroups.Elements()) != 0 {
+		t.Fatalf("state security_groups = %s, want an empty set", got.SecurityGroups)
+	}
+}
+
 // A status that is not a power state keeps the last known power_state, so a
 // reboot or a rescue in flight shows no drift; with nothing known (import,
 // or a create that ended in such a status) it is null, never unknown.
@@ -762,6 +784,33 @@ func TestUpdateSkipsAResizeTheInstanceAlreadyHas(t *testing.T) {
 	}
 	if got.FlavorID.ValueString() != "flv-2" {
 		t.Fatalf("state flavor_id = %s, want flv-2", got.FlavorID)
+	}
+}
+
+// Nova sets the new flavor before the instance reaches VERIFY_RESIZE, so an
+// apply interrupted while a resize is in flight leaves state on the old
+// flavor and the instance on the new one, waiting for a confirm. The next
+// apply must confirm that resize, not take it as finished: an instance left
+// in VERIFY_RESIZE accepts no power action.
+func TestUpdateConfirmsAPendingResize(t *testing.T) {
+	shortPolls(t)
+	nova, r := newInstanceNova(t, "VERIFY_RESIZE")
+	nova.flavor = "flv-2"
+	nova.preResize = "ACTIVE"
+	state := instanceTestModel(t, r, "ACTIVE")
+	plan := state
+	plan.FlavorID = types.StringValue("flv-2")
+	plan.Status = types.StringUnknown()
+
+	got, resp := runInstanceUpdate(t, r, state, plan)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("update: %v", resp.Diagnostics)
+	}
+	if want := []string{"confirmResize"}; !slices.Equal(nova.recorded(), want) {
+		t.Fatalf("server actions = %v, want only %v", nova.recorded(), want)
+	}
+	if got.FlavorID.ValueString() != "flv-2" || got.Status.ValueString() != "ACTIVE" {
+		t.Fatalf("state after update: flavor_id=%s status=%s, want flv-2 and ACTIVE", got.FlavorID, got.Status)
 	}
 }
 

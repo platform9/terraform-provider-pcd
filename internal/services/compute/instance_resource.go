@@ -310,7 +310,8 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 					"source. Nova does not apply this list to pre-created ports passed in `network.port`: set their groups " +
 					"on the port. Leave the attribute unset to take Nova's default group without managing it (it then " +
 					"shows as `(known after apply)` in the plan of any other change to the instance); an empty list " +
-					"removes every group.",
+					"removes every group, on a new instance too (Nova adds the project's `default` group at boot, which " +
+					"is then removed).",
 			},
 			"metadata": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key-value metadata attached to the instance. The key `migration-priority` is reserved — set it through `migration_priority` instead.", PlanModifiers: []planmodifier.Map{mapplanmodifier.UseStateForUnknown()}},
 			"migration_priority": schema.StringAttribute{Optional: true, Computed: true,
@@ -631,6 +632,28 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
+	// An empty list is not sent, and Nova then boots the instance with the
+	// project's default group; remove what it added so the instance has none.
+	if !plan.SecurityGroups.IsNull() && !plan.SecurityGroups.IsUnknown() && len(sgs) == 0 {
+		have := make([]string, 0, len(server.SecurityGroups))
+		for _, sg := range server.SecurityGroups {
+			if name, ok := sg["name"].(string); ok && !slices.Contains(have, name) {
+				have = append(have, name)
+			}
+		}
+		_, remove := securityGroupDelta(have, nil)
+		for _, g := range remove {
+			if err := secgroups.RemoveServer(ctx, client, server.ID, g).ExtractErr(); err != nil && !gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+				resp.Diagnostics.AddError("compute: removing security group "+g, err.Error())
+				return
+			}
+		}
+		if server, err = servers.Get(ctx, client, server.ID).Extract(); err != nil {
+			resp.Diagnostics.AddError("compute: reading instance", err.Error())
+			return
+		}
+	}
+
 	// Nova boots every instance running; stop, pause or suspend it now when
 	// power_state asks for that. A failure leaves the recorded instance
 	// tainted, like a failed boot.
@@ -722,7 +745,20 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 	}
 	// A step that failed after an earlier resize went through leaves state on
 	// the old flavor; Nova refuses a resize to the flavor the instance has.
+	// An apply interrupted while a resize was in flight leaves it the same
+	// way, but in VERIFY_RESIZE (Nova sets the new flavor before that status),
+	// so confirm that resize and work from the status it settles in.
 	if resizing && live.Flavor["id"] == targetFlavorID {
+		if live.Status == "VERIFY_RESIZE" {
+			if err := servers.ConfirmResize(ctx, client, id).ExtractErr(); err != nil {
+				resp.Diagnostics.AddError("compute: confirming resize", err.Error())
+				return
+			}
+			if live, err = waitForServerSettled(ctx, client, id, []string{"ACTIVE", "SHUTOFF", "PAUSED", "SUSPENDED"}, 30*time.Minute); err != nil {
+				resp.Diagnostics.AddError("compute: waiting for instance after resize", err.Error())
+				return
+			}
+		}
 		resizing = false
 	}
 	status := live.Status
