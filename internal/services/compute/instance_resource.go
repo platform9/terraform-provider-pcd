@@ -20,6 +20,7 @@ import (
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/keypairs"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
 	"github.com/gophercloud/gophercloud/v2/openstack/image/v2/images"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -30,6 +31,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
@@ -179,6 +181,7 @@ type instanceModel struct {
 	ConfigDrive       types.Bool   `tfsdk:"config_drive"`
 	AccessIPv4        types.String `tfsdk:"access_ip_v4"`
 	Status            types.String `tfsdk:"status"`
+	PowerState        types.String `tfsdk:"power_state"`
 	Region            types.String `tfsdk:"region"`
 }
 
@@ -298,6 +301,31 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"access_ip_v4":      schema.StringAttribute{Computed: true, MarkdownDescription: "The first IPv4 address of the instance.", PlanModifiers: stable},
 			"status":            schema.StringAttribute{Computed: true, MarkdownDescription: "The Nova status (e.g. ACTIVE)."},
 			"region":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
+			// No plan modifier, on purpose: with UseStateForUnknown an unset
+			// power_state would carry a stale state value into Update, which
+			// would then either undo a power change made outside Terraform or
+			// fail with "Provider produced inconsistent result after apply".
+			"power_state": schema.StringAttribute{
+				Optional: true, Computed: true,
+				MarkdownDescription: "The power state to keep the instance in: `active`, `shutoff`, `paused` or `suspended`, " +
+					"the steady states the PCD UI's power actions (Start, Stop, Pause, Unpause, Suspend, Resume) reach. " +
+					"Changing it starts, stops, pauses, unpauses, suspends or resumes the instance in place, going through " +
+					"`active` when needed (a paused instance is unpaused before it is stopped). Leave it unset and the " +
+					"provider never changes the power state: the attribute then reports the current one (shown as " +
+					"`(known after apply)` in the plan of any other change to the instance), and an instance stopped " +
+					"outside Terraform stays stopped. A new instance boots running and is then stopped, paused or " +
+					"suspended, possibly before its first boot (cloud-init, for example) has finished. Nova cannot resize a " +
+					"paused or suspended instance, so a flavor change unpauses or resumes it first and puts it back " +
+					"afterward. Nova also refuses to attach or detach network interfaces and volumes while an instance is " +
+					"suspended: set `power_state` to `active` or `shutoff` before changing a `pcd_compute_interface_attach` " +
+					"or `pcd_compute_volume_attach` of a suspended instance. While Nova reports another status (`BUILD`, " +
+					"`REBOOT`, `RESIZE`, `MIGRATING`, `RESCUE`, `ERROR`, `SHELVED`, ...) the attribute keeps its last value " +
+					"and `status` shows the raw one; an apply that changes `power_state` on such an instance fails until " +
+					"the status settles, while other changes apply as usual. Rebooting is an event, not a state: use the " +
+					"`pcd_compute_instance_reboot` action. A hard reboot powers a stopped instance on, so with " +
+					"`power_state = \"shutoff\"` the next apply stops it again.",
+				Validators: []validator.String{stringvalidator.OneOf(powerStates...)},
+			},
 		},
 		Blocks: map[string]schema.Block{
 			"network": schema.ListNestedBlock{
@@ -526,6 +554,20 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
+	// Nova boots every instance running; stop, pause or suspend it now when
+	// power_state asks for that. A failure leaves the recorded instance
+	// tainted, like a failed boot.
+	if target := plan.PowerState.ValueString(); !plan.PowerState.IsUnknown() && target != "" && target != "active" {
+		if _, err := setPowerState(ctx, client, server.ID, server.Status, target); err != nil {
+			resp.Diagnostics.AddError("compute: setting power_state", err.Error())
+			return
+		}
+		if server, err = servers.Get(ctx, client, server.ID).Extract(); err != nil {
+			resp.Diagnostics.AddError("compute: reading instance", err.Error())
+			return
+		}
+	}
+
 	resp.Diagnostics.Append(r.flatten(ctx, server, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -572,9 +614,81 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
 	}
+	id := plan.ID.ValueString()
+
+	// Resolve the intended flavor first: whether a resize is coming decides
+	// the order of the power steps. Prefer flavor_name when configured:
+	// flavor_id is Computed and may be unknown in the plan, so it can't be
+	// trusted here.
+	targetFlavorID := plan.FlavorID.ValueString()
+	if name := plan.FlavorName.ValueString(); name != "" {
+		targetFlavorID, err = flavorIDFromName(ctx, client, name)
+		if err != nil {
+			resp.Diagnostics.AddError("compute: resolving flavor", err.Error())
+			return
+		}
+	}
+	if targetFlavorID == "" {
+		targetFlavorID = state.FlavorID.ValueString()
+	}
+	resizing := targetFlavorID != state.FlavorID.ValueString()
+
+	// Work from the live status, not the one in state: a saved plan or
+	// -refresh=false can carry a status that has changed since. power_state
+	// is acted on only when the plan has a value that differs from the live
+	// one; it is unknown when the attribute is not configured, and then the
+	// power state is left alone.
+	live, err := servers.Get(ctx, client, id).Extract()
+	if err != nil {
+		resp.Diagnostics.AddError("compute: reading instance", err.Error())
+		return
+	}
+	status := live.Status
+	target := ""
+	if !plan.PowerState.IsNull() && !plan.PowerState.IsUnknown() {
+		target = plan.PowerState.ValueString()
+		// A status that is no power state (MIGRATING, REBOOT, ERROR, ...)
+		// blocks only a power_state the plan changes; an unchanged one waits
+		// for a later apply, so the other changes still go through.
+		if livePS, steady := powerStateFromStatus(status); (steady && livePS == target) ||
+			(!steady && plan.PowerState.Equal(state.PowerState)) {
+			target = ""
+		}
+	}
+
+	// Power on first, so the changes below meet a running instance.
+	if target == "active" {
+		if status, err = setPowerState(ctx, client, id, status, "active"); err != nil {
+			resp.Diagnostics.AddError("compute: setting power_state", err.Error())
+			return
+		}
+	}
+	// PCD's Nova resizes only ACTIVE and SHUTOFF instances: it refuses a
+	// flavor change on a paused or suspended one. Bring such an instance up
+	// for the resize and, unless power_state asks for another state, put it
+	// back afterward, also when a step in between fails (best effort; the
+	// failure is what the apply reports).
+	restore := ""
+	if resizing && (status == "PAUSED" || status == "SUSPENDED") {
+		if target == "" {
+			restore, _ = powerStateFromStatus(status)
+			target = restore
+			defer func() {
+				if restore != "" && resp.Diagnostics.HasError() {
+					if s, err := servers.Get(ctx, client, id).Extract(); err == nil {
+						_, _ = setPowerState(ctx, client, id, s.Status, restore)
+					}
+				}
+			}()
+		}
+		if status, err = setPowerState(ctx, client, id, status, "active"); err != nil {
+			resp.Diagnostics.AddError("compute: powering on instance for resize", err.Error())
+			return
+		}
+	}
 
 	if !plan.Name.Equal(state.Name) {
-		if _, err := servers.Update(ctx, client, plan.ID.ValueString(), servers.UpdateOpts{Name: plan.Name.ValueString()}).Extract(); err != nil {
+		if _, err := servers.Update(ctx, client, id, servers.UpdateOpts{Name: plan.Name.ValueString()}).Extract(); err != nil {
 			resp.Diagnostics.AddError("compute: renaming instance", err.Error())
 			return
 		}
@@ -613,13 +727,13 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		// UpdateMetadata merges keys; it never removes one. Clearing the priority
 		// (or a user key that vanished from the map) needs an explicit delete.
 		if len(meta) > 0 {
-			if _, err := servers.UpdateMetadata(ctx, client, plan.ID.ValueString(), servers.MetadataOpts(meta)).Extract(); err != nil {
+			if _, err := servers.UpdateMetadata(ctx, client, id, servers.MetadataOpts(meta)).Extract(); err != nil {
 				resp.Diagnostics.AddError("compute: updating instance metadata", err.Error())
 				return
 			}
 		}
 		if prio == "" && prioChanged && state.MigrationPriority.ValueString() != "" {
-			if err := servers.DeleteMetadatum(ctx, client, plan.ID.ValueString(), migrationPriorityKey).ExtractErr(); err != nil && !gophercloud.ResponseCodeIs(err, 404) {
+			if err := servers.DeleteMetadatum(ctx, client, id, migrationPriorityKey).ExtractErr(); err != nil && !gophercloud.ResponseCodeIs(err, 404) {
 				resp.Diagnostics.AddError("compute: clearing migration_priority", err.Error())
 				return
 			}
@@ -629,7 +743,7 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 			resp.Diagnostics.Append(state.Metadata.ElementsAs(ctx, &prev, false)...)
 			for k := range prev {
 				if _, still := meta[k]; !still && k != migrationPriorityKey {
-					if err := servers.DeleteMetadatum(ctx, client, plan.ID.ValueString(), k).ExtractErr(); err != nil && !gophercloud.ResponseCodeIs(err, 404) {
+					if err := servers.DeleteMetadatum(ctx, client, id, k).ExtractErr(); err != nil && !gophercloud.ResponseCodeIs(err, 404) {
 						resp.Diagnostics.AddError("compute: removing instance metadata key "+k, err.Error())
 						return
 					}
@@ -638,33 +752,11 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		}
 	}
 
-	// Resize on flavor change. Resolve the target flavor from flavor_name when the
-	// user configures a name (flavor_id is Computed and would carry the stale id via
-	// UseStateForUnknown), otherwise from flavor_id.
-	id := plan.ID.ValueString()
-	// Resolve the intended flavor. Prefer flavor_name when configured: flavor_id is
-	// Computed and may be unknown in the plan, so it can't be trusted here.
-	targetFlavorID := plan.FlavorID.ValueString()
-	if name := plan.FlavorName.ValueString(); name != "" {
-		targetFlavorID, err = flavorIDFromName(ctx, client, name)
-		if err != nil {
-			resp.Diagnostics.AddError("compute: resolving flavor", err.Error())
-			return
-		}
-	}
-	if targetFlavorID == "" {
-		targetFlavorID = state.FlavorID.ValueString()
-	}
-	if targetFlavorID != state.FlavorID.ValueString() {
+	if resizing {
 		// Nova puts a resized instance back in the status it had before: a
 		// stopped instance stays stopped after the confirm, and after a
 		// revert. Every wait below targets that status, not ACTIVE.
-		before, err := servers.Get(ctx, client, id).Extract()
-		if err != nil {
-			resp.Diagnostics.AddError("compute: reading instance before resize", err.Error())
-			return
-		}
-		preStatus := before.Status
+		preStatus := status
 		if err := servers.Resize(ctx, client, id, servers.ResizeOpts{FlavorRef: targetFlavorID}).ExtractErr(); err != nil {
 			resp.Diagnostics.AddError("compute: resizing instance", err.Error())
 			return
@@ -708,7 +800,17 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 	// by flavor_name), so the applied state matches what Terraform expects.
 	plan.FlavorID = types.StringValue(targetFlavorID)
 
-	server, err := servers.Get(ctx, client, plan.ID.ValueString()).Extract()
+	// Power off, pause or suspend last, after every change above has met an
+	// instance that was running (or at least not paused).
+	if target != "" && target != "active" {
+		restore = "" // this step is the restore; a failure here is not retried
+		if _, err := setPowerState(ctx, client, id, status, target); err != nil {
+			resp.Diagnostics.AddError("compute: setting power_state", err.Error())
+			return
+		}
+	}
+
+	server, err := servers.Get(ctx, client, id).Extract()
 	if err != nil {
 		resp.Diagnostics.AddError("compute: reading instance after update", err.Error())
 		return
@@ -752,6 +854,14 @@ func (r *instanceResource) flatten(ctx context.Context, server *servers.Server, 
 	m.ID = types.StringValue(server.ID)
 	m.Name = types.StringValue(server.Name)
 	m.Status = types.StringValue(server.Status)
+	// power_state follows the four steady statuses. Any other status keeps
+	// the last known value, so a reboot, a migration or a rescue shows no
+	// drift (status has the raw value), and an unknown value becomes null.
+	if ps, ok := powerStateFromStatus(server.Status); ok {
+		m.PowerState = types.StringValue(ps)
+	} else if m.PowerState.IsUnknown() {
+		m.PowerState = types.StringNull()
+	}
 
 	ip := server.AccessIPv4
 	if ip == "" {

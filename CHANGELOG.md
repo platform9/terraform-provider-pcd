@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`power_state` on `pcd_compute_instance`**: `active`, `shutoff`, `paused` or `suspended`, the steady
+  states of the PCD UI's Start, Stop, Pause, Unpause, Suspend and Resume. Changing it starts, stops,
+  pauses, unpauses, suspends or resumes the instance in place, and a new instance with a value other
+  than `active` boots and is then put in that state. The attribute has no default: when a configuration
+  leaves it unset, the provider never changes the instance's power state and only reports it (as
+  `(known after apply)` in the plan of any other change to the instance), so upgrading changes nothing
+  and an instance stopped in the UI stays stopped. (terraform-provider-openstack defaults its
+  `power_state` to `active`, which restarts such instances; a configuration ported from it should set
+  the value explicitly.) Every transition goes through `active`, as Nova requires (a paused instance is
+  unpaused before it is stopped), and waits until Nova has finished each step; a step Nova accepts and
+  then fails ends the apply at once with a pointer to the instance's action log. A flavor change on a
+  paused or suspended instance unpauses or resumes it for the resize, which Nova refuses otherwise, and
+  puts it back afterward, also when the resize fails. Nova also refuses to attach or detach network
+  interfaces and volumes while an instance is suspended, so set `power_state` to `active` or `shutoff`
+  before changing a `pcd_compute_interface_attach` or `pcd_compute_volume_attach` of such an instance.
+  While Nova reports some other status, such as a reboot, a migration, a rescue or `ERROR`, the
+  attribute keeps its last value and `status` shows the raw one; an apply that changes `power_state` on
+  such an instance fails with an explanation instead of sending Nova a request it would refuse, and an
+  apply that leaves `power_state` unchanged still applies its other changes.
+
 ### Fixed
 
 - `pcd_compute_instance`: resizing a stopped instance no longer waits 30 minutes for it to become
