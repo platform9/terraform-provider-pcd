@@ -12,12 +12,14 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/flavors"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/keypairs"
+	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/secgroups"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
 	"github.com/gophercloud/gophercloud/v2/openstack/image/v2/images"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -29,7 +31,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -283,10 +284,31 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"flavor_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The flavor ID (alternative to flavor_name). Changing this triggers an in-place resize.", PlanModifiers: []planmodifier.String{}},
 			"flavor_name": schema.StringAttribute{Optional: true, MarkdownDescription: "The flavor name (alternative to flavor_id). Changing this triggers an in-place resize.", PlanModifiers: []planmodifier.String{}},
 			"key_pair":    schema.StringAttribute{Optional: true, MarkdownDescription: "The name of a keypair to inject. Changing this forces a new resource.", PlanModifiers: fn},
+			// No plan modifier, on purpose: with UseStateForUnknown an unset list
+			// would carry a stale state value into Update, which would then
+			// either remove a group added outside Terraform or fail with
+			// "Provider produced inconsistent result after apply".
 			"security_groups": schema.SetAttribute{
 				Optional: true, Computed: true, ElementType: types.StringType,
-				MarkdownDescription: "Names of security groups to associate. Changing this forces a new resource.",
-				PlanModifiers:       []planmodifier.Set{setplanmodifier.RequiresReplace(), setplanmodifier.UseStateForUnknown()},
+				MarkdownDescription: "Names of security groups to associate; use names, not IDs, because Nova reports names. " +
+					"Changing the list adds and removes groups on the running instance in place, adding before removing so " +
+					"that a swap never leaves the instance with fewer groups. Each apply compares the list with the groups " +
+					"Nova reports at that moment, so the instance ends with exactly these groups even when they changed " +
+					"after the plan was made. Nova applies each change to every port of the " +
+					"instance and reports the union of the groups on all of them, which has three consequences. A NIC " +
+					"attached later with `pcd_compute_interface_attach` and `network_id` gets only the project's `default` " +
+					"group; when `default` is not in this list, the next apply removes it from every port and leaves that " +
+					"NIC with no group at all. An instance with a NIC on a network without port security, or with no IP " +
+					"address (a Layer 2 network), cannot take an added group: Nova rejects the change with a 400, possibly " +
+					"after updating the other ports, and the next refresh shows what was applied. And groups set on the " +
+					"instance's ports by other means (the PCD UI's Edit Security Groups, " +
+					"`pcd_networking_port_secgroup_associate`) show up here as drift, which the next apply removes. To " +
+					"manage groups per NIC, as the PCD UI does, leave this unset and use " +
+					"`pcd_networking_port_secgroup_associate` on each port, found with the `pcd_networking_port` data " +
+					"source. Nova does not apply this list to pre-created ports passed in `network.port`: set their groups " +
+					"on the port. Leave the attribute unset to take Nova's default group without managing it (it then " +
+					"shows as `(known after apply)` in the plan of any other change to the instance); an empty list " +
+					"removes every group.",
 			},
 			"metadata": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "Key-value metadata attached to the instance. The key `migration-priority` is reserved — set it through `migration_priority` instead.", PlanModifiers: []planmodifier.Map{mapplanmodifier.UseStateForUnknown()}},
 			"migration_priority": schema.StringAttribute{Optional: true, Computed: true,
@@ -402,6 +424,24 @@ func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.Vali
 	}
 	if !cfg.SchedulerHints.IsNull() && !cfg.SchedulerHints.IsUnknown() && len(cfg.SchedulerHints.Elements()) > 1 {
 		resp.Diagnostics.AddAttributeError(path.Root("scheduler_hints"), "Too many scheduler_hints blocks", "At most one scheduler_hints block is allowed.")
+	}
+	// Nova applies security_groups only to the ports it creates. A port
+	// reference is usually unknown here (the port is created in the same
+	// apply), so an unknown port counts as set.
+	if !cfg.SecurityGroups.IsNull() && !cfg.Network.IsNull() && !cfg.Network.IsUnknown() {
+		var blocks []instanceNetworkModel
+		resp.Diagnostics.Append(cfg.Network.ElementsAs(ctx, &blocks, false)...)
+		for _, b := range blocks {
+			if b.Port.IsUnknown() || b.Port.ValueString() != "" {
+				resp.Diagnostics.AddAttributeWarning(path.Root("security_groups"), "security_groups with network.port",
+					"Nova does not apply security_groups to a port passed in network.port, which keeps its own groups, "+
+						"and a later change to security_groups rewrites the groups on every port of the instance, that "+
+						"port included. When the port's groups differ from this list, the apply that creates the instance "+
+						"fails with an inconsistent result. Set the groups on the port (security_group_ids on "+
+						"pcd_networking_port) and leave security_groups unset.")
+				break
+			}
+		}
 	}
 }
 
@@ -757,6 +797,40 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		}
 	}
 
+	// Security groups change in place. Nova adds or removes a group on every
+	// port of the instance. The configured list is compared with the groups
+	// the live read reports, not with state, so a saved plan or -refresh=false
+	// still ends with exactly the configured groups. Adds run first, so
+	// swapping one group for another never leaves the instance with fewer
+	// groups than either list.
+	if !plan.SecurityGroups.IsNull() && !plan.SecurityGroups.IsUnknown() {
+		var want []string
+		resp.Diagnostics.Append(plan.SecurityGroups.ElementsAs(ctx, &want, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		have := make([]string, 0, len(live.SecurityGroups))
+		for _, sg := range live.SecurityGroups {
+			if name, ok := sg["name"].(string); ok && !slices.Contains(have, name) {
+				have = append(have, name)
+			}
+		}
+		add, remove := securityGroupDelta(have, want)
+		for _, g := range add {
+			if err := secgroups.AddServer(ctx, client, id, g).ExtractErr(); err != nil {
+				resp.Diagnostics.AddError("compute: adding security group "+g, err.Error())
+				return
+			}
+		}
+		for _, g := range remove {
+			// Nova answers 404 when no port has the group any more.
+			if err := secgroups.RemoveServer(ctx, client, id, g).ExtractErr(); err != nil && !gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+				resp.Diagnostics.AddError("compute: removing security group "+g, err.Error())
+				return
+			}
+		}
+	}
+
 	if resizing {
 		// Nova puts a resized instance back in the status it had before: a
 		// stopped instance stays stopped after the confirm, and after a
@@ -934,6 +1008,25 @@ func networksFromList(ctx context.Context, l types.List, diags *diag.Diagnostics
 		out = append(out, servers.Network{UUID: b.UUID.ValueString(), Port: b.Port.ValueString()})
 	}
 	return out
+}
+
+// securityGroupDelta returns the groups in want but not in have (to add) and
+// the groups in have but not in want (to remove), each sorted so the calls
+// run in a stable order.
+func securityGroupDelta(have, want []string) (add, remove []string) {
+	for _, g := range want {
+		if !slices.Contains(have, g) && !slices.Contains(add, g) {
+			add = append(add, g)
+		}
+	}
+	for _, g := range have {
+		if !slices.Contains(want, g) && !slices.Contains(remove, g) {
+			remove = append(remove, g)
+		}
+	}
+	slices.Sort(add)
+	slices.Sort(remove)
+	return add, remove
 }
 
 func flavorIDFromName(ctx context.Context, client *gophercloud.ServiceClient, name string) (string, error) {

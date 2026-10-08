@@ -36,6 +36,23 @@ All notable changes to this project are documented here. The format is based on
   Terraform versions; only a configuration that declares an action needs the newer version. An optional
   `region` names the region the instance is in; it defaults to the provider's region.
 
+### Changed
+
+- `pcd_compute_instance`: changing `security_groups` now adds and removes groups on the running
+  instance instead of destroying and recreating it, as terraform-provider-openstack does. The same
+  applies to drift: a group added or removed outside Terraform used to make the next apply replace an
+  instance whose configuration sets `security_groups`, and now the apply restores the configured list
+  in place. New groups are added before old ones are removed, so a swap never leaves the instance with
+  fewer groups. The apply compares the configured list with the groups Nova reports at that moment, not
+  with the state, so a saved plan or `-refresh=false` still ends with exactly the configured groups.
+  When `security_groups` is not set, the provider leaves the groups alone, and the attribute shows as
+  `(known after apply)` in the plan of any other change to the instance. Nova applies each change to
+  every port of the instance; the attribute's description
+  explains what that means for a NIC attached later, for a NIC without port security or without an IP
+  address, and for groups managed per port, and the `pcd_networking_port_secgroup_associate` example now
+  shows how to manage groups per NIC instead. A configuration that sets `security_groups` together with
+  `network.port` now gets a plan-time warning, because Nova does not apply the list to a pre-created port.
+
 ### Fixed
 
 - `pcd_compute_instance`: resizing a stopped instance no longer waits 30 minutes for it to become
