@@ -17,6 +17,11 @@ resource "pcd_networking_network" "example" {
   name = "tf-example-network"
 }
 
+resource "pcd_networking_subnet" "example" {
+  network_id = pcd_networking_network.example.id
+  cidr       = "10.0.0.0/24"
+}
+
 resource "pcd_networking_port" "example" {
   name       = "tf-example-port"
   network_id = pcd_networking_network.example.id
@@ -56,6 +61,8 @@ resource "pcd_compute_instance" "app" {
   network {
     uuid = pcd_networking_network.example.id
   }
+
+  depends_on = [pcd_networking_subnet.example]
 }
 
 data "pcd_networking_port" "app" {
