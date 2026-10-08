@@ -645,7 +645,20 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 	}
 	// A step that failed after an earlier resize went through leaves state on
 	// the old flavor; Nova refuses a resize to the flavor the instance has.
+	// An apply interrupted while a resize was in flight leaves it the same
+	// way, but in VERIFY_RESIZE (Nova sets the new flavor before that status),
+	// so confirm that resize and work from the status it settles in.
 	if resizing && live.Flavor["id"] == targetFlavorID {
+		if live.Status == "VERIFY_RESIZE" {
+			if err := servers.ConfirmResize(ctx, client, id).ExtractErr(); err != nil {
+				resp.Diagnostics.AddError("compute: confirming resize", err.Error())
+				return
+			}
+			if live, err = waitForServerSettled(ctx, client, id, []string{"ACTIVE", "SHUTOFF", "PAUSED", "SUSPENDED"}, 30*time.Minute); err != nil {
+				resp.Diagnostics.AddError("compute: waiting for instance after resize", err.Error())
+				return
+			}
+		}
 		resizing = false
 	}
 	status := live.Status

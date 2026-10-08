@@ -45,7 +45,8 @@ All notable changes to this project are documented here. The format is based on
   for the new flavor, now fails as soon as the instance settles back, with a pointer to the
   instance's action log (`openstack server event list`), instead of after 30 minutes. A resize that
   the cloud confirms on its own (Nova's `resize_confirm_window`) before the provider confirms it
-  counts as done.
+  counts as done. An apply interrupted while a resize was in flight no longer leaves that resize
+  unconfirmed: the next apply confirms it.
 
 ## [0.1.15] - 2026-10-07
 
