@@ -643,6 +643,11 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		resp.Diagnostics.AddError("compute: reading instance", err.Error())
 		return
 	}
+	// A step that failed after an earlier resize went through leaves state on
+	// the old flavor; Nova refuses a resize to the flavor the instance has.
+	if resizing && live.Flavor["id"] == targetFlavorID {
+		resizing = false
+	}
 	status := live.Status
 	target := ""
 	if !plan.PowerState.IsNull() && !plan.PowerState.IsUnknown() {

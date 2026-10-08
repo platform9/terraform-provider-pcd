@@ -737,3 +737,28 @@ func TestFlattenPowerState(t *testing.T) {
 		}
 	}
 }
+
+// A step that fails after a resize went through (a suspend refused after an
+// upsize, say) leaves state on the old flavor. The next apply finds the
+// instance already on the new one and must not ask Nova for a resize to the
+// flavor it has, which Nova refuses every time.
+func TestUpdateSkipsAResizeTheInstanceAlreadyHas(t *testing.T) {
+	shortPolls(t)
+	nova, r := newInstanceNova(t, "ACTIVE")
+	nova.flavor = "flv-2"
+	state := instanceTestModel(t, r, "ACTIVE")
+	plan := state
+	plan.FlavorID = types.StringValue("flv-2")
+	plan.Status = types.StringUnknown()
+
+	got, resp := runInstanceUpdate(t, r, state, plan)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("update: %v", resp.Diagnostics)
+	}
+	if len(nova.recorded()) != 0 {
+		t.Fatalf("server actions = %v, want none", nova.recorded())
+	}
+	if got.FlavorID.ValueString() != "flv-2" {
+		t.Fatalf("state flavor_id = %s, want flv-2", got.FlavorID)
+	}
+}
