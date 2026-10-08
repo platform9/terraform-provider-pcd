@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
@@ -40,6 +41,14 @@ func configureClient(providerData any, diags *diag.Diagnostics) *clients.Config 
 		return nil
 	}
 	return config
+}
+
+// withMicroversion returns a shallow copy of client pinned to mv, following the
+// per-call pattern Create uses for block devices.
+func withMicroversion(client *gophercloud.ServiceClient, mv string) *gophercloud.ServiceClient {
+	c := *client
+	c.Microversion = mv
+	return &c
 }
 
 // extractStringMap converts a Terraform map value to a Go map[string]string,

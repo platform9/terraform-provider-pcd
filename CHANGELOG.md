@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `pcd_compute_instance`: resizing a stopped instance no longer waits 30 minutes for it to become
+  `ACTIVE` and then fails the apply. Nova leaves such an instance stopped after the resize, and the
+  provider now waits for the status the instance had before it, after the confirm and after a revert
+  alike. A resize that Nova accepts and then cannot carry out, most often because no host has room
+  for the new flavor, now fails as soon as the instance settles back, with a pointer to the
+  instance's action log (`openstack server event list`), instead of after 30 minutes. A resize that
+  the cloud confirms on its own (Nova's `resize_confirm_window`) before the provider confirms it
+  counts as done.
+
 ## [0.1.15] - 2026-10-07
 
 ### Fixed

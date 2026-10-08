@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -80,6 +82,72 @@ func TestAccComputeInstance_basic(t *testing.T) {
 			},
 		},
 	})
+}
+
+// TestAccComputeInstance_resizeRejected resizes an instance to a flavor no host
+// can hold. Nova accepts the resize and fails it while scheduling; the apply
+// must report that promptly instead of waiting 30 minutes for VERIFY_RESIZE.
+// PCD_ACC_UNSCHEDULABLE_RAM_MB names a RAM size (MiB) larger than any
+// hypervisor's free memory but inside the project's RAM quota; the test skips
+// without it, because a region with a large enough host would resize.
+func TestAccComputeInstance_resizeRejected(t *testing.T) {
+	imageName := testAccBootImageName(t)
+	ram, err := strconv.Atoi(os.Getenv("PCD_ACC_UNSCHEDULABLE_RAM_MB"))
+	if err != nil || ram <= 0 {
+		t.Skip("PCD_ACC_UNSCHEDULABLE_RAM_MB not set; skipping the rejected-resize test (needs a RAM size no hypervisor can hold)")
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInstanceDestroy(t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInstanceResizeRejectedConfig(imageName, ram, `flavor_name = "m1.small"`),
+				Check:  resource.TestCheckResourceAttr("pcd_compute_instance.test", "status", "ACTIVE"),
+			},
+			{
+				Config:      testAccInstanceResizeRejectedConfig(imageName, ram, `flavor_id = pcd_compute_flavor.huge.id`),
+				ExpectError: regexp.MustCompile(`compute: resizing instance`),
+			},
+		},
+	})
+}
+
+func testAccInstanceResizeRejectedConfig(imageName string, ramMB int, flavorLine string) string {
+	return fmt.Sprintf(`
+data "pcd_images_image" "boot" {
+  name = %q
+}
+
+resource "pcd_compute_flavor" "huge" {
+  name  = "tf-acc-flavor-huge"
+  ram   = %d
+  vcpus = 1
+  disk  = 20
+}
+
+resource "pcd_networking_network" "test" {
+  name = "tf-acc-resize-net"
+}
+
+resource "pcd_networking_subnet" "test" {
+  network_id = pcd_networking_network.test.id
+  cidr       = "10.119.0.0/24"
+}
+
+resource "pcd_compute_instance" "test" {
+  name     = "tf-acc-resize"
+  image_id = data.pcd_images_image.boot.id
+  %s
+
+  network {
+    uuid = pcd_networking_network.test.id
+  }
+
+  depends_on = [pcd_networking_subnet.test]
+}
+`, imageName, ramMB, flavorLine)
 }
 
 // TestAccComputeInstance_imageName boots an instance referencing its image by

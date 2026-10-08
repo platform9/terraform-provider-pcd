@@ -656,25 +656,51 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		targetFlavorID = state.FlavorID.ValueString()
 	}
 	if targetFlavorID != state.FlavorID.ValueString() {
+		// Nova puts a resized instance back in the status it had before: a
+		// stopped instance stays stopped after the confirm, and after a
+		// revert. Every wait below targets that status, not ACTIVE.
+		before, err := servers.Get(ctx, client, id).Extract()
+		if err != nil {
+			resp.Diagnostics.AddError("compute: reading instance before resize", err.Error())
+			return
+		}
+		preStatus := before.Status
 		if err := servers.Resize(ctx, client, id, servers.ResizeOpts{FlavorRef: targetFlavorID}).ExtractErr(); err != nil {
 			resp.Diagnostics.AddError("compute: resizing instance", err.Error())
 			return
 		}
-		if _, err := waitForServerStatus(ctx, client, id, "VERIFY_RESIZE", 30*time.Minute); err != nil {
+		// Nova records the resize task before it answers, so an instance that
+		// settles back in its old status was not resized: the resize failed
+		// after the API accepted it, for example because no host had room.
+		settled, err := waitForServerSettled(ctx, client, id, []string{"VERIFY_RESIZE", preStatus}, 30*time.Minute)
+		if err != nil {
 			// Best-effort revert so the instance returns to its original flavor.
 			_ = servers.RevertResize(ctx, client, id).ExtractErr()
-			_, _ = waitForServerActive(ctx, client, id, 30*time.Minute)
+			_, _ = waitForServerSettled(ctx, client, id, []string{preStatus}, 30*time.Minute)
 			resp.Diagnostics.AddError("compute: waiting for resize to verify", err.Error())
 			return
 		}
-		if err := servers.ConfirmResize(ctx, client, id).ExtractErr(); err != nil {
-			_ = servers.RevertResize(ctx, client, id).ExtractErr()
-			_, _ = waitForServerActive(ctx, client, id, 30*time.Minute)
-			resp.Diagnostics.AddError("compute: confirming resize", err.Error())
-			return
-		}
-		if _, err := waitForServerActive(ctx, client, id, 30*time.Minute); err != nil {
-			resp.Diagnostics.AddError("compute: waiting for instance active after resize", err.Error())
+		switch {
+		case settled.Status == "VERIFY_RESIZE":
+			if err := servers.ConfirmResize(ctx, client, id).ExtractErr(); err != nil {
+				_ = servers.RevertResize(ctx, client, id).ExtractErr()
+				_, _ = waitForServerSettled(ctx, client, id, []string{preStatus}, 30*time.Minute)
+				resp.Diagnostics.AddError("compute: confirming resize", err.Error())
+				return
+			}
+			if _, err := waitForServerSettled(ctx, client, id, []string{preStatus}, 30*time.Minute); err != nil {
+				resp.Diagnostics.AddError("compute: waiting for instance after resize", err.Error())
+				return
+			}
+		case settled.Flavor["id"] == targetFlavorID:
+			// A cloud that sets resize_confirm_window confirms resizes itself,
+			// possibly between two polls: the instance is back in its old
+			// status on the new flavor, with nothing left to confirm.
+		default:
+			resp.Diagnostics.AddError("compute: resizing instance",
+				fmt.Sprintf("Nova returned instance %s to %s without resizing it. The instance's action log "+
+					"(openstack server event list %s) has the reason; a common one is that no host has room "+
+					"for the new flavor.", id, settled.Status, id))
 			return
 		}
 	}
@@ -877,32 +903,6 @@ func waitForServerActive(ctx context.Context, client *gophercloud.ServiceClient,
 		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("timed out waiting for instance %s to become active (last status %q)", id, server.Status)
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(5 * time.Second):
-		}
-	}
-}
-
-// waitForServerStatus blocks until the server reaches target status, failing on
-// ERROR or timeout. Used for the VERIFY_RESIZE checkpoint during a resize.
-func waitForServerStatus(ctx context.Context, client *gophercloud.ServiceClient, id, target string, timeout time.Duration) (*servers.Server, error) {
-	deadline := time.Now().Add(timeout)
-	for {
-		server, err := servers.Get(ctx, client, id).Extract()
-		if err != nil {
-			return nil, err
-		}
-		switch server.Status {
-		case target:
-			return server, nil
-		case "ERROR":
-			return nil, fmt.Errorf("instance %s entered ERROR state: %v", id, server.Fault.Message)
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timed out waiting for instance %s to reach %s (last status %q)", id, target, server.Status)
 		}
 		select {
 		case <-ctx.Done():
