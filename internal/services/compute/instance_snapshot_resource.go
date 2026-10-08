@@ -41,8 +41,9 @@ var (
 // gophercloud has to parse the Location header instead.
 const computeMicroversionCreateImage = "2.45"
 
-// snapshotTimeout bounds each wait in a snapshot's create and delete, as the
-// provider's image waits do.
+// snapshotTimeout bounds each Glance and Cinder wait in a snapshot's create
+// and delete. The waits put it on their context, so it also ends a request
+// that gets no answer.
 const snapshotTimeout = 30 * time.Minute
 
 // snapshotPollInterval is how often the Glance and Cinder waits poll. A var
@@ -224,7 +225,7 @@ func (r *instanceSnapshotResource) Read(ctx context.Context, req resource.ReadRe
 		resp.Diagnostics.AddError("compute: building image v2 client", err.Error())
 		return
 	}
-	img, err := images.Get(ctx, imgClient, state.ID.ValueString()).Extract()
+	img, err := clients.RequireObject(images.Get(ctx, imgClient, state.ID.ValueString()).Extract())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddWarning("Snapshot image not found", r.goneMessage(ctx, &state))
@@ -272,7 +273,7 @@ func (r *instanceSnapshotResource) Update(ctx context.Context, req resource.Upda
 			return
 		}
 	}
-	img, err := images.Get(ctx, imgClient, state.ID.ValueString()).Extract()
+	img, err := clients.RequireObject(images.Get(ctx, imgClient, state.ID.ValueString()).Extract())
 	if err != nil {
 		resp.Diagnostics.AddError("compute: reading snapshot image after rename", err.Error())
 		return
@@ -441,78 +442,103 @@ func stringList(ctx context.Context, l types.List, diags *diag.Diagnostics) []st
 }
 
 // waitForSnapshotImage polls Glance until Nova has uploaded the snapshot.
-// A 404 means Nova gave up and deleted the image.
+// A 404 means Nova gave up and deleted the image. The timeout is on the
+// context, so it also ends a request Glance never answers.
 func waitForSnapshotImage(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*images.Image, error) {
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var last images.ImageStatus
+	timedOut := func() error {
+		return fmt.Errorf("timed out waiting for image %s to become active (last status %q): %w", id, last, ctx.Err())
+	}
 	for {
-		img, err := images.Get(ctx, client, id).Extract()
+		img, err := clients.RequireObject(images.Get(ctx, client, id).Extract())
 		if err != nil {
 			if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 				return nil, fmt.Errorf("%w: image %s no longer exists. Nova deletes the image of a snapshot that "+
 					"fails; `openstack server event list <instance>` shows why", errSnapshotImageGone, id)
 			}
+			if ctx.Err() != nil {
+				return nil, timedOut()
+			}
 			return nil, err
 		}
+		last = img.Status
 		switch img.Status {
 		case images.ImageStatusActive:
 			return img, nil
 		case images.ImageStatusKilled, images.ImageStatusDeleted, images.ImageStatusPendingDelete, images.ImageStatusDeactivated:
 			return nil, fmt.Errorf("image %s entered status %q", id, img.Status)
 		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timed out waiting for image %s to become active (last status %q)", id, img.Status)
-		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, timedOut()
 		case <-time.After(snapshotPollInterval):
 		}
 	}
 }
 
+// waitForVolumeSnapshotAvailable polls Cinder until the volume snapshot is
+// available. The timeout is on the context, so it also ends a request Cinder
+// never answers.
 func waitForVolumeSnapshotAvailable(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	last := ""
+	timedOut := func() error {
+		return fmt.Errorf("timed out waiting for volume snapshot %s to become available (last status %q): %w", id, last, ctx.Err())
+	}
 	for {
 		snap, err := clients.RequireObject(snapshots.Get(ctx, client, id).Extract())
 		if err != nil {
+			if ctx.Err() != nil {
+				return timedOut()
+			}
 			return fmt.Errorf("reading volume snapshot %s: %w", id, err)
 		}
+		last = snap.Status
 		switch snap.Status {
 		case "available":
 			return nil
 		case "error", "error_deleting":
 			return fmt.Errorf("volume snapshot %s entered status %q", id, snap.Status)
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for volume snapshot %s to become available (last status %q)", id, snap.Status)
-		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return timedOut()
 		case <-time.After(snapshotPollInterval):
 		}
 	}
 }
 
+// waitForVolumeSnapshotDeleted polls Cinder until the volume snapshot is
+// gone. The timeout is on the context, so it also ends a request Cinder never
+// answers.
 func waitForVolumeSnapshotDeleted(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	last := ""
+	timedOut := func() error {
+		return fmt.Errorf("timed out waiting for the deletion (last status %q): %w", last, ctx.Err())
+	}
 	for {
 		snap, err := clients.RequireObject(snapshots.Get(ctx, client, id).Extract())
 		if err != nil {
 			if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 				return nil
 			}
+			if ctx.Err() != nil {
+				return timedOut()
+			}
 			return err
 		}
+		last = snap.Status
 		if snap.Status == "error_deleting" {
 			return fmt.Errorf("entered status error_deleting")
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for the deletion (last status %q)", snap.Status)
-		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return timedOut()
 		case <-time.After(snapshotPollInterval):
 		}
 	}

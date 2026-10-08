@@ -5,6 +5,7 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -323,6 +324,22 @@ func TestSnapshotReadAfterImport(t *testing.T) {
 	})
 }
 
+// Glance answering 200 with a JSON null body names no image: Read reports an
+// error and keeps the row, rather than reading through a nil image.
+func TestSnapshotReadNullImage(t *testing.T) {
+	f := &snapshotFake{t: t, routes: map[string][]snapshotReply{
+		"GET /v2/images/img-9": {{body: `null`}},
+	}}
+	r := f.start()
+	resp := runRead(r, snapshotState(t, snapshotStored()))
+	if !resp.Diagnostics.HasError() {
+		t.Fatalf("diagnostics %v, want an error", resp.Diagnostics)
+	}
+	if resp.State.Raw.IsNull() {
+		t.Error("read removed the row; a failed read keeps it")
+	}
+}
+
 // An image deleted outside Terraform leaves state, and the warning names the
 // Cinder snapshots that still exist, since nothing deletes them any more.
 func TestSnapshotReadGoneNamesLeftovers(t *testing.T) {
@@ -425,6 +442,40 @@ func TestSnapshotRowWithoutID(t *testing.T) {
 	}
 	if calls := f.nova.received(); len(calls) != 0 {
 		t.Errorf("requests %v, want none", calls)
+	}
+}
+
+// A Glance that takes the request and never answers: the wait's timeout ends
+// the request itself, not only the sleep between polls.
+func TestSnapshotWaitTimesOutOnSilentServer(t *testing.T) {
+	release := make(chan struct{})
+	nova := newFakeNova(t, novaRoutes{
+		"GET /v2/images/img-9": func(_ http.ResponseWriter, r *http.Request) {
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+		},
+	})
+	// Registered after newFakeNova, so it runs first: the server can close
+	// even when the wait never ends.
+	t.Cleanup(func() { close(release) })
+	client, err := nova.config.ImageV2Client()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := waitForSnapshotImage(context.Background(), client, "img-9", 20*time.Millisecond)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "timed out waiting for image img-9") {
+			t.Errorf("error %v, want the timed-out error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait did not end at its timeout while Glance sent no answer")
 	}
 }
 
