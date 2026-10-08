@@ -142,5 +142,6 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 func (p *pcdProvider) Actions(_ context.Context) []func() action.Action {
 	return []func() action.Action{
 		compute.NewInstanceRebootAction,
+		compute.NewInstanceRebuildAction,
 	}
 }

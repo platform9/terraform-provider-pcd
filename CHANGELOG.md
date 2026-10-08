@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`pcd_compute_instance_rebuild` action**, which reimages an instance with the image it already runs, as the
+  PCD UI's Rebuild action does when the image is left unchanged. Nova erases the root disk and rewrites it from
+  that image; the instance keeps its ID, its ports and IP addresses, its attached volumes, its metadata, its
+  key pair and its user data. Run it once with `terraform apply -invoke=action.pcd_compute_instance_rebuild.<name>`,
+  or from a `terraform_data` resource's `lifecycle { action_trigger { ... } }` to reimage whenever that
+  resource's input changes. Nothing in state changes, so it can run any number of times; a stopped instance is
+  stopped again afterward. An optional `region` names the region the instance is in; it defaults to the
+  provider's region. Actions need Terraform 1.14 or later; resources and data sources are expected to keep
+  working on older Terraform versions.
+
 ### Changed
 
 - **`pcd_compute_instance` rebuilds in place when its image changes.** Changing `image_id` or `image_name`
