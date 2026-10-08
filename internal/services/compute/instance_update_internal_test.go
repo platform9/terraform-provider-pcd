@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -710,6 +712,28 @@ func TestCreateAppliesPowerState(t *testing.T) {
 	}
 }
 
+// Nova boots an instance created without groups (an empty list is not sent)
+// with the project's default group. An empty security_groups asks for none,
+// so Create removes what Nova added and records the empty set; otherwise the
+// apply fails with an inconsistent result.
+func TestCreateRemovesEveryGroupForAnEmptyList(t *testing.T) {
+	shortPolls(t)
+	nova, r := newInstanceNova(t, "ACTIVE")
+	plan := instanceCreatePlan(t, r, types.StringUnknown())
+	plan.SecurityGroups = types.SetValueMust(types.StringType, []attr.Value{})
+
+	got, resp := runInstanceCreate(t, r, plan)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("create: %v", resp.Diagnostics)
+	}
+	if !slices.Contains(nova.recorded(), "removeSecurityGroup default") {
+		t.Fatalf("server actions = %v, want removeSecurityGroup default", nova.recorded())
+	}
+	if got.SecurityGroups.IsNull() || got.SecurityGroups.IsUnknown() || len(got.SecurityGroups.Elements()) != 0 {
+		t.Fatalf("state security_groups = %s, want an empty set", got.SecurityGroups)
+	}
+}
+
 // A status that is not a power state keeps the last known power_state, so a
 // reboot or a rescue in flight shows no drift; with nothing known (import,
 // or a create that ended in such a status) it is null, never unknown.
@@ -787,5 +811,232 @@ func TestUpdateConfirmsAPendingResize(t *testing.T) {
 	}
 	if got.FlavorID.ValueString() != "flv-2" || got.Status.ValueString() != "ACTIVE" {
 		t.Fatalf("state after update: flavor_id=%s status=%s, want flv-2 and ACTIVE", got.FlavorID, got.Status)
+	}
+}
+
+func TestSecurityGroupDelta(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		have, want          []string
+		wantAdd, wantRemove []string
+	}{
+		{"no change", []string{"default", "web"}, []string{"web", "default"}, nil, nil},
+		{"add only", []string{"default"}, []string{"default", "web", "db"}, []string{"db", "web"}, nil},
+		{"remove only", []string{"default", "web", "db"}, []string{"default"}, nil, []string{"db", "web"}},
+		{"swap", []string{"default", "web1"}, []string{"default", "web2"}, []string{"web2"}, []string{"web1"}},
+		{"duplicates collapse", []string{"a", "a"}, []string{"b", "b"}, []string{"b"}, []string{"a"}},
+		{"from nothing", nil, []string{"default"}, []string{"default"}, nil},
+	} {
+		add, remove := securityGroupDelta(tc.have, tc.want)
+		if !slices.Equal(add, tc.wantAdd) || !slices.Equal(remove, tc.wantRemove) {
+			t.Errorf("%s: add=%v remove=%v, want add=%v remove=%v", tc.name, add, remove, tc.wantAdd, tc.wantRemove)
+		}
+	}
+}
+
+// security_groups used to force a new instance, so swapping a group, or a
+// group added in the UI, destroyed the VM. It now updates in place, adding
+// the new group before removing the old one.
+func TestUpdateChangesSecurityGroupsInPlace(t *testing.T) {
+	shortPolls(t)
+	nova, r := newInstanceNova(t, "ACTIVE")
+	nova.secgroups = []string{"default", "web1"}
+	state := instanceTestModel(t, r, "ACTIVE")
+	state.SecurityGroups = types.SetValueMust(types.StringType, []attr.Value{types.StringValue("default"), types.StringValue("web1")})
+	plan := state
+	plan.SecurityGroups = types.SetValueMust(types.StringType, []attr.Value{types.StringValue("default"), types.StringValue("web2")})
+
+	got, resp := runInstanceUpdate(t, r, state, plan)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("update: %v", resp.Diagnostics)
+	}
+	if want := []string{"addSecurityGroup web2", "removeSecurityGroup web1"}; !slices.Equal(nova.recorded(), want) {
+		t.Fatalf("server actions = %v, want %v", nova.recorded(), want)
+	}
+	var sgs []string
+	got.SecurityGroups.ElementsAs(context.Background(), &sgs, false)
+	slices.Sort(sgs)
+	if !slices.Equal(sgs, []string{"default", "web2"}) {
+		t.Fatalf("state security_groups = %v, want [default web2]", sgs)
+	}
+}
+
+// Nova answers 404 when no port has the group any more, for example when it
+// was removed in the UI after Update read the instance; that is the outcome
+// the apply wanted.
+func TestUpdateSecurityGroupRemovalToleratesNotFound(t *testing.T) {
+	shortPolls(t)
+	nova, r := newInstanceNova(t, "ACTIVE")
+	nova.secgroups = []string{"default", "gone"}
+	nova.failAction["removeSecurityGroup"] = http.StatusNotFound
+	state := instanceTestModel(t, r, "ACTIVE")
+	state.SecurityGroups = types.SetValueMust(types.StringType, []attr.Value{types.StringValue("default"), types.StringValue("gone")})
+	plan := state
+	plan.SecurityGroups = types.SetValueMust(types.StringType, []attr.Value{types.StringValue("default")})
+
+	_, resp := runInstanceUpdate(t, r, state, plan)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("update: %v", resp.Diagnostics)
+	}
+	if want := []string{"removeSecurityGroup gone"}; !slices.Equal(nova.recorded(), want) {
+		t.Fatalf("server actions = %v, want %v", nova.recorded(), want)
+	}
+}
+
+// Nova refuses to add a group to an instance with a NIC that has port
+// security disabled or no IP (400). The apply fails with Nova's reason,
+// removes nothing, and keeps the prior state for the next refresh to correct.
+func TestUpdateSecurityGroupAddFailureKeepsPriorState(t *testing.T) {
+	shortPolls(t)
+	nova, r := newInstanceNova(t, "ACTIVE")
+	nova.secgroups = []string{"default", "web1"}
+	nova.failAction["addSecurityGroup"] = http.StatusBadRequest
+	state := instanceTestModel(t, r, "ACTIVE")
+	state.SecurityGroups = types.SetValueMust(types.StringType, []attr.Value{types.StringValue("default"), types.StringValue("web1")})
+	plan := state
+	plan.SecurityGroups = types.SetValueMust(types.StringType, []attr.Value{types.StringValue("default"), types.StringValue("web2")})
+
+	got, resp := runInstanceUpdate(t, r, state, plan)
+	if !resp.Diagnostics.HasError() || resp.Diagnostics.Errors()[0].Summary() != "compute: adding security group web2" {
+		t.Fatalf("diagnostics = %v, want the refused add reported", resp.Diagnostics)
+	}
+	if want := []string{"addSecurityGroup web2"}; !slices.Equal(nova.recorded(), want) {
+		t.Fatalf("server actions = %v, want only %v", nova.recorded(), want)
+	}
+	if !got.SecurityGroups.Equal(state.SecurityGroups) {
+		t.Fatalf("state security_groups = %v, want the prior %v", got.SecurityGroups, state.SecurityGroups)
+	}
+}
+
+// An unconfigured security_groups (it has no plan modifier) is unknown in the
+// plan of any change; it must not touch the groups, and reads back whatever
+// the ports carry.
+func TestUpdateLeavesUnmanagedSecurityGroupsAlone(t *testing.T) {
+	shortPolls(t)
+	nova, r := newInstanceNova(t, "ACTIVE")
+	nova.secgroups = []string{"default", "from-ui"}
+	state := instanceTestModel(t, r, "ACTIVE")
+	plan := state
+	plan.Name = types.StringValue("vm-renamed")
+	plan.SecurityGroups = types.SetUnknown(types.StringType)
+
+	got, resp := runInstanceUpdate(t, r, state, plan)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("update: %v", resp.Diagnostics)
+	}
+	if len(nova.recorded()) != 0 {
+		t.Fatalf("server actions = %v, want none", nova.recorded())
+	}
+	if len(got.SecurityGroups.Elements()) != 2 {
+		t.Fatalf("state security_groups = %v, want the two on the ports", got.SecurityGroups)
+	}
+}
+
+// The schema guard: a RequiresReplace here would bring back the destroy and
+// recreate this attribute used to cause, and a UseStateForUnknown would plan
+// an unset list from state, so the next apply would remove a group added
+// outside Terraform or fail with an inconsistent result.
+func TestSecurityGroupsSchemaUpdatesInPlace(t *testing.T) {
+	sg := instanceTestSchema(&instanceResource{}).Attributes["security_groups"].(schema.SetAttribute)
+	if !sg.Optional || !sg.Computed || len(sg.PlanModifiers) != 0 {
+		t.Fatalf("security_groups: optional=%v computed=%v plan modifiers=%d; want Optional+Computed, no plan modifier",
+			sg.Optional, sg.Computed, len(sg.PlanModifiers))
+	}
+}
+
+// Update compares the configured groups with the live instance, not with
+// state: after -refresh=false or with a saved plan, state can miss a group
+// added in the UI, and the apply must still end with exactly the configured
+// groups (anything else fails as an inconsistent result).
+func TestUpdateSecurityGroupsFollowTheLiveInstance(t *testing.T) {
+	setOf := func(t *testing.T, names ...string) types.Set {
+		s, d := types.SetValueFrom(context.Background(), types.StringType, names)
+		if d.HasError() {
+			t.Fatalf("set: %v", d)
+		}
+		return s
+	}
+	for _, tc := range []struct {
+		name        string
+		state, plan []string
+		want        []string // server actions
+	}{
+		{"swap after a group was added in the UI", []string{"default", "web1"}, []string{"default", "web2"},
+			[]string{"addSecurityGroup web2", "removeSecurityGroup from-ui", "removeSecurityGroup web1"}},
+		{"unchanged list in an update of something else", []string{"default", "web1"}, []string{"default", "web1"},
+			[]string{"removeSecurityGroup from-ui"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shortPolls(t)
+			nova, r := newInstanceNova(t, "ACTIVE")
+			nova.secgroups = []string{"default", "web1", "from-ui"}
+			state := instanceTestModel(t, r, "ACTIVE")
+			state.SecurityGroups = setOf(t, tc.state...)
+			plan := state
+			plan.Name = types.StringValue("vm-renamed")
+			plan.SecurityGroups = setOf(t, tc.plan...)
+
+			got, resp := runInstanceUpdate(t, r, state, plan)
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("update: %v", resp.Diagnostics)
+			}
+			if !slices.Equal(nova.recorded(), tc.want) {
+				t.Fatalf("server actions = %v, want %v", nova.recorded(), tc.want)
+			}
+			if !got.SecurityGroups.Equal(plan.SecurityGroups) {
+				t.Fatalf("state security_groups = %v, want the planned %v", got.SecurityGroups, plan.SecurityGroups)
+			}
+		})
+	}
+}
+
+// validateInstanceConfig runs ValidateConfig on a configuration built from m.
+func validateInstanceConfig(t *testing.T, r *instanceResource, m instanceModel) diag.Diagnostics {
+	t.Helper()
+	ctx := context.Background()
+	s := instanceTestSchema(r)
+	var resp resource.ValidateConfigResponse
+	r.ValidateConfig(ctx, resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: s, Raw: newPlan(t, s, &m).Raw}}, &resp)
+	return resp.Diagnostics
+}
+
+// instanceTestConfig is a configuration with one network block.
+func instanceTestConfig(t *testing.T, r *instanceResource, sgs types.Set, nic instanceNetworkModel) instanceModel {
+	t.Helper()
+	m := instanceTestModel(t, r, "ACTIVE")
+	s := instanceTestSchema(r)
+	network, d := types.ListValueFrom(context.Background(),
+		s.Blocks["network"].(schema.ListNestedBlock).NestedObject.Type(), []instanceNetworkModel{nic})
+	if d.HasError() {
+		t.Fatalf("network: %v", d)
+	}
+	m.ID, m.Status, m.PowerState, m.AccessIPv4, m.Region = types.StringNull(), types.StringNull(), types.StringNull(), types.StringNull(), types.StringNull()
+	m.SecurityGroups, m.Network = sgs, network
+	return m
+}
+
+// Nova applies security_groups only to ports it creates; a pre-created port
+// keeps its own groups. Warn, and count an unknown port (one created in the
+// same apply) as set, since that is the usual configuration.
+func TestValidateConfigWarnsAboutSecurityGroupsWithPorts(t *testing.T) {
+	r := &instanceResource{}
+	web := types.SetValueMust(types.StringType, []attr.Value{types.StringValue("web")})
+	for _, tc := range []struct {
+		name  string
+		sgs   types.Set
+		nic   instanceNetworkModel
+		warns int
+	}{
+		{"known port", web, instanceNetworkModel{UUID: types.StringNull(), Name: types.StringNull(), Port: types.StringValue("p-1")}, 1},
+		{"port created in the same apply", web, instanceNetworkModel{UUID: types.StringNull(), Name: types.StringNull(), Port: types.StringUnknown()}, 1},
+		{"network uuid only", web, instanceNetworkModel{UUID: types.StringValue("net-1"), Name: types.StringNull(), Port: types.StringNull()}, 0},
+		{"port without security_groups", types.SetNull(types.StringType), instanceNetworkModel{UUID: types.StringNull(), Name: types.StringNull(), Port: types.StringValue("p-1")}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := validateInstanceConfig(t, r, instanceTestConfig(t, r, tc.sgs, tc.nic))
+			if d.HasError() || d.WarningsCount() != tc.warns {
+				t.Fatalf("diagnostics = %v, want %d warning(s) and no error", d, tc.warns)
+			}
+		})
 	}
 }

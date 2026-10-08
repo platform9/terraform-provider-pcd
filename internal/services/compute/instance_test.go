@@ -13,8 +13,11 @@ import (
 	"testing"
 
 	"github.com/gophercloud/gophercloud/v2"
+	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/secgroups"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
+	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/ports"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 
 	"github.com/platform9/terraform-provider-pcd/internal/acctest"
@@ -431,6 +434,146 @@ func testAccCheckInstanceStatus(t *testing.T, n, want string) resource.TestCheck
 		}
 		if srv.Status != want {
 			return fmt.Errorf("instance %s is %s, want %s", rs.Primary.ID, srv.Status, want)
+		}
+		return nil
+	}
+}
+
+// TestAccComputeInstance_securityGroupsInPlace swaps one security group for
+// another on a running instance, then adds the old one back outside Terraform
+// and lets the next apply remove it: both used to replace the instance.
+func TestAccComputeInstance_securityGroupsInPlace(t *testing.T) {
+	imageName := testAccBootImageName(t)
+	const rn = "pcd_compute_instance.test"
+	var instanceID string
+	sameInstance := resource.TestCheckResourceAttrWith(rn, "id", func(v string) error {
+		if v != instanceID {
+			return fmt.Errorf("instance was replaced (%s -> %s); security groups must change in place", instanceID, v)
+		}
+		return nil
+	})
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInstanceDestroy(t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInstanceSecgroupsConfig(imageName, "a"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCaptureID(rn, &instanceID),
+					resource.TestCheckTypeSetElemAttr(rn, "security_groups.*", "tf-acc-sg-a"),
+					testAccCheckInstancePortSecgroups(t, rn, "pcd_networking_secgroup.a", "pcd_networking_secgroup.b"),
+				),
+			},
+			{
+				Config: testAccInstanceSecgroupsConfig(imageName, "b"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(rn, plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					sameInstance,
+					resource.TestCheckResourceAttr(rn, "security_groups.#", "2"),
+					resource.TestCheckTypeSetElemAttr(rn, "security_groups.*", "default"),
+					resource.TestCheckTypeSetElemAttr(rn, "security_groups.*", "tf-acc-sg-b"),
+					testAccCheckInstancePortSecgroups(t, rn, "pcd_networking_secgroup.b", "pcd_networking_secgroup.a"),
+				),
+			},
+			{
+				// Drift: a group added outside Terraform is removed in place.
+				PreConfig: func() {
+					client, err := acctest.LabConfig(t).ComputeV2Client()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := secgroups.AddServer(context.Background(), client, instanceID, "tf-acc-sg-a").ExtractErr(); err != nil {
+						t.Fatalf("adding tf-acc-sg-a out of band: %v", err)
+					}
+				},
+				Config: testAccInstanceSecgroupsConfig(imageName, "b"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(rn, plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					sameInstance,
+					resource.TestCheckResourceAttr(rn, "security_groups.#", "2"),
+					testAccCheckInstancePortSecgroups(t, rn, "pcd_networking_secgroup.b", "pcd_networking_secgroup.a"),
+				),
+			},
+		},
+	})
+}
+
+// testAccInstanceSecgroupsConfig attaches "default" plus tf-acc-sg-<which>.
+func testAccInstanceSecgroupsConfig(imageName, which string) string {
+	return fmt.Sprintf(`
+data "pcd_images_image" "boot" {
+  name = %q
+}
+
+resource "pcd_networking_network" "test" {
+  name = "tf-acc-sg-net"
+}
+
+resource "pcd_networking_subnet" "test" {
+  network_id = pcd_networking_network.test.id
+  cidr       = "10.122.0.0/24"
+}
+
+resource "pcd_networking_secgroup" "a" {
+  name = "tf-acc-sg-a"
+}
+
+resource "pcd_networking_secgroup" "b" {
+  name = "tf-acc-sg-b"
+}
+
+resource "pcd_compute_instance" "test" {
+  name            = "tf-acc-sg"
+  image_id        = data.pcd_images_image.boot.id
+  flavor_name     = "m1.small"
+  security_groups = ["default", pcd_networking_secgroup.%s.name]
+
+  network {
+    uuid = pcd_networking_network.test.id
+  }
+
+  depends_on = [pcd_networking_subnet.test]
+}
+`, imageName, which)
+}
+
+// testAccCheckInstancePortSecgroups checks, through Neutron, that every port
+// of the instance carries the group withRN and not the group withoutRN.
+func testAccCheckInstancePortSecgroups(t *testing.T, n, withRN, withoutRN string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		inst, with, without := s.RootModule().Resources[n], s.RootModule().Resources[withRN], s.RootModule().Resources[withoutRN]
+		if inst == nil || with == nil || without == nil {
+			return fmt.Errorf("not found in state: %s, %s or %s", n, withRN, withoutRN)
+		}
+		client, err := acctest.LabConfig(t).NetworkV2Client()
+		if err != nil {
+			return err
+		}
+		pages, err := ports.List(client, ports.ListOpts{DeviceID: inst.Primary.ID}).AllPages(context.Background())
+		if err != nil {
+			return err
+		}
+		all, err := ports.ExtractPorts(pages)
+		if err != nil {
+			return err
+		}
+		if len(all) == 0 {
+			return fmt.Errorf("instance %s has no ports", inst.Primary.ID)
+		}
+		for _, p := range all {
+			has := map[string]bool{}
+			for _, g := range p.SecurityGroups {
+				has[g] = true
+			}
+			if !has[with.Primary.ID] || has[without.Primary.ID] {
+				return fmt.Errorf("port %s has security groups %v; want %s and not %s", p.ID, p.SecurityGroups, with.Primary.ID, without.Primary.ID)
+			}
 		}
 		return nil
 	}
