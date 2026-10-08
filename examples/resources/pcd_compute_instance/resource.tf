@@ -40,6 +40,28 @@ resource "pcd_compute_instance" "stopped" {
   }
 }
 
+# Boot with a chosen address on the NIC, as the PCD UI's create wizard does
+# with a Private IP. The address must be free and inside a subnet of the
+# network. Changing it replaces the instance; to add a NIC with a chosen
+# address to a running instance, use pcd_compute_interface_attach.
+resource "pcd_networking_subnet" "example" {
+  network_id = pcd_networking_network.example.id
+  cidr       = "10.0.0.0/24"
+}
+
+resource "pcd_compute_instance" "fixed_ip" {
+  name        = "tf-example-fixed-ip"
+  image_name  = "Ubuntu-22.04"
+  flavor_name = "m1.small"
+
+  network {
+    uuid        = pcd_networking_network.example.id
+    fixed_ip_v4 = "10.0.0.50"
+  }
+
+  depends_on = [pcd_networking_subnet.example]
+}
+
 # A VM on a Layer 2 / "Simple" network. A subnet-less network cannot be booted
 # on by network uuid (Nova requires a subnet for that), so the VM attaches
 # through a port on it — which is the L2 model anyway: a port on the segment,

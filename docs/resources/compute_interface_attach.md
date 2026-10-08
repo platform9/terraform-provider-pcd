@@ -3,12 +3,12 @@
 page_title: "pcd_compute_interface_attach Resource - PCD"
 subcategory: "Compute"
 description: |-
-  Attaches a network interface to a compute instance, either by an existing port_id or by allocating a new port on network_id. Exactly one of port_id/network_id must be set. All attributes force replacement (attach/detach has no in-place update).
+  Attaches a network interface to a compute instance, either by an existing port_id or by allocating a new port on network_id: the PCD UI's Add Network Interface action, and on destroy its Remove Network Interface. Exactly one of port_id/network_id must be set. All attributes force replacement (attach/detach has no in-place update). Destroy waits, for up to 10 minutes, until Nova has detached the interface, so a port, subnet or network removed in the same apply is no longer in use.
 ---
 
 # pcd_compute_interface_attach (Resource)
 
-Attaches a network interface to a compute instance, either by an existing `port_id` or by allocating a new port on `network_id`. Exactly one of `port_id`/`network_id` must be set. All attributes force replacement (attach/detach has no in-place update).
+Attaches a network interface to a compute instance, either by an existing `port_id` or by allocating a new port on `network_id`: the PCD UI's Add Network Interface action, and on destroy its Remove Network Interface. Exactly one of `port_id`/`network_id` must be set. All attributes force replacement (attach/detach has no in-place update). Destroy waits, for up to 10 minutes, until Nova has detached the interface, so a port, subnet or network removed in the same apply is no longer in use.
 
 ## Example Usage
 

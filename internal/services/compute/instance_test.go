@@ -578,3 +578,100 @@ func testAccCheckInstancePortSecgroups(t *testing.T, n, withRN, withoutRN string
 		return nil
 	}
 }
+
+// TestAccComputeInstance_fixedIP boots an instance with a chosen IPv4 address
+// on its NIC, checks the address through Neutron, and shows that changing it
+// replaces the instance (it is a boot-time setting). An IPv6 value is refused
+// at plan time.
+func TestAccComputeInstance_fixedIP(t *testing.T) {
+	imageName := testAccBootImageName(t)
+	const rn = "pcd_compute_instance.test"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInstanceDestroy(t),
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccInstanceFixedIPConfig(imageName, "fd00::50"),
+				ExpectError: regexp.MustCompile(`Invalid fixed_ip_v4`),
+			},
+			{
+				Config: testAccInstanceFixedIPConfig(imageName, "10.117.0.50"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(rn, "network.0.fixed_ip_v4", "10.117.0.50"),
+					resource.TestCheckResourceAttr(rn, "access_ip_v4", "10.117.0.50"),
+					testAccCheckInstancePortIP(t, rn, "10.117.0.50"),
+				),
+			},
+			{
+				Config: testAccInstanceFixedIPConfig(imageName, "10.117.0.51"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(rn, plancheck.ResourceActionReplace)},
+				},
+				Check: testAccCheckInstancePortIP(t, rn, "10.117.0.51"),
+			},
+		},
+	})
+}
+
+func testAccInstanceFixedIPConfig(imageName, ip string) string {
+	return fmt.Sprintf(`
+data "pcd_images_image" "boot" {
+  name = %q
+}
+
+resource "pcd_networking_network" "test" {
+  name = "tf-acc-fixedip-net"
+}
+
+resource "pcd_networking_subnet" "test" {
+  network_id = pcd_networking_network.test.id
+  cidr       = "10.117.0.0/24"
+}
+
+resource "pcd_compute_instance" "test" {
+  name        = "tf-acc-fixedip"
+  image_id    = data.pcd_images_image.boot.id
+  flavor_name = "m1.small"
+
+  network {
+    uuid        = pcd_networking_network.test.id
+    fixed_ip_v4 = %q
+  }
+
+  depends_on = [pcd_networking_subnet.test]
+}
+`, imageName, ip)
+}
+
+// testAccCheckInstancePortIP checks, through Neutron, that a port of the
+// instance holds ip.
+func testAccCheckInstancePortIP(t *testing.T, n, ip string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs := s.RootModule().Resources[n]
+		if rs == nil {
+			return fmt.Errorf("not found in state: %s", n)
+		}
+		client, err := acctest.LabConfig(t).NetworkV2Client()
+		if err != nil {
+			return err
+		}
+		pages, err := ports.List(client, ports.ListOpts{DeviceID: rs.Primary.ID}).AllPages(context.Background())
+		if err != nil {
+			return err
+		}
+		all, err := ports.ExtractPorts(pages)
+		if err != nil {
+			return err
+		}
+		for _, p := range all {
+			for _, f := range p.FixedIPs {
+				if f.IPAddress == ip {
+					return nil
+				}
+			}
+		}
+		return fmt.Errorf("no port of instance %s holds %s (%d ports)", rs.Primary.ID, ip, len(all))
+	}
+}
