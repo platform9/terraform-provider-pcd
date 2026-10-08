@@ -4,6 +4,50 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`power_state` on `pcd_compute_instance`**: `active`, `shutoff`, `paused` or `suspended`, the steady
+  states of the PCD UI's Start, Stop, Pause, Unpause, Suspend and Resume. Changing it starts, stops,
+  pauses, unpauses, suspends or resumes the instance in place, and a new instance with a value other
+  than `active` boots and is then put in that state. The attribute has no default: when a configuration
+  leaves it unset, the provider never changes the instance's power state and only reports it (as
+  `(known after apply)` in the plan of any other change to the instance), so upgrading changes nothing
+  and an instance stopped in the UI stays stopped. (terraform-provider-openstack defaults its
+  `power_state` to `active`, which restarts such instances; a configuration ported from it should set
+  the value explicitly.) Every transition goes through `active`, as Nova requires (a paused instance is
+  unpaused before it is stopped), and waits until Nova has finished each step; a step Nova accepts and
+  then fails ends the apply at once with a pointer to the instance's action log. A flavor change on a
+  paused or suspended instance unpauses or resumes it for the resize, which Nova refuses otherwise, and
+  puts it back afterward, also when the resize fails. Nova also refuses to attach or detach network
+  interfaces and volumes while an instance is suspended, so set `power_state` to `active` or `shutoff`
+  before changing a `pcd_compute_interface_attach` or `pcd_compute_volume_attach` of such an instance.
+  While Nova reports some other status, such as a reboot, a migration, a rescue or `ERROR`, the
+  attribute keeps its last value and `status` shows the raw one; an apply that changes `power_state` on
+  such an instance fails with an explanation instead of sending Nova a request it would refuse, and an
+  apply that leaves `power_state` unchanged still applies its other changes.
+- **The `pcd_compute_instance_reboot` action**, the provider's first Terraform action: a soft or hard
+  reboot of an instance, the PCD UI's Reboot and Hard Reboot, that waits until Nova has finished it and
+  fails unless the instance ends `ACTIVE`. A hard reboot also works on a stopped, paused, suspended or
+  `ERROR` instance, which makes it the way to recover an instance in `ERROR`. Invoke it from a
+  `lifecycle` `action_trigger` or once with `terraform apply -invoke=action.pcd_compute_instance_reboot.<name>`.
+  Actions need Terraform 1.14 or later. Resources and data sources are expected to keep working on older
+  Terraform versions; only a configuration that declares an action needs the newer version. An optional
+  `region` names the region the instance is in; it defaults to the provider's region.
+
+### Fixed
+
+- `pcd_compute_instance`: resizing a stopped instance no longer waits 30 minutes for it to become
+  `ACTIVE` and then fails the apply. Nova leaves such an instance stopped after the resize, and the
+  provider now waits for the status the instance had before it, after the confirm and after a revert
+  alike. A resize that Nova accepts and then cannot carry out, most often because no host has room
+  for the new flavor, now fails as soon as the instance settles back, with a pointer to the
+  instance's action log (`openstack server event list`), instead of after 30 minutes. A resize that
+  the cloud confirms on its own (Nova's `resize_confirm_window`) before the provider confirms it
+  counts as done. An apply interrupted while a resize was in flight no longer leaves that resize
+  unconfirmed: the next apply confirms it.
+
 ## [0.1.15] - 2026-10-07
 
 ### Fixed

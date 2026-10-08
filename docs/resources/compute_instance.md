@@ -40,6 +40,21 @@ resource "pcd_compute_instance" "from_image" {
   }
 }
 
+# Keep an instance stopped: the PCD UI's Stop action, as desired state. Set
+# "active", "shutoff", "paused" or "suspended". Changing the value starts,
+# stops, pauses, unpauses, suspends or resumes the instance in place; leaving
+# power_state out lets the UI or anything else power the instance freely.
+resource "pcd_compute_instance" "stopped" {
+  name        = "tf-example-stopped"
+  image_name  = "Ubuntu-22.04"
+  flavor_name = "m1.small"
+  power_state = "shutoff"
+
+  network {
+    uuid = pcd_networking_network.example.id
+  }
+}
+
 # A VM on a Layer 2 / "Simple" network. A subnet-less network cannot be booted
 # on by network uuid (Nova requires a subnet for that), so the VM attaches
 # through a port on it — which is the L2 model anyway: a port on the segment,
@@ -192,6 +207,7 @@ resource "pcd_compute_instance" "web" {
 - `metadata` (Map of String) Key-value metadata attached to the instance. The key `migration-priority` is reserved — set it through `migration_priority` instead.
 - `migration_priority` (String) How PCD's Dynamic Resource Rebalancing (DRR) service treats this VM when balancing hosts: `normal`, `low`, `high`, or `never` (excluded from automatic migration). Unset means DRR's default. Stored as the `migration-priority` server metadata key, exactly as the PCD UI's Set Migration Priority dialog does. Updatable in place; set `""` to clear.
 - `network` (Block List) Networks to attach. Changing this forces a new resource. (see [below for nested schema](#nestedblock--network))
+- `power_state` (String) The power state to keep the instance in: `active`, `shutoff`, `paused` or `suspended`, the steady states the PCD UI's power actions (Start, Stop, Pause, Unpause, Suspend, Resume) reach. Changing it starts, stops, pauses, unpauses, suspends or resumes the instance in place, going through `active` when needed (a paused instance is unpaused before it is stopped). Leave it unset and the provider never changes the power state: the attribute then reports the current one (shown as `(known after apply)` in the plan of any other change to the instance), and an instance stopped outside Terraform stays stopped. A new instance boots running and is then stopped, paused or suspended, possibly before its first boot (cloud-init, for example) has finished. Nova cannot resize a paused or suspended instance, so a flavor change unpauses or resumes it first and puts it back afterward. Nova also refuses to attach or detach network interfaces and volumes while an instance is suspended: set `power_state` to `active` or `shutoff` before changing a `pcd_compute_interface_attach` or `pcd_compute_volume_attach` of a suspended instance. While Nova reports another status (`BUILD`, `REBOOT`, `RESIZE`, `MIGRATING`, `RESCUE`, `ERROR`, `SHELVED`, ...) the attribute keeps its last value and `status` shows the raw one; an apply that changes `power_state` on such an instance fails until the status settles, while other changes apply as usual. Rebooting is an event, not a state: use the `pcd_compute_instance_reboot` action. A hard reboot powers a stopped instance on, so with `power_state = "shutoff"` the next apply stops it again.
 - `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `scheduler_hints` (Block List) Scheduler hints passed to Nova at boot (`os:scheduler_hints`). Mirrors `openstack_compute_instance_v2`. Use `group` with a `pcd_compute_servergroup` for affinity / anti-affinity placement, `different_host` / `same_host` to place relative to existing instances. At most one block. Create-only: changing this forces a new resource. Nova does not report hints back, so the block round-trips from configuration. (see [below for nested schema](#nestedblock--scheduler_hints))
 - `security_groups` (Set of String) Names of security groups to associate. Changing this forces a new resource.

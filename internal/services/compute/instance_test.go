@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -80,6 +82,72 @@ func TestAccComputeInstance_basic(t *testing.T) {
 			},
 		},
 	})
+}
+
+// TestAccComputeInstance_resizeRejected resizes an instance to a flavor no host
+// can hold. Nova accepts the resize and fails it while scheduling; the apply
+// must report that promptly instead of waiting 30 minutes for VERIFY_RESIZE.
+// PCD_ACC_UNSCHEDULABLE_RAM_MB names a RAM size (MiB) larger than any
+// hypervisor's free memory but inside the project's RAM quota; the test skips
+// without it, because a region with a large enough host would resize.
+func TestAccComputeInstance_resizeRejected(t *testing.T) {
+	imageName := testAccBootImageName(t)
+	ram, err := strconv.Atoi(os.Getenv("PCD_ACC_UNSCHEDULABLE_RAM_MB"))
+	if err != nil || ram <= 0 {
+		t.Skip("PCD_ACC_UNSCHEDULABLE_RAM_MB not set; skipping the rejected-resize test (needs a RAM size no hypervisor can hold)")
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInstanceDestroy(t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInstanceResizeRejectedConfig(imageName, ram, `flavor_name = "m1.small"`),
+				Check:  resource.TestCheckResourceAttr("pcd_compute_instance.test", "status", "ACTIVE"),
+			},
+			{
+				Config:      testAccInstanceResizeRejectedConfig(imageName, ram, `flavor_id = pcd_compute_flavor.huge.id`),
+				ExpectError: regexp.MustCompile(`compute: resizing instance`),
+			},
+		},
+	})
+}
+
+func testAccInstanceResizeRejectedConfig(imageName string, ramMB int, flavorLine string) string {
+	return fmt.Sprintf(`
+data "pcd_images_image" "boot" {
+  name = %q
+}
+
+resource "pcd_compute_flavor" "huge" {
+  name  = "tf-acc-flavor-huge"
+  ram   = %d
+  vcpus = 1
+  disk  = 20
+}
+
+resource "pcd_networking_network" "test" {
+  name = "tf-acc-resize-net"
+}
+
+resource "pcd_networking_subnet" "test" {
+  network_id = pcd_networking_network.test.id
+  cidr       = "10.119.0.0/24"
+}
+
+resource "pcd_compute_instance" "test" {
+  name     = "tf-acc-resize"
+  image_id = data.pcd_images_image.boot.id
+  %s
+
+  network {
+    uuid = pcd_networking_network.test.id
+  }
+
+  depends_on = [pcd_networking_subnet.test]
+}
+`, imageName, ramMB, flavorLine)
 }
 
 // TestAccComputeInstance_imageName boots an instance referencing its image by
@@ -215,6 +283,154 @@ func testAccCheckInstanceDestroy(t *testing.T) resource.TestCheckFunc {
 			if !gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 				return err
 			}
+		}
+		return nil
+	}
+}
+
+// TestAccComputeInstance_powerState boots an instance stopped, resizes it while
+// it stays stopped, then starts, pauses and suspends it in place, checks that
+// dropping power_state from the configuration plans nothing, and imports it.
+func TestAccComputeInstance_powerState(t *testing.T) {
+	imageName := testAccBootImageName(t)
+	const rn = "pcd_compute_instance.test"
+	var instanceID, flavorID string
+	sameInstance := resource.TestCheckResourceAttrWith(rn, "id", func(v string) error {
+		if v != instanceID {
+			return fmt.Errorf("instance was replaced (%s -> %s); power changes must apply in place", instanceID, v)
+		}
+		return nil
+	})
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInstanceDestroy(t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInstancePowerStateConfig(imageName, "m1.small", "shutoff"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCaptureID(rn, &instanceID),
+					testAccCaptureAttr(rn, "flavor_id", &flavorID),
+					resource.TestCheckResourceAttr(rn, "power_state", "shutoff"),
+					resource.TestCheckResourceAttr(rn, "status", "SHUTOFF"),
+					testAccCheckInstanceStatus(t, rn, "SHUTOFF"),
+				),
+			},
+			{
+				// A resize of a stopped instance leaves it stopped; the
+				// provider used to wait for ACTIVE here until it timed out.
+				Config: testAccInstancePowerStateConfig(imageName, "m1.medium", "shutoff"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					sameInstance,
+					resource.TestCheckResourceAttrWith(rn, "flavor_id", func(v string) error {
+						if v == flavorID {
+							return fmt.Errorf("flavor_id did not change after resize (still %s)", v)
+						}
+						return nil
+					}),
+					resource.TestCheckResourceAttr(rn, "power_state", "shutoff"),
+					testAccCheckInstanceStatus(t, rn, "SHUTOFF"),
+				),
+			},
+			{
+				Config: testAccInstancePowerStateConfig(imageName, "m1.medium", "active"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					sameInstance,
+					resource.TestCheckResourceAttr(rn, "power_state", "active"),
+					testAccCheckInstanceStatus(t, rn, "ACTIVE"),
+				),
+			},
+			{
+				Config: testAccInstancePowerStateConfig(imageName, "m1.medium", "paused"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					sameInstance,
+					resource.TestCheckResourceAttr(rn, "power_state", "paused"),
+					testAccCheckInstanceStatus(t, rn, "PAUSED"),
+				),
+			},
+			{
+				// paused -> suspended goes through active: unpause, then suspend.
+				Config: testAccInstancePowerStateConfig(imageName, "m1.medium", "suspended"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					sameInstance,
+					resource.TestCheckResourceAttr(rn, "power_state", "suspended"),
+					testAccCheckInstanceStatus(t, rn, "SUSPENDED"),
+				),
+			},
+			{
+				// Unset means unmanaged: nothing to change, the instance stays suspended.
+				Config:   testAccInstancePowerStateConfig(imageName, "m1.medium", ""),
+				PlanOnly: true,
+			},
+			{
+				// Import recovers power_state from the status. Instance import
+				// does not recover the boot inputs, so they are not compared.
+				ResourceName:      rn,
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"image_id", "image_name", "flavor_id", "flavor_name", "key_pair", "user_data",
+					"config_drive", "network", "block_device", "scheduler_hints",
+				},
+			},
+		},
+	})
+}
+
+// testAccInstancePowerStateConfig omits power_state when powerState is "".
+func testAccInstancePowerStateConfig(imageName, flavorName, powerState string) string {
+	powerLine := ""
+	if powerState != "" {
+		powerLine = fmt.Sprintf("power_state = %q", powerState)
+	}
+	return fmt.Sprintf(`
+data "pcd_images_image" "boot" {
+  name = %q
+}
+
+resource "pcd_networking_network" "test" {
+  name = "tf-acc-power-net"
+}
+
+resource "pcd_networking_subnet" "test" {
+  network_id = pcd_networking_network.test.id
+  cidr       = "10.118.0.0/24"
+}
+
+resource "pcd_compute_instance" "test" {
+  name        = "tf-acc-power"
+  image_id    = data.pcd_images_image.boot.id
+  flavor_name = %q
+  %s
+
+  network {
+    uuid = pcd_networking_network.test.id
+  }
+
+  depends_on = [pcd_networking_subnet.test]
+}
+`, imageName, flavorName, powerLine)
+}
+
+// testAccCheckInstanceStatus reads the instance's Nova status directly, so a
+// check does not rest on what the provider wrote to state.
+func testAccCheckInstanceStatus(t *testing.T, n, want string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs := s.RootModule().Resources[n]
+		if rs == nil {
+			return fmt.Errorf("not found in state: %s", n)
+		}
+		client, err := acctest.LabConfig(t).ComputeV2Client()
+		if err != nil {
+			return err
+		}
+		srv, err := servers.Get(context.Background(), client, rs.Primary.ID).Extract()
+		if err != nil {
+			return err
+		}
+		if srv.Status != want {
+			return fmt.Errorf("instance %s is %s, want %s", rs.Primary.ID, srv.Status, want)
 		}
 		return nil
 	}

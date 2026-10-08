@@ -237,9 +237,10 @@ func (p *pcdProvider) Configure(ctx context.Context, req provider.ConfigureReque
 		return
 	}
 
-	// Share the authenticated config with every resource and data source.
+	// Share the authenticated config with every resource, data source and action.
 	resp.DataSourceData = cfg
 	resp.ResourceData = cfg
+	resp.ActionData = cfg
 }
 
 // pick resolves a value with precedence: explicit config value, then the first

@@ -45,6 +45,7 @@ Everything else mirrors `terraform-provider-openstack` closely (attribute names,
 |---|---|
 | Minimum PCD | 2026.4 (Community Edition baseline; PCD tracks OpenStack SLURP releases) |
 | Minimum Terraform | 1.0 (provider protocol 6) |
+| Actions | Terraform ≥ 1.14 |
 | Go | 1.25 (builds on 1.26) |
 | SDK | terraform-plugin-framework, gophercloud/v2 |
 

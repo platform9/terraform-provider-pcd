@@ -25,6 +25,21 @@ resource "pcd_compute_instance" "from_image" {
   }
 }
 
+# Keep an instance stopped: the PCD UI's Stop action, as desired state. Set
+# "active", "shutoff", "paused" or "suspended". Changing the value starts,
+# stops, pauses, unpauses, suspends or resumes the instance in place; leaving
+# power_state out lets the UI or anything else power the instance freely.
+resource "pcd_compute_instance" "stopped" {
+  name        = "tf-example-stopped"
+  image_name  = "Ubuntu-22.04"
+  flavor_name = "m1.small"
+  power_state = "shutoff"
+
+  network {
+    uuid = pcd_networking_network.example.id
+  }
+}
+
 # A VM on a Layer 2 / "Simple" network. A subnet-less network cannot be booted
 # on by network uuid (Nova requires a subnet for that), so the VM attaches
 # through a port on it — which is the L2 model anyway: a port on the segment,

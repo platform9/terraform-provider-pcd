@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 
+	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -21,8 +22,11 @@ import (
 	"github.com/platform9/terraform-provider-pcd/internal/services/resmgr"
 )
 
-// Ensure pcdProvider satisfies the provider.Provider interface.
-var _ provider.Provider = (*pcdProvider)(nil)
+// Ensure pcdProvider satisfies the provider interfaces it implements.
+var (
+	_ provider.Provider            = (*pcdProvider)(nil)
+	_ provider.ProviderWithActions = (*pcdProvider)(nil)
+)
 
 // pcdProvider is the Terraform provider for Platform9 Private Cloud Director.
 // Schema and Configure live in config.go.
@@ -129,5 +133,14 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		keymanager.NewSecretDataSource,
 		resmgr.NewBlueprintDataSource,
 		resmgr.NewHostDataSource,
+	}
+}
+
+// Actions lists the provider's Terraform actions, grouped by family like
+// Resources. Terraform invokes actions from version 1.14 on; older versions
+// never call them.
+func (p *pcdProvider) Actions(_ context.Context) []func() action.Action {
+	return []func() action.Action{
+		compute.NewInstanceRebootAction,
 	}
 }
