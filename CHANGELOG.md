@@ -27,6 +27,14 @@ All notable changes to this project are documented here. The format is based on
   attribute keeps its last value and `status` shows the raw one; an apply that changes `power_state` on
   such an instance fails with an explanation instead of sending Nova a request it would refuse, and an
   apply that leaves `power_state` unchanged still applies its other changes.
+- **The `pcd_compute_instance_reboot` action**, the provider's first Terraform action: a soft or hard
+  reboot of an instance, the PCD UI's Reboot and Hard Reboot, that waits until Nova has finished it and
+  fails unless the instance ends `ACTIVE`. A hard reboot also works on a stopped, paused, suspended or
+  `ERROR` instance, which makes it the way to recover an instance in `ERROR`. Invoke it from a
+  `lifecycle` `action_trigger` or once with `terraform apply -invoke=action.pcd_compute_instance_reboot.<name>`.
+  Actions need Terraform 1.14 or later. Resources and data sources are expected to keep working on older
+  Terraform versions; only a configuration that declares an action needs the newer version. An optional
+  `region` names the region the instance is in; it defaults to the provider's region.
 
 ### Fixed
 
