@@ -35,6 +35,13 @@ All notable changes to this project are documented here. The format is based on
   Actions need Terraform 1.14 or later. Resources and data sources are expected to keep working on older
   Terraform versions; only a configuration that declares an action needs the newer version. An optional
   `region` names the region the instance is in; it defaults to the provider's region.
+- **`fixed_ip_v4` in the `network` block of `pcd_compute_instance`**: the IPv4 address to request for
+  that NIC when the instance boots, as the PCD UI's create wizard does with a Private IP. Until now a
+  chosen boot address needed a separately managed `pcd_networking_port`. The attribute needs `uuid` in
+  the same block, cannot be combined with `port`, and is checked at plan time; changing it replaces the
+  instance, like any change to `network`. To add or remove a NIC on a running instance, with or without
+  a fixed IP, use `pcd_compute_interface_attach`, whose description now names it as the equivalent of
+  the UI's Add Network Interface and Remove Network Interface.
 
 ### Changed
 
@@ -65,6 +72,11 @@ All notable changes to this project are documented here. The format is based on
   the cloud confirms on its own (Nova's `resize_confirm_window`) before the provider confirms it
   counts as done. An apply interrupted while a resize was in flight no longer leaves that resize
   unconfirmed: the next apply confirms it.
+- `pcd_compute_interface_attach`: destroy now waits, for up to 10 minutes, until Nova has detached the
+  interface, sending the detach again while the interface is still listed. Nova answers the detach
+  request before it acts on it, so a port, subnet or network removed in the same apply could still be
+  in use when Terraform reached it, and an interface the guest never released was reported as detached.
+  Such a destroy now fails with an error after the 10 minutes instead of reporting success.
 
 ## [0.1.15] - 2026-10-07
 

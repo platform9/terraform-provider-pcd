@@ -121,3 +121,102 @@ func testAccCheckInterfaceAttachDestroy(t *testing.T) resource.TestCheckFunc {
 		return nil
 	}
 }
+
+// TestAccComputeInterfaceAttach_fixedIPDetach attaches a NIC with a chosen
+// address, then removes it in the same apply as its network and subnet. The
+// destroy waits for Nova to detach the NIC, so the subnet is free by the
+// time it is deleted.
+func TestAccComputeInterfaceAttach_fixedIPDetach(t *testing.T) {
+	imageName := testAccBootImageName(t)
+	const rn = "pcd_compute_interface_attach.test"
+	var instanceID string
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInterfaceAttachDestroy(t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInterfaceAttachFixedIPConfig(imageName, true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCaptureID("pcd_compute_instance.test", &instanceID),
+					resource.TestCheckResourceAttr(rn, "fixed_ip", "10.124.0.60"),
+					testAccCheckInstancePortIP(t, "pcd_compute_instance.test", "10.124.0.60"),
+				),
+			},
+			{
+				Config: testAccInterfaceAttachFixedIPConfig(imageName, false),
+				Check: func(*terraform.State) error {
+					client, err := acctest.LabConfig(t).ComputeV2Client()
+					if err != nil {
+						return err
+					}
+					pages, err := attachinterfaces.List(client, instanceID).AllPages(context.Background())
+					if err != nil {
+						return err
+					}
+					all, err := attachinterfaces.ExtractInterfaces(pages)
+					if err != nil {
+						return err
+					}
+					if len(all) != 1 {
+						return fmt.Errorf("instance %s has %d interfaces after the detach, want 1", instanceID, len(all))
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
+// testAccInterfaceAttachFixedIPConfig boots an instance; with attach set it
+// also creates a second network and attaches a NIC on it at 10.124.0.60.
+func testAccInterfaceAttachFixedIPConfig(imageName string, attach bool) string {
+	cfg := fmt.Sprintf(`
+data "pcd_images_image" "boot" {
+  name = %q
+}
+
+resource "pcd_networking_network" "boot" {
+  name = "tf-acc-iafip-boot-net"
+}
+
+resource "pcd_networking_subnet" "boot" {
+  network_id = pcd_networking_network.boot.id
+  cidr       = "10.123.0.0/24"
+}
+
+resource "pcd_compute_instance" "test" {
+  name        = "tf-acc-iafip-instance"
+  image_id    = data.pcd_images_image.boot.id
+  flavor_name = "m1.small"
+
+  network {
+    uuid = pcd_networking_network.boot.id
+  }
+
+  depends_on = [pcd_networking_subnet.boot]
+}
+`, imageName)
+	if attach {
+		cfg += `
+resource "pcd_networking_network" "attach" {
+  name = "tf-acc-iafip-attach-net"
+}
+
+resource "pcd_networking_subnet" "attach" {
+  network_id = pcd_networking_network.attach.id
+  cidr       = "10.124.0.0/24"
+}
+
+resource "pcd_compute_interface_attach" "test" {
+  instance_id = pcd_compute_instance.test.id
+  network_id  = pcd_networking_network.attach.id
+  fixed_ip    = "10.124.0.60"
+
+  depends_on = [pcd_networking_subnet.attach]
+}
+`
+	}
+	return cfg
+}

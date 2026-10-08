@@ -11,6 +11,7 @@ package compute
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -187,9 +188,10 @@ type instanceModel struct {
 }
 
 type instanceNetworkModel struct {
-	UUID types.String `tfsdk:"uuid"`
-	Name types.String `tfsdk:"name"`
-	Port types.String `tfsdk:"port"`
+	UUID      types.String `tfsdk:"uuid"`
+	Name      types.String `tfsdk:"name"`
+	Port      types.String `tfsdk:"port"`
+	FixedIPv4 types.String `tfsdk:"fixed_ip_v4"`
 }
 
 // instanceBlockDeviceModel mirrors openstack_compute_instance_v2's block_device
@@ -357,6 +359,15 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 					"uuid": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Network UUID to attach to (required unless port is set).", PlanModifiers: stable},
 					"name": schema.StringAttribute{Optional: true, MarkdownDescription: "Network name (informational)."},
 					"port": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Existing port to attach (required unless uuid is set).", PlanModifiers: stable},
+					"fixed_ip_v4": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "A fixed IPv4 address to request on this network at boot: Nova's " +
+							"`networks[].fixed_ip`, the Private IP the PCD UI's create wizard sets. Requires `uuid` and " +
+							"cannot be combined with `port`; to boot on a pre-created port with a chosen address, set " +
+							"`fixed_ip` on the `pcd_networking_port`. The address must be free and inside a subnet of the " +
+							"network, or the instance fails to boot. Changing it replaces the instance, like any change " +
+							"to `network`. It is not read back: it holds what was configured (nothing after an import), " +
+							"and `access_ip_v4` reports the address in use. To add or remove a NIC, with or without a " +
+							"fixed IP, on a running instance, use `pcd_compute_interface_attach`."},
 				}},
 				PlanModifiers: []planmodifier.List{listplanmodifier.RequiresReplace(), listplanmodifier.UseStateForUnknown()},
 			},
@@ -441,6 +452,32 @@ func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.Vali
 						"fails with an inconsistent result. Set the groups on the port (security_group_ids on "+
 						"pcd_networking_port) and leave security_groups unset.")
 				break
+			}
+		}
+	}
+	// fixed_ip_v4 is Nova's networks[].fixed_ip: it asks for an address on the
+	// network named by uuid, and Nova refuses it next to a port. Unknown
+	// values count as set.
+	if !cfg.Network.IsNull() && !cfg.Network.IsUnknown() {
+		var blocks []instanceNetworkModel
+		resp.Diagnostics.Append(cfg.Network.ElementsAs(ctx, &blocks, false)...)
+		for i, b := range blocks {
+			ip := b.FixedIPv4
+			if ip.IsNull() || (!ip.IsUnknown() && ip.ValueString() == "") {
+				continue
+			}
+			at := path.Root("network").AtListIndex(i).AtName("fixed_ip_v4")
+			if v := ip.ValueString(); !ip.IsUnknown() && (net.ParseIP(v).To4() == nil || strings.Contains(v, ":")) {
+				resp.Diagnostics.AddAttributeError(at, "Invalid fixed_ip_v4", fmt.Sprintf("%q is not an IPv4 address.", v))
+			}
+			if b.Port.IsUnknown() || b.Port.ValueString() != "" {
+				resp.Diagnostics.AddAttributeError(at, "fixed_ip_v4 with port",
+					"Nova does not accept a fixed IP together with a port. Set the address as fixed_ip on the "+
+						"pcd_networking_port instead, or attach by uuid.")
+			}
+			if !b.UUID.IsUnknown() && b.UUID.ValueString() == "" {
+				resp.Diagnostics.AddAttributeError(at, "fixed_ip_v4 without uuid",
+					"fixed_ip_v4 requests an address on the network named by uuid; set uuid in the same network block.")
 			}
 		}
 	}
@@ -1041,7 +1078,7 @@ func networksFromList(ctx context.Context, l types.List, diags *diag.Diagnostics
 	diags.Append(l.ElementsAs(ctx, &blocks, false)...)
 	out := make([]servers.Network, 0, len(blocks))
 	for _, b := range blocks {
-		out = append(out, servers.Network{UUID: b.UUID.ValueString(), Port: b.Port.ValueString()})
+		out = append(out, servers.Network{UUID: b.UUID.ValueString(), Port: b.Port.ValueString(), FixedIP: b.FixedIPv4.ValueString()})
 	}
 	return out
 }

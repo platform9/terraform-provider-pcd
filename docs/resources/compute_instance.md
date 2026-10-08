@@ -55,6 +55,28 @@ resource "pcd_compute_instance" "stopped" {
   }
 }
 
+# Boot with a chosen address on the NIC, as the PCD UI's create wizard does
+# with a Private IP. The address must be free and inside a subnet of the
+# network. Changing it replaces the instance; to add a NIC with a chosen
+# address to a running instance, use pcd_compute_interface_attach.
+resource "pcd_networking_subnet" "example" {
+  network_id = pcd_networking_network.example.id
+  cidr       = "10.0.0.0/24"
+}
+
+resource "pcd_compute_instance" "fixed_ip" {
+  name        = "tf-example-fixed-ip"
+  image_name  = "Ubuntu-22.04"
+  flavor_name = "m1.small"
+
+  network {
+    uuid        = pcd_networking_network.example.id
+    fixed_ip_v4 = "10.0.0.50"
+  }
+
+  depends_on = [pcd_networking_subnet.example]
+}
+
 # A VM on a Layer 2 / "Simple" network. A subnet-less network cannot be booted
 # on by network uuid (Nova requires a subnet for that), so the VM attaches
 # through a port on it — which is the L2 model anyway: a port on the segment,
@@ -244,6 +266,7 @@ Optional:
 
 Optional:
 
+- `fixed_ip_v4` (String) A fixed IPv4 address to request on this network at boot: Nova's `networks[].fixed_ip`, the Private IP the PCD UI's create wizard sets. Requires `uuid` and cannot be combined with `port`; to boot on a pre-created port with a chosen address, set `fixed_ip` on the `pcd_networking_port`. The address must be free and inside a subnet of the network, or the instance fails to boot. Changing it replaces the instance, like any change to `network`. It is not read back: it holds what was configured (nothing after an import), and `access_ip_v4` reports the address in use. To add or remove a NIC, with or without a fixed IP, on a running instance, use `pcd_compute_interface_attach`.
 - `name` (String) Network name (informational).
 - `port` (String) Existing port to attach (required unless uuid is set).
 - `uuid` (String) Network UUID to attach to (required unless port is set).

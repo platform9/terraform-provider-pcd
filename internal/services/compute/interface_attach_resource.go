@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/attachinterfaces"
@@ -60,8 +61,11 @@ func (r *interfaceAttachResource) Schema(_ context.Context, _ resource.SchemaReq
 	stable := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Attaches a network interface to a compute instance, either by an existing `port_id` " +
-			"or by allocating a new port on `network_id`. Exactly one of `port_id`/`network_id` must be set. " +
-			"All attributes force replacement (attach/detach has no in-place update).",
+			"or by allocating a new port on `network_id`: the PCD UI's Add Network Interface action, and on destroy " +
+			"its Remove Network Interface. Exactly one of `port_id`/`network_id` must be set. " +
+			"All attributes force replacement (attach/detach has no in-place update). Destroy waits, for up to " +
+			"10 minutes, until Nova has detached the interface, so a port, subnet or network removed in the same " +
+			"apply is no longer in use.",
 		Attributes: map[string]schema.Attribute{
 			"id":          schema.StringAttribute{Computed: true, MarkdownDescription: "Composite ID: `instance_id/port_id`.", PlanModifiers: stable},
 			"instance_id": schema.StringAttribute{Required: true, MarkdownDescription: "The instance (server) ID to attach to. Changing this forces a new resource.", PlanModifiers: forceNew},
@@ -175,11 +179,54 @@ func (r *interfaceAttachResource) Delete(ctx context.Context, req resource.Delet
 		return
 	}
 
-	if err := attachinterfaces.Delete(ctx, client, state.InstanceID.ValueString(), state.PortID.ValueString()).ExtractErr(); err != nil {
+	instanceID, portID := state.InstanceID.ValueString(), state.PortID.ValueString()
+	if err := attachinterfaces.Delete(ctx, client, instanceID, portID).ExtractErr(); err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			return
 		}
 		resp.Diagnostics.AddError("compute: detaching interface", err.Error())
+		return
+	}
+	if err := waitForInterfaceDetached(ctx, client, instanceID, portID, interfaceDetachTimeout); err != nil {
+		resp.Diagnostics.AddError("compute: waiting for interface detach", err.Error())
+	}
+}
+
+// interfaceDetachTimeout bounds the wait for Nova to detach an interface. It is
+// a var so unit tests can shorten it.
+var interfaceDetachTimeout = 10 * time.Minute
+
+// waitForInterfaceDetached polls until Nova no longer lists the interface.
+// Nova answers the DELETE before it detaches. While the interface is still
+// listed the DELETE is sent again, as terraform-provider-openstack does; Nova
+// answers a repeat with 400 while the first detach is still running, which is
+// expected.
+func waitForInterfaceDetached(ctx context.Context, client *gophercloud.ServiceClient, instanceID, portID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(serverPollInterval):
+		}
+		if _, err := attachinterfaces.Get(ctx, client, instanceID, portID).Extract(); err != nil {
+			if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+				return nil
+			}
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out after %s waiting for Nova to detach interface %s from instance %s", timeout, portID, instanceID)
+		}
+		if err := attachinterfaces.Delete(ctx, client, instanceID, portID).ExtractErr(); err != nil {
+			switch {
+			case gophercloud.ResponseCodeIs(err, http.StatusNotFound):
+				return nil
+			case gophercloud.ResponseCodeIs(err, http.StatusBadRequest):
+			default:
+				return err
+			}
+		}
 	}
 }
 
