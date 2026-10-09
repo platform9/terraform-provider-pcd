@@ -1,8 +1,8 @@
 # The member project's configuration: a provider scoped to that project
-# accepts an image another project shared with it. Use literal values or
+# accepts an image another project shared with it. The alias may set the
+# project's tenant_id or tenant_name (both work). Use literal values or
 # variables for the alias's settings, not attributes of resources in the same
-# configuration; the other settings come from the OS_* environment, which must
-# not export OS_PROJECT_ID or OS_TENANT_ID next to the alias's tenant_name.
+# configuration; the other settings come from the OS_* environment.
 provider "pcd" {
   alias       = "team_b"
   tenant_name = "team-b"

@@ -3,21 +3,21 @@
 page_title: "pcd_images_image_access_accept Resource - PCD"
 subcategory: "Images"
 description: |-
-  Accepts or rejects an image another project shared with this one: the member's side of PCD image sharing (the UI's "Accept Shared Images"). Glance lets only the member project (or an admin) decide, so use it under a provider scoped to the member project, for example a second provider "pcd" block with an alias and that project's tenant_name. Give the alias literal values or variables: an auth setting that is unknown at plan time (a value from a resource in the same configuration) is ignored, and the provider falls back to the OS_* environment without an error. Do not export OS_PROJECT_ID or OS_TENANT_ID when using such an alias: the alias would inherit it next to tenant_name, and authentication fails with "You must provide at most one of ProjectID or ProjectName in a Scope". Destroying the resource rejects the image, since a member cannot remove itself. Do not combine it with status on pcd_images_image_access for the same membership: each would undo the other's status.
+  Accepts or rejects an image another project shared with this one: the member's side of PCD image sharing (the UI's "Accept Shared Images"). Glance lets only the member project (or an admin) decide, so use it under a provider scoped to the member project, for example a second provider "pcd" block with an alias and that project's tenant_id or tenant_name (both work). Give the alias literal values or variables: an auth setting that is unknown at plan time (a value from a resource in the same configuration) is ignored, and the provider falls back to the OS_* environment without an error. Destroying the resource rejects the image, since a member cannot remove itself. Do not combine it with status on pcd_images_image_access for the same membership: each would undo the other's status.
 ---
 
 # pcd_images_image_access_accept (Resource)
 
-Accepts or rejects an image another project shared with this one: the member's side of PCD image sharing (the UI's "Accept Shared Images"). Glance lets only the member project (or an admin) decide, so use it under a provider scoped to the member project, for example a second `provider "pcd"` block with an `alias` and that project's `tenant_name`. Give the alias literal values or variables: an auth setting that is unknown at plan time (a value from a resource in the same configuration) is ignored, and the provider falls back to the `OS_*` environment without an error. Do not export `OS_PROJECT_ID` or `OS_TENANT_ID` when using such an alias: the alias would inherit it next to `tenant_name`, and authentication fails with "You must provide at most one of ProjectID or ProjectName in a Scope". Destroying the resource rejects the image, since a member cannot remove itself. Do not combine it with `status` on `pcd_images_image_access` for the same membership: each would undo the other's status.
+Accepts or rejects an image another project shared with this one: the member's side of PCD image sharing (the UI's "Accept Shared Images"). Glance lets only the member project (or an admin) decide, so use it under a provider scoped to the member project, for example a second `provider "pcd"` block with an `alias` and that project's `tenant_id` or `tenant_name` (both work). Give the alias literal values or variables: an auth setting that is unknown at plan time (a value from a resource in the same configuration) is ignored, and the provider falls back to the `OS_*` environment without an error. Destroying the resource rejects the image, since a member cannot remove itself. Do not combine it with `status` on `pcd_images_image_access` for the same membership: each would undo the other's status.
 
 ## Example Usage
 
 ```terraform
 # The member project's configuration: a provider scoped to that project
-# accepts an image another project shared with it. Use literal values or
+# accepts an image another project shared with it. The alias may set the
+# project's tenant_id or tenant_name (both work). Use literal values or
 # variables for the alias's settings, not attributes of resources in the same
-# configuration; the other settings come from the OS_* environment, which must
-# not export OS_PROJECT_ID or OS_TENANT_ID next to the alias's tenant_name.
+# configuration; the other settings come from the OS_* environment.
 provider "pcd" {
   alias       = "team_b"
   tenant_name = "team-b"

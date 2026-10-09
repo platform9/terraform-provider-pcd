@@ -114,10 +114,6 @@ func TestAccImagesImageAccessAccept_crossProject(t *testing.T) {
 	if projectID == "" {
 		t.Skip("PCD_ACC_SECOND_PROJECT_ID not set; skipping the cross-project image share")
 	}
-	if os.Getenv("OS_PROJECT_ID") != "" || os.Getenv("OS_TENANT_ID") != "" {
-		t.Skip("OS_PROJECT_ID or OS_TENANT_ID is exported: the consumer provider would inherit it next to " +
-			"tenant_name and fail to authenticate; unset both to run the cross-project image share")
-	}
 	acctest.PreCheck(t)
 	identity, err := acctest.LabConfig(t).IdentityV3Client()
 	if err != nil {

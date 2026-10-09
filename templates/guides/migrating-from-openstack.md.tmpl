@@ -106,9 +106,10 @@ A few resources differ slightly from their upstream counterparts:
 - **`pcd_images_image`** `visibility` — left unset, it takes Glance's default, `shared`
   (upstream defaults to `private`), so the image can take members without setting it.
 - **`pcd_images_image_access` and `pcd_images_image_access_accept`** — an existing membership
-  is adopted instead of failing, and a 403 on destroy (the image is no longer shared) is a
-  warning. With `member_id` omitted, the accept resource uses the image's only visible member,
-  as upstream does, and falls back to the provider's own project where upstream fails.
+  is adopted instead of failing, and a 403 on destroy (the image is no longer shared with, or
+  visible to, the provider's project) is a warning. With `member_id` omitted, the accept
+  resource uses the image's only visible member, as upstream does, and falls back to the
+  provider's own project where upstream fails.
 - **`pcd_networking_floatingip`** — allocate from an external network by its name
   via `pool`, exactly as upstream.
 - **`pcd_lb_loadbalancer`** and the LB tree — PCD ships only the **OVN** Octavia provider,
