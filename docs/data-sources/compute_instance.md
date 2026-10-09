@@ -14,7 +14,9 @@ Look up an existing instance by ID or by exact name, including one Terraform doe
 
 ```terraform
 # Look up an instance Terraform does not manage, then attach a floating IP to
-# its first port.
+# its port on the network named "app-net". Select a port by network rather than
+# by index: ports created in the same second are ordered by port ID, not by the
+# order the instance was booted with.
 data "pcd_compute_instance" "web" {
   name = "web-01"
 }
@@ -25,7 +27,7 @@ resource "pcd_networking_floatingip" "web" {
 
 resource "pcd_networking_floatingip_associate" "web" {
   floating_ip_id = pcd_networking_floatingip.web.id
-  port_id        = data.pcd_compute_instance.web.network[0].port
+  port_id        = one([for n in data.pcd_compute_instance.web.network : n.port if n.name == "app-net"])
 }
 ```
 
@@ -46,7 +48,7 @@ resource "pcd_networking_floatingip_associate" "web" {
 - `availability_zone` (String) The availability zone.
 - `created` (String) When the instance was created (RFC3339).
 - `flavor_id` (String) The flavor ID.
-- `flavor_name` (String) The flavor name; `""` when the flavor has been deleted.
+- `flavor_name` (String) The flavor name; `""` when the flavor has been deleted or is a private flavor the caller cannot see (Nova answers both with a 404).
 - `host` (String) The compute host the instance runs on (Nova's `OS-EXT-SRV-ATTR:host`; on PCD, the host's ID). `""` when the cloud's policy does not show it to the caller, which by default means a caller without the admin role.
 - `hypervisor_hostname` (String) The hostname of the hypervisor the instance runs on; `""` when the cloud's policy does not show it to the caller, as for `host`.
 - `id` (String) The instance ID.
@@ -55,7 +57,7 @@ resource "pcd_networking_floatingip_associate" "web" {
 - `key_pair` (String) The key pair injected at boot; `""` when none.
 - `metadata` (Map of String) The instance metadata, without the `migration-priority` key.
 - `migration_priority` (String) The Dynamic Resource Rebalancing priority (`normal`, `low`, `high` or `never`); `""` when unset.
-- `network` (Attributes List) The instance's ports, in order of creation (so `network[0]` stays the same across reads), with the network each is on. `port` is what `pcd_networking_floatingip_associate` and `pcd_networking_port_secgroup_associate` take. (see [below for nested schema](#nestedatt--network))
+- `network` (Attributes List) The instance's ports, oldest first, with the network each is on, in an order that stays the same across reads. Neutron records creation times to the second, so ports created in the same second, as the ports Nova creates at boot often are, are ordered by port ID rather than boot order: on an instance with several ports, select the entry by `uuid` or `name` rather than by index. `port` is what `pcd_networking_floatingip_associate` and `pcd_networking_port_secgroup_associate` take. (see [below for nested schema](#nestedatt--network))
 - `security_groups` (Set of String) The names of the security groups on the instance's ports.
 - `status` (String) The Nova status, as `pcd_compute_instance` reports it (for example `ACTIVE`, `SHUTOFF`, `ERROR`).
 - `tags` (Set of String) The server tags.

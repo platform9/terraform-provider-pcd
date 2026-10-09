@@ -129,9 +129,10 @@ func (d *instanceDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 			"image_id": computed("The image the instance was booted from; `\"\"` for an instance booted from a volume."),
 			"image_name": computed("The name of `image_id`; `\"\"` when the instance was booted from a volume, the image " +
 				"is gone, or Glance cannot be reached."),
-			"flavor_id":   computed("The flavor ID."),
-			"flavor_name": computed("The flavor name; `\"\"` when the flavor has been deleted."),
-			"key_pair":    computed("The key pair injected at boot; `\"\"` when none."),
+			"flavor_id": computed("The flavor ID."),
+			"flavor_name": computed("The flavor name; `\"\"` when the flavor has been deleted or is a private flavor " +
+				"the caller cannot see (Nova answers both with a 404)."),
+			"key_pair": computed("The key pair injected at boot; `\"\"` when none."),
 			"security_groups": schema.SetAttribute{Computed: true, ElementType: types.StringType,
 				MarkdownDescription: "The names of the security groups on the instance's ports."},
 			"availability_zone": computed("The availability zone."),
@@ -154,8 +155,11 @@ func (d *instanceDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 			"updated": computed("When the instance last changed (RFC3339)."),
 			"network": schema.ListNestedAttribute{
 				Computed: true,
-				MarkdownDescription: "The instance's ports, in order of creation (so `network[0]` stays the same across " +
-					"reads), with the network each is on. `port` is what `pcd_networking_floatingip_associate` and " +
+				MarkdownDescription: "The instance's ports, oldest first, with the network each is on, in an order " +
+					"that stays the same across reads. Neutron records creation times to the second, so ports created " +
+					"in the same second, as the ports Nova creates at boot often are, are ordered by port ID rather " +
+					"than boot order: on an instance with several ports, select the entry by `uuid` or `name` rather " +
+					"than by index. `port` is what `pcd_networking_floatingip_associate` and " +
 					"`pcd_networking_port_secgroup_associate` take.",
 				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
 					"uuid":        computed("The network ID."),
@@ -296,7 +300,11 @@ func lookupInstance(ctx context.Context, client *gophercloud.ServiceClient, cfg 
 	}
 	pages, err := servers.List(client, opts).AllPages(ctx)
 	if err != nil {
-		diags.AddError("compute: listing instances", err.Error())
+		detail := err.Error()
+		if opts.AllTenants && gophercloud.ResponseCodeIs(err, http.StatusForbidden) {
+			detail += "\n\n`project_id` needs the admin role."
+		}
+		diags.AddError("compute: listing instances", detail)
 		return nil
 	}
 	all, err := servers.ExtractServers(pages)
@@ -343,7 +351,8 @@ type instanceNIC struct {
 
 // instanceNICs lists the instance's ports oldest first (ties by port ID), so
 // network[0] does not move between reads; Neutron's list order and Go's map
-// order are not stable. Each port's network name comes from Nova's addresses,
+// order are not stable. Neutron's created_at has whole seconds, so ports Nova
+// creates at boot often tie, and the port ID order is not the boot order. Each port's network name comes from Nova's addresses,
 // which are keyed by network name and carry each address's MAC.
 func instanceNICs(addresses map[string]any, portList []ports.Port) []instanceNIC {
 	netByMAC := map[string]string{}

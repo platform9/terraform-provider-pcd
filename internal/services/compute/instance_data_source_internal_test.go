@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -61,6 +62,7 @@ type instanceDSAPI struct {
 	mu         sync.Mutex
 	server     string // GET /servers/srv-1
 	list       string // GET /servers/detail
+	listStatus int    // status for GET /servers/detail; 0 answers list
 	flavor     int    // status for GET /flavors/flv-1
 	flavorBody string // body for GET /flavors/flv-1 when flavor is 0; "" is m1.small
 	image      int    // status for GET /v2/images/img-1
@@ -88,6 +90,11 @@ func (a *instanceDSAPI) serve(t *testing.T) *httptest.Server {
 			fmt.Fprintf(w, `{"server": %s}`, a.server)
 		case "GET /servers/detail":
 			a.listQuery = r.URL.Query()
+			if a.listStatus != 0 {
+				w.WriteHeader(a.listStatus)
+				fmt.Fprint(w, `{"forbidden": {"code": 403}}`)
+				return
+			}
 			fmt.Fprintf(w, `{"servers": [%s]}`, a.list)
 		case "GET /flavors/flv-1":
 			if a.flavor != 0 {
@@ -319,6 +326,7 @@ func TestInstanceDataSourceLookupErrors(t *testing.T) {
 		api         *instanceDSAPI
 		set         map[string]string
 		wantSummary string
+		wantDetail  []string // substrings the error's detail must hold
 	}{
 		{name: "no key", api: &instanceDSAPI{}, set: map[string]string{}, wantSummary: "Missing lookup key"},
 		{name: "no match", api: &instanceDSAPI{list: instanceDSServerJSON("srv-2", "web-2", "ACTIVE", "")}, set: map[string]string{"name": "web"}, wantSummary: "No instance found"},
@@ -328,6 +336,7 @@ func TestInstanceDataSourceLookupErrors(t *testing.T) {
 		{name: "other project", api: &instanceDSAPI{server: instanceDSServerJSON("srv-1", "web", "ACTIVE", "")}, set: map[string]string{"instance_id": "srv-1", "project_id": "p-9"}, wantSummary: "Instance is in another project"},
 		{name: "answer without the server", api: &instanceDSAPI{server: "null"}, set: map[string]string{"instance_id": "srv-1"}, wantSummary: "compute: reading instance"},
 		{name: "answer without the flavor", api: &instanceDSAPI{server: instanceDSServerJSON("srv-1", "web", "ACTIVE", ""), flavorBody: "{}"}, set: map[string]string{"instance_id": "srv-1"}, wantSummary: "compute: reading the instance's flavor"},
+		{name: "project filter forbidden", api: &instanceDSAPI{listStatus: http.StatusForbidden}, set: map[string]string{"name": "web", "project_id": "p-9"}, wantSummary: "compute: listing instances", wantDetail: []string{"403", "`project_id` needs the admin role"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := tc.api.serve(t)
@@ -335,6 +344,11 @@ func TestInstanceDataSourceLookupErrors(t *testing.T) {
 			resp, _ := instanceDSRead(ctx, t, d, tc.set)
 			if !resp.Diagnostics.HasError() || resp.Diagnostics.Errors()[0].Summary() != tc.wantSummary {
 				t.Fatalf("diagnostics = %v, want an error %q", resp.Diagnostics, tc.wantSummary)
+			}
+			for _, want := range tc.wantDetail {
+				if detail := resp.Diagnostics.Errors()[0].Detail(); !strings.Contains(detail, want) {
+					t.Errorf("detail = %q, want it to contain %q", detail, want)
+				}
 			}
 		})
 	}
