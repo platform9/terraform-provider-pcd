@@ -86,6 +86,7 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		blockstorage.NewVolumeResource,
 		blockstorage.NewQuotasetResource,
 		blockstorage.NewVolumeTypeResource,
+		blockstorage.NewVolumeTypeAccessResource,
 		blockstorage.NewSnapshotResource,
 		blockstorage.NewBackupResource,
 		loadbalancer.NewLoadBalancerResource,

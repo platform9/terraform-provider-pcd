@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`pcd_blockstorage_volume_type_access`**, a new resource that grants one project access to
+  one private volume type, as the PCD UI's tenant list on a volume type does. Cinder grants no
+  project access to a private type, not even the one that created it, so until now a type with
+  `is_public = false` was usable only by admins; the `is_public` description of
+  `pcd_blockstorage_volume_type` now points to the new resource. A grant that already exists is
+  adopted rather than failing the apply, so destroying the resource revokes it. A grant revoked
+  outside Terraform, or whose type was deleted or made public, is dropped from state on the next
+  refresh, and destroying a grant on a type that has since become public succeeds with a
+  warning. Needs the admin role. Same attributes and import ID (`<volume_type_id>/<project_id>`)
+  as terraform-provider-openstack's `openstack_blockstorage_volume_type_access_v3`, whose refresh
+  failed instead when the grant was gone.
+
 ## [0.1.17] - 2026-10-09
 
 ### Added

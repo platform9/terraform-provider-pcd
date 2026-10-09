@@ -119,6 +119,7 @@ ID alone.
 | Resource | Import ID | Where to find it |
 |---|---|---|
 | `pcd_blockstorage_volume_type` | `<volume_type_id>` | `pcdctl volume type list` |
+| `pcd_blockstorage_volume_type_access` | `<volume_type_id>/<project_id>` | `pcdctl volume type list --private`; `pcdctl project list` |
 | `pcd_blockstorage_volume` | `<id>` | `pcdctl volume list` |
 | `pcd_blockstorage_snapshot` | `<snapshot_id>` | `pcdctl volume snapshot list` |
 | `pcd_blockstorage_volume_backup` | `<backup_id>` | `pcdctl volume backup list` |
