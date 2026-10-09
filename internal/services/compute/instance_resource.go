@@ -392,8 +392,9 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 					"Mirrors `openstack_compute_instance_v2`. Use it to boot from a new volume, an existing volume, or a volume " +
 					"snapshot, to install from an ISO, or to attach extra disks at boot. The device with `boot_index = 0` is the " +
 					"root disk; when one is present `image_id`/`image_name` may be omitted. Changing this forces a new resource, with " +
-					"one exception: a new `uuid` on the root device whose `source_type` is `image` **rebuilds the instance in place** " +
-					"from that image. For a root volume (`destination_type = \"volume\"`), Nova has Cinder rewrite the volume from the " +
+					"one exception: a new `uuid` on the root device whose `source_type` is `image` and whose `destination_type` is " +
+					"`volume` (the default) **rebuilds the instance in place** from that image; a root with " +
+					"`destination_type = \"local\"` still forces a new resource. Nova has Cinder rewrite the root volume from the " +
 					"image (compute microversion 2.93): the volume, the instance ID, ports and IP addresses, other volumes, metadata, key " +
 					"pair and user data are kept, and the volume's data is erased. Refresh does not read `block_device` back, so a reimage " +
 					"of the root volume done outside Terraform does not show as drift. Attach/detach volumes on a running instance with " +
@@ -411,8 +412,8 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 					"disk_bus":              schema.StringAttribute{Optional: true, MarkdownDescription: "The bus to attach the device on (e.g. `virtio`, `scsi`, `ide`)."},
 				}},
 				PlanModifiers: []planmodifier.List{listplanmodifier.RequiresReplaceIf(blockDeviceRequiresReplace,
-					"Changing block_device forces a new resource, except a new uuid on the root device whose source is an image, which rebuilds the instance in place.",
-					"Changing `block_device` forces a new resource, except a new `uuid` on the root device (`boot_index = 0`, `source_type = \"image\"`), which rebuilds the instance in place.")},
+					"Changing block_device forces a new resource, except a new uuid on the root device whose source_type is image and whose destination_type is volume (the default), which rebuilds the instance in place; a root with destination_type = \"local\" still forces a new resource.",
+					"Changing `block_device` forces a new resource, except a new `uuid` on the root device (`boot_index = 0`) whose `source_type` is `image` and whose `destination_type` is `volume` (the default), which rebuilds the instance in place; a root with `destination_type = \"local\"` still forces a new resource.")},
 			},
 			"scheduler_hints": schema.ListNestedBlock{
 				MarkdownDescription: "Scheduler hints passed to Nova at boot (`os:scheduler_hints`). Mirrors " +

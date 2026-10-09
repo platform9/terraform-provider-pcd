@@ -274,25 +274,40 @@ func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *go
 	}
 	if volumeBacked {
 		// Nova keeps no image on a volume-backed server; Cinder records the
-		// image a volume was last written from.
+		// image a volume was last written from. Nova's rebuild writes only
+		// the root volume, so any bootable volume that holds the new image
+		// confirms it, without telling the root from a data volume.
+		var bootable []bootableVolume
 		bs, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
+		if err == nil {
+			bootable, err = bootableVolumes(ctx, bs, server)
+		}
 		if err != nil {
-			diags.AddError("compute: building block storage v3 client", err.Error())
-			return ""
+			diags.AddWarning("compute: could not confirm the reimaged root volume",
+				fmt.Sprintf("Nova reported the rebuild of instance %s finished, but reading its volumes failed: %v. Check the root volume's image in Cinder.",
+					id, err))
+			setPlannedImageID(plan, current)
+			return server.Status
 		}
-		root, err := rootVolume(ctx, bs, server)
-		if err != nil {
-			diags.AddError("compute: checking the reimaged root volume", err.Error())
-			return ""
+		held := make([]string, 0, len(bootable))
+		for _, b := range bootable {
+			got := b.volume.VolumeImageMetadata["image_id"]
+			if got == target {
+				setPlannedImageID(plan, current)
+				return server.Status
+			}
+			if got == "" {
+				got = "no image"
+			}
+			held = append(held, b.volume.ID+": "+got)
 		}
-		if got := root.VolumeImageMetadata["image_id"]; got != target {
-			diags.AddError("compute: rebuilding instance",
-				fmt.Sprintf("Nova finished the rebuild of instance %s, but its root volume %s holds image %q instead of %q. Nova's last fault: %q.",
-					id, root.ID, got, target, server.Fault.Message))
-			return ""
+		if len(held) == 0 {
+			held = append(held, "no bootable volume attached")
 		}
-		setPlannedImageID(plan, current)
-		return server.Status
+		diags.AddError("compute: rebuilding instance",
+			fmt.Sprintf("Nova finished the rebuild of instance %s, but none of its bootable volumes holds image %q (%s). Nova's last fault: %q.",
+				id, target, strings.Join(held, ", "), server.Fault.Message))
+		return ""
 	}
 	if got := serverImageID(server); got != target {
 		diags.AddError("compute: rebuilding instance",
@@ -375,7 +390,7 @@ func (r *instanceResource) refreshImageName(ctx context.Context, m *instanceMode
 }
 
 // blockDeviceRequiresReplace lets one block_device change through without
-// replacing the instance: a new uuid on the root device (boot_index 0) whose
+// replacing the instance: a new uuid on the root volume (boot_index 0) whose
 // source is an image, with every other field and device unchanged. Update
 // rebuilds the instance with that image. Any other change replaces it, as it
 // did before.
@@ -415,10 +430,13 @@ func blockDeviceRequiresReplace(ctx context.Context, req planmodifier.ListReques
 	resp.RequiresReplace = !blockDeviceEqual(p, s)
 }
 
-// isImageRoot reports whether a block_device is the root disk written from
-// an image.
+// isImageRoot reports whether a block_device is the root volume written from
+// an image. A null destination_type is a volume, as Create defaults it. A
+// local (ephemeral) root written from an image is image-backed in Nova's
+// terms, so a new image on it keeps replacing the instance.
 func isImageRoot(m instanceBlockDeviceModel) bool {
 	return m.SourceType.ValueString() == string(servers.SourceImage) &&
+		m.DestinationType.ValueString() != string(servers.DestinationLocal) &&
 		!m.BootIndex.IsNull() && !m.BootIndex.IsUnknown() && m.BootIndex.ValueInt64() == 0
 }
 
@@ -450,12 +468,19 @@ func rootImageChange(ctx context.Context, planList, stateList types.List, diags 
 	return "", false
 }
 
-// rootVolume finds the volume a server boots from. Cinder marks it bootable,
-// and Nova names the root disk first (vda before vdb), which separates it
-// from a bootable data volume.
-func rootVolume(ctx context.Context, bs *gophercloud.ServiceClient, server *servers.Server) (*volumes.Volume, error) {
-	var root *volumes.Volume
-	rootDevice := ""
+// bootableVolume is a volume attached to a server that Cinder marks bootable,
+// with the device it is attached on for that server ("" when Cinder names
+// none).
+type bootableVolume struct {
+	volume *volumes.Volume
+	device string
+}
+
+// bootableVolumes reads every volume attached to server and returns the ones
+// Cinder marks bootable. Cinder marks every volume written from an image
+// bootable, so a data volume can be among them.
+func bootableVolumes(ctx context.Context, bs *gophercloud.ServiceClient, server *servers.Server) ([]bootableVolume, error) {
+	var bootable []bootableVolume
 	for _, attached := range server.AttachedVolumes {
 		v, err := volumes.Get(ctx, bs, attached.ID).Extract()
 		if err != nil {
@@ -473,12 +498,79 @@ func rootVolume(ctx context.Context, bs *gophercloud.ServiceClient, server *serv
 				device = a.Device
 			}
 		}
-		if root == nil || (device != "" && (rootDevice == "" || device < rootDevice)) {
-			root, rootDevice = v, device
-		}
+		bootable = append(bootable, bootableVolume{volume: v, device: device})
 	}
-	if root == nil {
+	return bootable, nil
+}
+
+// rootVolume finds the volume a server boots from among its bootable
+// volumes. When Nova reports the server's root device name (from compute
+// microversion 2.3 on, to a caller its policy allows), the root is the
+// bootable volume on that device. Otherwise a single bootable volume is the
+// root, and among several on one bus the root is the first device name,
+// because Nova names the root first on its bus (vda before vdb). Bootable
+// volumes on different buses cannot be told apart that way (a scsi sda sorts
+// before a virtio vda), so rootVolume refuses them rather than guess.
+func rootVolume(ctx context.Context, bs *gophercloud.ServiceClient, server *servers.Server) (*volumes.Volume, error) {
+	candidates, err := bootableVolumes(ctx, bs, server)
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("instance %s has no bootable volume attached", server.ID)
 	}
-	return root, nil
+	if server.RootDeviceName != nil && *server.RootDeviceName != "" {
+		want := strings.TrimPrefix(*server.RootDeviceName, "/dev/")
+		for _, c := range candidates {
+			if strings.TrimPrefix(c.device, "/dev/") == want {
+				return c.volume, nil
+			}
+		}
+		return nil, fmt.Errorf("instance %s: Nova reports its root device as %s, but no bootable attached volume is on it (candidates: %s)",
+			server.ID, *server.RootDeviceName, describeBootable(candidates))
+	}
+	if len(candidates) == 1 {
+		return candidates[0].volume, nil
+	}
+	root, bus := candidates[0], deviceBus(candidates[0].device)
+	for _, c := range candidates[1:] {
+		if bus == "" || deviceBus(c.device) != bus {
+			return nil, fmt.Errorf("instance %s has %d bootable volumes attached on different buses (%s), and Nova did not "+
+				"report its root device, so the root cannot be told from a data volume; reimage it by changing the root "+
+				"block_device uuid of its pcd_compute_instance instead", server.ID, len(candidates), describeBootable(candidates))
+		}
+		if c.device < root.device {
+			root = c
+		}
+	}
+	return root.volume, nil
+}
+
+// deviceBus returns the bus prefix of a device name in the form Nova gives
+// it, the name without its trailing drive letters: "vd" for /dev/vda, "sd"
+// for /dev/sdb, "xvd" for /dev/xvdc. A name in any other form, or none,
+// returns "", which matches no other device.
+func deviceBus(device string) string {
+	name := strings.TrimPrefix(device, "/dev/")
+	for _, prefix := range []string{"xvd", "vd", "sd", "hd"} {
+		letters, ok := strings.CutPrefix(name, prefix)
+		if ok && letters != "" && strings.Trim(letters, "abcdefghijklmnopqrstuvwxyz") == "" {
+			return prefix
+		}
+	}
+	return ""
+}
+
+// describeBootable lists bootable volumes for an error: "vol-1 on /dev/vda,
+// vol-2 on /dev/sda".
+func describeBootable(candidates []bootableVolume) string {
+	parts := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if c.device == "" {
+			parts = append(parts, c.volume.ID+" (no device)")
+			continue
+		}
+		parts = append(parts, c.volume.ID+" on "+c.device)
+	}
+	return strings.Join(parts, ", ")
 }

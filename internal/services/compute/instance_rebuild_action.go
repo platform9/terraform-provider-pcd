@@ -58,7 +58,7 @@ func (a *instanceRebuildAction) Schema(_ context.Context, _ action.SchemaRequest
 			"its golden image. Nothing in Terraform state changes, so the action can run again at any time. To move an " +
 			"instance to a different image, change `image_id` or `image_name` on `pcd_compute_instance` instead, which " +
 			"rebuilds it in place. For an instance that boots from a volume, the image is the one its root volume was " +
-			"created from, and Nova has Cinder rewrite the volume (compute microversion 2.93). The instance must be " +
+			"last written from, and Nova has Cinder rewrite the volume (compute microversion 2.93). The instance must be " +
 			"`ACTIVE`, `SHUTOFF` or in `ERROR` with no task in progress; a stopped instance is stopped again afterward.",
 		Attributes: map[string]schema.Attribute{
 			"instance_id": schema.StringAttribute{

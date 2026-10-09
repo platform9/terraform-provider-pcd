@@ -110,8 +110,8 @@ A few resources differ slightly from their upstream counterparts:
   do L7.
 - **`pcd_compute_instance`** — as upstream, changing `image_id` or `image_name` rebuilds the
   instance in place. In addition, a new `uuid` on the root `block_device` (`boot_index = 0`,
-  `source_type = "image"`) also rebuilds it in place, reimaging a root volume through Cinder,
-  where upstream replaces the instance.
+  `source_type = "image"`, `destination_type = "volume"`) also rebuilds it in place, reimaging
+  the root volume through Cinder, where upstream replaces the instance.
 
 ## Moving existing infrastructure
 

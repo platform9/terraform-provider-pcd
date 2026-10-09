@@ -67,10 +67,11 @@ All notable changes to this project are documented here. The format is based on
   used to replace the instance; it now rebuilds it, and Nova has Cinder rewrite the root volume from the new
   image (compute microversion 2.93). The volume, the instance ID, its ports and addresses, its other volumes,
   its metadata, key pair and user data are kept; the root volume's data is erased. The plan shows
-  `~ update in-place`. Any other change to `block_device` still replaces the instance. Refresh does not read
-  `block_device` back, so a reimage of the root volume done outside Terraform does not show as drift. The
-  `pcd_compute_instance_rebuild` action now also reimages an instance that boots from a volume, with the image
-  its root volume was created from.
+  `~ update in-place`. Any other change to `block_device` still replaces the instance, and a root device with
+  `destination_type = "local"` still forces replacement. Refresh does not read `block_device` back, so a
+  reimage of the root volume done outside Terraform does not show as drift. The `pcd_compute_instance_rebuild`
+  action now also reimages an instance that boots from a volume, with the image its root volume was last
+  written from.
 
 ## [0.1.16] - 2026-10-08
 

@@ -12,6 +12,8 @@ import (
 
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -31,6 +33,12 @@ func volumeRebuildServerJSON(status, task string) string {
 		"image": "", "metadata": {}, "addresses": {}, "security_groups": [{"name": "default"}],
 		"OS-EXT-AZ:availability_zone": "nova", "os-extended-volumes:volumes_attached": [{"id": "vol-data"}, {"id": "vol-root"}],
 		"fault": {"message": "reimage failed"}}}`, status, taskJSON)
+}
+
+// withRootDeviceName adds the root device name Nova reports to an admin to a
+// rendered server.
+func withRootDeviceName(server, device string) string {
+	return strings.Replace(server, `"image": "",`, fmt.Sprintf(`"image": "", "OS-EXT-SRV-ATTR:root_device_name": %q,`, device), 1)
 }
 
 // cinderVolumeJSON renders GET /volumes/<id> for a volume attached to srv-1.
@@ -116,6 +124,41 @@ func TestBlockDeviceRequiresReplace(t *testing.T) {
 	isoRoot := blockDeviceList(t, map[string]attr.Value{"boot_index": types.Int64Value(1), "device_type": types.StringValue("cdrom")})
 	if !requiresReplace(t, blockDeviceList(t, map[string]attr.Value{"boot_index": types.Int64Value(1), "device_type": types.StringValue("cdrom"), "uuid": types.StringValue("iso-2")}), isoRoot) {
 		t.Error("a new image on a non-root device must replace the instance")
+	}
+	localRoot := blockDeviceList(t, map[string]attr.Value{"destination_type": types.StringValue("local")})
+	if !requiresReplace(t, blockDeviceList(t, map[string]attr.Value{"destination_type": types.StringValue("local"), "uuid": types.StringValue("img-2")}), localRoot) {
+		t.Error("a new image on a local root must replace the instance")
+	}
+	defaultRoot := blockDeviceList(t, map[string]attr.Value{"destination_type": types.StringNull()})
+	if requiresReplace(t, blockDeviceList(t, map[string]attr.Value{"destination_type": types.StringNull(), "uuid": types.StringValue("img-2")}), defaultRoot) {
+		t.Error("a new image on a root whose destination_type defaults to volume must rebuild it in place")
+	}
+}
+
+// Update reimages only a root volume: a new image on a local root has
+// already been planned as a replacement.
+func TestRootImageChange(t *testing.T) {
+	rebuildFastPolls(t)
+	for _, tc := range []struct {
+		name    string
+		dest    types.String
+		image   string
+		changed bool
+	}{
+		{"root volume", types.StringValue("volume"), "img-2", true},
+		{"destination_type defaults to volume", types.StringNull(), "img-2", true},
+		{"local root", types.StringValue("local"), "", false},
+	} {
+		var diags diag.Diagnostics
+		state := blockDeviceList(t, map[string]attr.Value{"destination_type": tc.dest})
+		plan := blockDeviceList(t, map[string]attr.Value{"destination_type": tc.dest, "uuid": types.StringValue("img-2")})
+		image, changed := rootImageChange(context.Background(), plan, state, &diags)
+		if diags.HasError() {
+			t.Fatalf("%s: %v", tc.name, diags)
+		}
+		if image != tc.image || changed != tc.changed {
+			t.Errorf("%s: rootImageChange = (%q, %v), want (%q, %v)", tc.name, image, changed, tc.image, tc.changed)
+		}
 	}
 }
 
@@ -262,25 +305,216 @@ func TestUpdateImageIDOnVolumeBackedInstance(t *testing.T) {
 	}
 }
 
-// The root volume is the bootable one with the first device name.
+// The root volume is the bootable volume on the root device Nova reports.
+// Without it, it is the only bootable volume, or the first device name when
+// every bootable volume is on one bus; bootable volumes on different buses
+// cannot be told apart.
 func TestRootVolume(t *testing.T) {
+	rebuildFastPolls(t)
 	f := &rebuildFake{t: t, volumes: map[string]string{
-		"vol-a": cinderVolumeJSON("vol-a", "true", "/dev/vdb", "img-data"),
-		"vol-b": cinderVolumeJSON("vol-b", "false", "/dev/vdc", ""),
-		"vol-c": cinderVolumeJSON("vol-c", "true", "/dev/vda", "img-root"),
+		"vol-root":  cinderVolumeJSON("vol-root", "true", "/dev/vda", "img-root"),
+		"vol-vdb":   cinderVolumeJSON("vol-vdb", "true", "/dev/vdb", "img-data"),
+		"vol-scsi":  cinderVolumeJSON("vol-scsi", "true", "/dev/sda", "img-data"),
+		"vol-plain": cinderVolumeJSON("vol-plain", "false", "/dev/vdc", ""),
 	}}
 	cfg := f.start().config
 	bs, err := cfg.BlockStorageV3Client()
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &servers.Server{ID: "srv-1", AttachedVolumes: []servers.AttachedVolume{{ID: "vol-a"}, {ID: "vol-b"}, {ID: "vol-c"}}}
-	root, err := rootVolume(context.Background(), bs, server)
-	if err != nil || root.ID != "vol-c" {
-		t.Fatalf("root %v, err %v; want vol-c", root, err)
+	device := func(name string) *string { return &name }
+	for _, tc := range []struct {
+		name       string
+		attached   []string
+		rootDevice *string
+		want       string   // the root volume's ID; "" wants an error
+		errHas     []string // what the error must name
+	}{
+		{"Nova's root device, although a bootable scsi volume sorts first", []string{"vol-scsi", "vol-root"}, device("/dev/vda"), "vol-root", nil},
+		{"Nova's root device without /dev/", []string{"vol-scsi", "vol-root"}, device("vda"), "vol-root", nil},
+		{"Nova's root device on no bootable volume", []string{"vol-scsi", "vol-plain"}, device("/dev/vdc"), "", []string{"/dev/vdc", "vol-scsi"}},
+		{"one bootable volume", []string{"vol-plain", "vol-scsi"}, nil, "vol-scsi", nil},
+		{"one bus: the first device name", []string{"vol-vdb", "vol-plain", "vol-root"}, nil, "vol-root", nil},
+		{"different buses", []string{"vol-scsi", "vol-root"}, nil, "", []string{"2 bootable volumes", "different buses", "vol-scsi", "vol-root"}},
+		{"no bootable volume", []string{"vol-plain"}, nil, "", []string{"no bootable volume"}},
+	} {
+		server := &servers.Server{ID: "srv-1", RootDeviceName: tc.rootDevice}
+		for _, id := range tc.attached {
+			server.AttachedVolumes = append(server.AttachedVolumes, servers.AttachedVolume{ID: id})
+		}
+		root, err := rootVolume(context.Background(), bs, server)
+		if tc.want == "" {
+			if err == nil {
+				t.Errorf("%s: root %s, want an error", tc.name, root.ID)
+				continue
+			}
+			for _, want := range tc.errHas {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%s: error %q does not name %q", tc.name, err, want)
+				}
+			}
+			continue
+		}
+		if err != nil || root.ID != tc.want {
+			t.Errorf("%s: root %v, err %v; want %s", tc.name, root, err, tc.want)
+		}
 	}
-	if _, err := rootVolume(context.Background(), bs, &servers.Server{ID: "srv-1", AttachedVolumes: []servers.AttachedVolume{{ID: "vol-b"}}}); err == nil {
-		t.Error("found a root volume among non-bootable volumes")
+}
+
+// Nova's root device name picks the volume the action reimages and its image,
+// although a bootable data volume on another bus sorts first.
+func TestInstanceRebuildActionUsesNovaRootDevice(t *testing.T) {
+	rebuildFastPolls(t)
+	server := withRootDeviceName(volumeRebuildServerJSON("ACTIVE", ""), "/dev/vda")
+	f := &rebuildFake{t: t, before: server, after: []string{server},
+		images: map[string]string{
+			"img-1": rebuildImageJSON("img-1", "cirros", ""),
+			"img-x": rebuildImageJSON("img-x", "data", ""),
+		},
+		volumes: map[string]string{
+			"vol-data": cinderVolumeJSON("vol-data", "true", "/dev/sda", "img-x"),
+			"vol-root": cinderVolumeJSON("vol-root", "true", "/dev/vda", "img-1"),
+		},
+	}
+	resp, _ := invokeRebuildAction(t, f)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("invoke: %v", resp.Diagnostics)
+	}
+	if len(f.rebuilds) != 1 {
+		t.Fatalf("rebuilds %v, want one", f.rebuilds)
+	}
+	body, _ := json.Marshal(f.rebuilds[0])
+	if string(body) != `{"rebuild":{"imageRef":"img-1"}}` || f.versions[0] != "2.93" {
+		t.Errorf("rebuild body %s at %q, want img-1 at 2.93", body, f.versions[0])
+	}
+}
+
+// Without Nova's root device, bootable volumes on different buses leave the
+// root unknown: the action relays the error and sends no rebuild.
+func TestInstanceRebuildActionBootableVolumesOnDifferentBuses(t *testing.T) {
+	rebuildFastPolls(t)
+	f := &rebuildFake{t: t,
+		before: volumeRebuildServerJSON("ACTIVE", ""),
+		images: map[string]string{
+			"img-1": rebuildImageJSON("img-1", "cirros", ""),
+			"img-x": rebuildImageJSON("img-x", "data", ""),
+		},
+		volumes: map[string]string{
+			"vol-data": cinderVolumeJSON("vol-data", "true", "/dev/sda", "img-x"),
+			"vol-root": cinderVolumeJSON("vol-root", "true", "/dev/vda", "img-1"),
+		},
+	}
+	resp, _ := invokeRebuildAction(t, f)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("invoke succeeded; want the root volume refused as ambiguous")
+	}
+	if len(f.rebuilds) != 0 {
+		t.Fatalf("rebuilds %v were sent", f.rebuilds)
+	}
+	detail := resp.Diagnostics.Errors()[0].Detail()
+	for _, want := range []string{"vol-data", "vol-root", "different buses", "block_device"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("error %q does not mention %q", detail, want)
+		}
+	}
+}
+
+// reimageRootVolume runs Update on a volume-backed instance whose root
+// block_device changes from image img-1 to img-2.
+func reimageRootVolume(t *testing.T, f *rebuildFake) (resource.UpdateResponse, instanceModel) {
+	t.Helper()
+	r := f.start()
+	s := rebuildSchema(t)
+	state := rebuildTestModel(t, s, types.StringValue(""), types.StringNull())
+	state.BlockDevice = blockDeviceList(t, map[string]attr.Value{})
+	plan := rebuildTestModel(t, s, types.StringUnknown(), types.StringNull())
+	plan.BlockDevice = blockDeviceList(t, map[string]attr.Value{"uuid": types.StringValue("img-2")})
+	return rebuildUpdate(t, r, s, plan, state)
+}
+
+// Update confirms the reimage when a bootable volume holds the new image,
+// although a bootable data volume on another bus sorts first and Nova
+// reports no root device.
+func TestUpdateRootVolumeCheckWithBootableDataVolume(t *testing.T) {
+	rebuildFastPolls(t)
+	f := &rebuildFake{t: t,
+		before: volumeRebuildServerJSON("ACTIVE", ""),
+		after: []string{
+			volumeRebuildServerJSON("REBUILD", "rebuilding"),
+			volumeRebuildServerJSON("ACTIVE", ""),
+		},
+		images: map[string]string{"img-2": rebuildImageJSON("img-2", "ubuntu", "")},
+		volumes: map[string]string{
+			"vol-data": cinderVolumeJSON("vol-data", "true", "/dev/sda", "img-x"),
+			"vol-root": cinderVolumeJSON("vol-root", "true", "/dev/vda", "img-2"),
+		},
+	}
+	resp, _ := reimageRootVolume(t, f)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("update: %v", resp.Diagnostics)
+	}
+	if len(f.rebuilds) != 1 || f.versions[0] != "2.93" {
+		t.Fatalf("rebuilds %v at microversions %v; want one at 2.93", f.rebuilds, f.versions)
+	}
+}
+
+// A volume read that fails after Nova finished the reimage is a warning:
+// the rebuild happened, so the update succeeds and records the new image.
+func TestUpdateRootVolumeCheckReadFailure(t *testing.T) {
+	rebuildFastPolls(t)
+	f := &rebuildFake{t: t,
+		before: volumeRebuildServerJSON("ACTIVE", ""),
+		after: []string{
+			volumeRebuildServerJSON("REBUILD", "rebuilding"),
+			volumeRebuildServerJSON("ACTIVE", ""),
+		},
+		images: map[string]string{"img-2": rebuildImageJSON("img-2", "ubuntu", "")},
+		// vol-root answers 404.
+		volumes: map[string]string{"vol-data": cinderVolumeJSON("vol-data", "false", "/dev/vdb", "")},
+	}
+	resp, got := reimageRootVolume(t, f)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("update: %v", resp.Diagnostics)
+	}
+	warnings := resp.Diagnostics.Warnings()
+	if len(warnings) != 1 || warnings[0].Summary() != "compute: could not confirm the reimaged root volume" ||
+		!strings.Contains(warnings[0].Detail(), "vol-root") {
+		t.Fatalf("warnings %v, want one naming the volume that could not be read", warnings)
+	}
+	if len(f.rebuilds) != 1 || f.versions[0] != "2.93" {
+		t.Fatalf("rebuilds %v at microversions %v; want one at 2.93", f.rebuilds, f.versions)
+	}
+	var devices []instanceBlockDeviceModel
+	if d := got.BlockDevice.ElementsAs(context.Background(), &devices, false); d.HasError() {
+		t.Fatal(d)
+	}
+	if len(devices) != 1 || devices[0].UUID.ValueString() != "img-2" || got.ImageID.ValueString() != "" {
+		t.Errorf("state block_device %v, image_id %q; want the root on img-2 and image_id \"\"", devices, got.ImageID.ValueString())
+	}
+}
+
+// When no bootable volume holds the new image, the error lists the image
+// each one holds.
+func TestUpdateRootVolumeMismatchListsBootableVolumes(t *testing.T) {
+	rebuildFastPolls(t)
+	f := &rebuildFake{t: t,
+		before: volumeRebuildServerJSON("ACTIVE", ""),
+		after:  []string{volumeRebuildServerJSON("ACTIVE", "")},
+		images: map[string]string{"img-2": rebuildImageJSON("img-2", "ubuntu", "")},
+		volumes: map[string]string{
+			"vol-data": cinderVolumeJSON("vol-data", "true", "/dev/vdb", "img-x"),
+			"vol-root": cinderVolumeJSON("vol-root", "true", "/dev/vda", "img-1"),
+		},
+	}
+	resp, _ := reimageRootVolume(t, f)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("update succeeded although no volume holds the new image")
+	}
+	detail := resp.Diagnostics.Errors()[0].Detail()
+	for _, want := range []string{`"img-2"`, "vol-root: img-1", "vol-data: img-x", "reimage failed"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("error %q does not mention %q", detail, want)
+		}
 	}
 }
 
