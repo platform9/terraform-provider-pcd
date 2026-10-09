@@ -125,6 +125,7 @@ func (p *pcdProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		networking.NewFloatingIPDataSource,
 		networking.NewQoSPolicyDataSource,
 		compute.NewFlavorDataSource,
+		compute.NewInstanceDataSource,
 		compute.NewKeypairDataSource,
 		compute.NewAvailabilityZonesDataSource,
 		blockstorage.NewVolumeDataSource,

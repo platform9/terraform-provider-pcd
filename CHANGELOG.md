@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`pcd_compute_instance` data source**, which looks up an existing instance by `instance_id` or
+  by exact `name` (in another project with `project_id`, for admins), including one Terraform
+  does not manage, and reports its status, image, flavor, key pair, security groups, metadata,
+  tags, addresses and, in `network`, each port with its network, MAC and fixed addresses, so
+  `network[0].port` can feed `pcd_networking_floatingip_associate`. The ports are listed in
+  creation order, so `network[0]` and `access_ip_v4` do not move between plans. A name that
+  matches no instance, or several, is an error. Unlike terraform-provider-openstack's
+  `openstack_compute_instance_v2` data source, it looks up by name, fills each network's `uuid`
+  and `port`, and does not fail on statuses such as `SUSPENDED`; it has no `power_state` (use
+  `status` or `vm_state`).
+
 ## [0.1.17] - 2026-10-09
 
 ### Added
