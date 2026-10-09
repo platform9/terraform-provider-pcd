@@ -63,7 +63,9 @@ type rebuildFake struct {
 	volumes   map[string]string // GET /volumes/<id> bodies (Cinder)
 	rebuilds  []map[string]any  // every POST /servers/srv-1/action body: rebuilds and power actions
 	versions  []string          // X-OpenStack-Nova-API-Version of each action request
-	glance    int
+	// getVersions is the X-OpenStack-Nova-API-Version of each GET /servers/srv-1.
+	getVersions []string
+	glance      int
 }
 
 func (f *rebuildFake) handler(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +74,7 @@ func (f *rebuildFake) handler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch {
 	case r.Method == "GET" && r.URL.Path == "/servers/srv-1":
+		f.getVersions = append(f.getVersions, r.Header.Get("X-OpenStack-Nova-API-Version"))
 		if len(f.rebuilds) == 0 || len(f.after) == 0 {
 			fmt.Fprint(w, f.before)
 			return

@@ -29,6 +29,12 @@ import (
 // Nova then has Cinder rewrite the root volume from the image.
 const computeMicroversionRebuildVolumeBacked = "2.93"
 
+// computeMicroversionRootDevice is the first compute microversion at which
+// Nova reports OS-EXT-SRV-ATTR:root_device_name, to a caller its policy
+// allows (administrators by default). 2.3 only adds fields to the server
+// representation.
+const computeMicroversionRootDevice = "2.3"
+
 // rebuildTimeout bounds the wait for Nova to finish a rebuild, matching the
 // provider's other instance waits.
 const rebuildTimeout = 30 * time.Minute
@@ -52,9 +58,11 @@ func serverImageID(server *servers.Server) string {
 // getRebuildable reads a server and checks that Nova will accept a rebuild of
 // it now: Nova rebuilds only an ACTIVE, SHUTOFF or ERROR server with no task
 // in progress, and answers anything else with a 409 that does not say how to
-// get out of it. A server Nova would refuse returns a *rebuildRefusal.
+// get out of it. A server Nova would refuse returns a *rebuildRefusal. The
+// server is read at computeMicroversionRootDevice, so that rootVolume can
+// use the root device name Nova reports.
 func getRebuildable(ctx context.Context, client *gophercloud.ServiceClient, id string) (*servers.Server, error) {
-	server, err := servers.Get(ctx, client, id).Extract()
+	server, err := servers.Get(ctx, withMicroversion(client, computeMicroversionRootDevice), id).Extract()
 	if err != nil {
 		return nil, err
 	}
@@ -504,13 +512,15 @@ func bootableVolumes(ctx context.Context, bs *gophercloud.ServiceClient, server 
 }
 
 // rootVolume finds the volume a server boots from among its bootable
-// volumes. When Nova reports the server's root device name (from compute
-// microversion 2.3 on, to a caller its policy allows), the root is the
-// bootable volume on that device. Otherwise a single bootable volume is the
-// root, and among several on one bus the root is the first device name,
-// because Nova names the root first on its bus (vda before vdb). Bootable
-// volumes on different buses cannot be told apart that way (a scsi sda sorts
-// before a virtio vda), so rootVolume refuses them rather than guess.
+// volumes. When Nova reports the server's root device name, the root is the
+// bootable volume on that device. Its callers read the server through
+// getRebuildable, which asks for compute microversion 2.3, so the name is
+// present whenever Nova's policy returns it. Otherwise a single bootable
+// volume is the root, and among several on one bus the root is the first
+// device name, because Nova names the root first on its bus (vda before
+// vdb). Bootable volumes on different buses cannot be told apart that way (a
+// scsi sda sorts before a virtio vda), so rootVolume refuses them rather
+// than guess.
 func rootVolume(ctx context.Context, bs *gophercloud.ServiceClient, server *servers.Server) (*volumes.Volume, error) {
 	candidates, err := bootableVolumes(ctx, bs, server)
 	if err != nil {

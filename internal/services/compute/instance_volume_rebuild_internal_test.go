@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -223,6 +224,9 @@ func TestUpdateReimagesRootVolume(t *testing.T) {
 	if got.ImageID.ValueString() != "" || got.ID.ValueString() != "srv-1" {
 		t.Errorf("state image_id=%q id=%s, want \"\" and srv-1", got.ImageID.ValueString(), got.ID)
 	}
+	if !slices.Contains(f.getVersions, "2.3") {
+		t.Errorf("server reads at microversions %q; want the rebuild check's read at 2.3", f.getVersions)
+	}
 }
 
 // A reimage that left the root volume on its old image fails the update.
@@ -386,6 +390,10 @@ func TestInstanceRebuildActionUsesNovaRootDevice(t *testing.T) {
 	body, _ := json.Marshal(f.rebuilds[0])
 	if string(body) != `{"rebuild":{"imageRef":"img-1"}}` || f.versions[0] != "2.93" {
 		t.Errorf("rebuild body %s at %q, want img-1 at 2.93", body, f.versions[0])
+	}
+	// Nova reports the root device from 2.3 on; the waits keep the base version.
+	if n := len(f.getVersions); n < 2 || f.getVersions[0] != "2.3" || f.getVersions[n-1] != "" {
+		t.Errorf("server reads at microversions %q; want the first at 2.3 and the waits at the base version", f.getVersions)
 	}
 }
 
