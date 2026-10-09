@@ -194,6 +194,16 @@ func TestVolumeTypeAccessRead(t *testing.T) {
 			if got := resp.State.Raw.IsNull(); got != tc.wantRemoved {
 				t.Fatalf("removed from state = %v, want %v", got, tc.wantRemoved)
 			}
+			if tc.wantRemoved {
+				return
+			}
+			var got volumeTypeAccessModel
+			if d := resp.State.Get(ctx, &got); d.HasError() {
+				t.Fatal(d)
+			}
+			if got.ID.ValueString() != "vt-1/p-1" || got.Region.ValueString() != "region-one" {
+				t.Fatalf("state after read id=%s region=%s, want vt-1/p-1 and region-one", got.ID, got.Region)
+			}
 		})
 	}
 }

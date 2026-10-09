@@ -13,8 +13,8 @@ Grants one project access to one private Cinder volume type (admin only), the PC
 ## Example Usage
 
 ```terraform
-# A private volume type is usable only by the projects granted access to it,
-# including the project that created it.
+# A private volume type is usable only by the projects granted access to it;
+# even the project that created it needs a grant.
 resource "pcd_blockstorage_volume_type" "fast" {
   name      = "fast-ssd"
   is_public = false
@@ -57,6 +57,6 @@ Import is supported using the following syntax. The IDs are assigned by PCD; the
 explains how to look them up.
 
 ```shell
-# volume_type_id: pcdctl volume type list --private. project_id: pcdctl project list
+# volume_type_id: pcdctl volume type list --private. project_id: access_project_ids in pcdctl volume type show <volume_type_id>
 terraform import pcd_blockstorage_volume_type_access.example <volume_type_id>/<project_id>
 ```

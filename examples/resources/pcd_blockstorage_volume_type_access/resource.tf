@@ -1,5 +1,5 @@
-# A private volume type is usable only by the projects granted access to it,
-# including the project that created it.
+# A private volume type is usable only by the projects granted access to it;
+# even the project that created it needs a grant.
 resource "pcd_blockstorage_volume_type" "fast" {
   name      = "fast-ssd"
   is_public = false
