@@ -28,6 +28,13 @@ All notable changes to this project are documented here. The format is based on
   replaces its snapshot. An instance whose `image_id` refers to a snapshot is rebuilt in place, its root disk
   erased, whenever the snapshot is replaced (for example when `instance_id` changes); add
   `lifecycle { ignore_changes = [image_id] }` to that instance to keep it on the image it booted from.
+- **`pcd_compute_instance_rescue`**, which keeps an instance in rescue mode while the resource exists, as the
+  PCD UI's Rescue and Unrescue actions do: create boots the instance from a rescue image with its own disk
+  attached for repair, and destroy returns it to `ACTIVE`. Without `rescue_image_id` Nova uses the instance's
+  own image; an instance that boots from a volume needs a rescue image with the `hw_rescue_device` and
+  `hw_rescue_bus` properties. Nova refuses changes to a rescued instance, and removing the resource unrescues
+  the instance before Terraform changes it in the same apply. The rescue password Nova generates is not kept,
+  as in the UI. Import takes the instance ID while the instance is rescued.
 
 ### Changed
 

@@ -206,8 +206,8 @@ func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *go
 			"Apply again once the task finishes",
 			"Unpause or resume it first; on pcd_compute_instance, power_state = \"active\" in the same apply "+
 				"does that before the rebuild",
-			"Unrescue it first: remove its pcd_compute_instance_rescue in a separate apply, or use Unrescue "+
-				"in the PCD UI if it was rescued there"))
+			"Unrescue it first: remove its pcd_compute_instance_rescue, or use Unrescue in the PCD UI if it "+
+				"was rescued there"))
 		return ""
 	}
 	if serverImageID(before) == "" {

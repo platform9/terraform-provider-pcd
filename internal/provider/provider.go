@@ -77,6 +77,7 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		compute.NewKeypairResource,
 		compute.NewInstanceResource,
 		compute.NewInstanceSnapshotResource,
+		compute.NewInstanceRescueResource,
 		compute.NewFlavorResource,
 		compute.NewServergroupResource,
 		compute.NewInterfaceAttachResource,

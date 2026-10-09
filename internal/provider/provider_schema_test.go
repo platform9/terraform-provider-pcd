@@ -40,4 +40,7 @@ func TestProviderSchemaIsValid(t *testing.T) {
 	if _, ok := resp.ResourceSchemas["pcd_compute_instance_snapshot"]; !ok {
 		t.Error("resource pcd_compute_instance_snapshot is not served")
 	}
+	if _, ok := resp.ResourceSchemas["pcd_compute_instance_rescue"]; !ok {
+		t.Error("resource pcd_compute_instance_rescue is not served")
+	}
 }
