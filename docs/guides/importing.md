@@ -163,6 +163,7 @@ ID alone.
 | Resource | Import ID | Where to find it |
 |---|---|---|
 | `pcd_images_image` | `<id>` | `pcdctl image list` |
+| `pcd_images_image_access` | `<image_id>/<member_id>` | `pcdctl image list`; `pcdctl image member list <image_id>` |
 
 ### Identity
 
