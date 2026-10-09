@@ -7,8 +7,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/volumes"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
@@ -164,5 +166,128 @@ func testAccCheckInstanceRunsImage(t *testing.T, rn, ds string) resource.TestChe
 			return fmt.Errorf("instance %s runs image %q, want %q", inst.Primary.ID, got, img.Primary.ID)
 		}
 		return nil
+	}
+}
+
+// TestAccComputeInstance_rebuildVolumeBacked changes the image of the root
+// block_device of an instance that boots from a volume: the plan is an
+// in-place update, Nova reimages the root volume, and Cinder reports the new
+// image on it. Needs PCD_ACC_VOLUME_BOOT=1 and a second image.
+func TestAccComputeInstance_rebuildVolumeBacked(t *testing.T) {
+	bootImage := testAccBootImageName(t)
+	rebuildImage := testAccRebuildImageName(t)
+	testAccVolumeBoot(t)
+	const rn = "pcd_compute_instance.test"
+	var instanceID string
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInstanceDestroy(t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInstanceRebuildVolumeConfig(bootImage, rebuildImage, "boot"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCaptureID(rn, &instanceID),
+					resource.TestCheckResourceAttr(rn, "image_id", ""),
+					testAccCheckRootVolumeImage(t, rn, "data.pcd_images_image.boot"),
+				),
+			},
+			{
+				Config: testAccInstanceRebuildVolumeConfig(bootImage, rebuildImage, "rebuild"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction(rn, plancheck.ResourceActionUpdate),
+				}},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrWith(rn, "id", func(v string) error {
+						if v != instanceID {
+							return fmt.Errorf("instance was replaced (%s -> %s); a new root image should reimage it in place", instanceID, v)
+						}
+						return nil
+					}),
+					resource.TestCheckResourceAttr(rn, "status", "ACTIVE"),
+					testAccCheckRootVolumeImage(t, rn, "data.pcd_images_image.rebuild"),
+				),
+			},
+		},
+	})
+}
+
+func testAccInstanceRebuildVolumeConfig(bootImage, rebuildImage, use string) string {
+	return fmt.Sprintf(`
+data "pcd_images_image" "boot" {
+  name = %q
+}
+
+data "pcd_images_image" "rebuild" {
+  name = %q
+}
+
+resource "pcd_networking_network" "test" {
+  name = "tf-acc-rebuild-bfv-net"
+}
+
+resource "pcd_networking_subnet" "test" {
+  network_id = pcd_networking_network.test.id
+  cidr       = "10.136.0.0/24"
+}
+
+resource "pcd_compute_instance" "test" {
+  name        = "tf-acc-rebuild-bfv"
+  flavor_name = "m1.small"
+
+  block_device {
+    source_type           = "image"
+    uuid                  = data.pcd_images_image.%s.id
+    destination_type      = "volume"
+    volume_size           = 10
+    boot_index            = 0
+    delete_on_termination = true
+  }
+
+  network {
+    uuid = pcd_networking_network.test.id
+  }
+
+  depends_on = [pcd_networking_subnet.test]
+}
+`, bootImage, rebuildImage, use)
+}
+
+// testAccCheckRootVolumeImage checks in Cinder that a bootable volume of the
+// instance in rn was written from the image the data source ds holds.
+func testAccCheckRootVolumeImage(t *testing.T, rn, ds string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		inst, img := s.RootModule().Resources[rn], s.RootModule().Resources[ds]
+		if inst == nil || img == nil {
+			return fmt.Errorf("%s or %s not found in state", rn, ds)
+		}
+		cfg := acctest.LabConfig(t)
+		client, err := cfg.ComputeV2Client()
+		if err != nil {
+			return err
+		}
+		bs, err := cfg.BlockStorageV3Client()
+		if err != nil {
+			return err
+		}
+		server, err := servers.Get(context.Background(), client, inst.Primary.ID).Extract()
+		if err != nil {
+			return err
+		}
+		var seen []string
+		for _, attached := range server.AttachedVolumes {
+			v, err := volumes.Get(context.Background(), bs, attached.ID).Extract()
+			if err != nil {
+				return err
+			}
+			if strings.EqualFold(v.Bootable, "true") {
+				if v.VolumeImageMetadata["image_id"] == img.Primary.ID {
+					return nil
+				}
+				seen = append(seen, v.ID+"="+v.VolumeImageMetadata["image_id"])
+			}
+		}
+		return fmt.Errorf("no bootable volume of instance %s holds image %s (bootable volumes: %v)", inst.Primary.ID, img.Primary.ID, seen)
 	}
 }

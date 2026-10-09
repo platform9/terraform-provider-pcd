@@ -56,9 +56,11 @@ func (a *instanceRebuildAction) Schema(_ context.Context, _ action.SchemaRequest
 			"from that image, and the instance keeps its ID, ports and IP addresses, attached volumes, metadata, key pair " +
 			"and user data. This is the PCD UI's Rebuild action with the image left as it is, used to return an instance to " +
 			"its golden image. Nothing in Terraform state changes, so the action can run again at any time. To move an " +
-			"instance to a different image, change `image_id` or `image_name` on `pcd_compute_instance` instead, which " +
-			"rebuilds it in place. The instance must be `ACTIVE`, `SHUTOFF` or in `ERROR` with no task in progress; a " +
-			"stopped instance is stopped again afterward.",
+			"instance to a different image, change `image_id` or `image_name` on `pcd_compute_instance` instead (the " +
+			"`uuid` of its root `block_device` for an instance that boots from a volume), which rebuilds it in place. " +
+			"For an instance that boots from a volume, the image is the one its root volume was " +
+			"last written from, and Nova has Cinder rewrite the volume (compute microversion 2.93). The instance must be " +
+			"`ACTIVE`, `SHUTOFF` or in `ERROR` with no task in progress; a stopped instance is stopped again afterward.",
 		Attributes: map[string]schema.Attribute{
 			"instance_id": schema.StringAttribute{
 				Required:            true,
@@ -99,11 +101,26 @@ func (a *instanceRebuildAction) Invoke(ctx context.Context, req action.InvokeReq
 				"then "+rebuildActionRerun))
 		return
 	}
-	image := serverImageID(before)
+	image, microversion := serverImageID(before), ""
 	if image == "" {
-		resp.Diagnostics.AddError("compute: rebuilding instance",
-			fmt.Sprintf("Instance %s boots from a volume; this action reimages an instance booted from an image.", id))
-		return
+		// A volume-backed instance: Cinder records the image its root volume
+		// was written from, and Nova reimages the volume from 2.93 on.
+		bs, err := a.config.ForRegion(cfg.Region.ValueString()).BlockStorageV3Client()
+		if err != nil {
+			resp.Diagnostics.AddError("compute: building block storage v3 client", err.Error())
+			return
+		}
+		root, err := rootVolume(ctx, bs, before)
+		if err != nil {
+			resp.Diagnostics.AddError("compute: rebuilding instance", err.Error())
+			return
+		}
+		if image = root.VolumeImageMetadata["image_id"]; image == "" {
+			resp.Diagnostics.AddError("compute: rebuilding instance",
+				fmt.Sprintf("The root volume %s of instance %s was not written from an image, so there is no image to reimage it with.", root.ID, id))
+			return
+		}
+		microversion = computeMicroversionRebuildVolumeBacked
 	}
 	imgClient, err := a.config.ForRegion(cfg.Region.ValueString()).ImageV2Client()
 	if err != nil {
@@ -116,7 +133,7 @@ func (a *instanceRebuildAction) Invoke(ctx context.Context, req action.InvokeReq
 	}
 
 	resp.SendProgress(action.InvokeProgressEvent{Message: fmt.Sprintf("Rebuilding instance %s from image %s", id, image)})
-	if err := sendRebuild(ctx, client, id, image, ""); err != nil {
+	if err := sendRebuild(ctx, client, id, image, microversion); err != nil {
 		resp.Diagnostics.AddError("compute: rebuilding instance", err.Error()+"\n\n"+rebuildRefusalHint)
 		return
 	}

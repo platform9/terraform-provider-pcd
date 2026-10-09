@@ -63,7 +63,15 @@ type rebuildFake struct {
 	volumes   map[string]string // GET /volumes/<id> bodies (Cinder)
 	rebuilds  []map[string]any  // every POST /servers/srv-1/action body: rebuilds and power actions
 	versions  []string          // X-OpenStack-Nova-API-Version of each action request
-	glance    int
+	// getVersions is the X-OpenStack-Nova-API-Version of each GET /servers/srv-1.
+	getVersions []string
+	glance      int
+	// volumesAfter answers GET /volumes/<id> once a rebuild request has
+	// arrived; an id it lacks answers from volumes.
+	volumesAfter map[string]string
+	// cinderBefore and cinderAfter count the GET /volumes/<id> requests
+	// before and after the first rebuild request.
+	cinderBefore, cinderAfter int
 }
 
 func (f *rebuildFake) handler(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +80,7 @@ func (f *rebuildFake) handler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch {
 	case r.Method == "GET" && r.URL.Path == "/servers/srv-1":
+		f.getVersions = append(f.getVersions, r.Header.Get("X-OpenStack-Nova-API-Version"))
 		if len(f.rebuilds) == 0 || len(f.after) == 0 {
 			fmt.Fprint(w, f.before)
 			return
@@ -112,7 +121,16 @@ func (f *rebuildFake) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Fprint(w, body)
 	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/volumes/"):
-		body, ok := f.volumes[strings.TrimPrefix(r.URL.Path, "/volumes/")]
+		id := strings.TrimPrefix(r.URL.Path, "/volumes/")
+		body, ok := f.volumes[id]
+		if len(f.rebuilds) == 0 {
+			f.cinderBefore++
+		} else {
+			f.cinderAfter++
+			if after, found := f.volumesAfter[id]; found {
+				body, ok = after, true
+			}
+		}
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			return

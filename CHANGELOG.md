@@ -53,15 +53,25 @@ All notable changes to this project are documented here. The format is based on
   A rebuild onto the snapshot of an instance that boots from a volume is refused, because that image holds no
   disk data. Refresh now records the image the instance runs, so a rebuild done outside Terraform shows as
   drift and the next apply rebuilds the instance back to its configured image; with `image_name`, the name
-  follows the new image. An import now records `image_id` too. An instance that boots from a volume is
-  unaffected. **After upgrading, review the first plan:** an instance rebuilt outside Terraform before the
-  upgrade (in the PCD UI, say) now plans an in-place rebuild back to its configured image, which erases its
-  root disk. To keep the image it runs, change `image_id` or `image_name` in the configuration to match, or add
-  `lifecycle { ignore_changes = [image_id, image_name] }`. When `image_id` is not configured, it shows as
-  `(known after apply)` in the plan of any other change to the instance; its value does not change. The new
-  image must be in the image library of the instance's host, or Nova leaves the instance in `ERROR`. An
-  instance in `ERROR` is rebuilt before any `power_state` change in the same apply, since a rebuild is how
-  Nova recovers it.
+  follows the new image. An import now records `image_id` too. An instance that boots from a volume is reimaged
+  through its root `block_device`; see the next entry. **After upgrading, review the first plan:** an instance
+  rebuilt outside Terraform before the upgrade (in the PCD UI, say) now plans an in-place rebuild back to its
+  configured image, which erases its root disk. To keep the image it runs, change `image_id` or `image_name` in
+  the configuration to match, or add `lifecycle { ignore_changes = [image_id, image_name] }`. When `image_id`
+  is not configured, it shows as `(known after apply)` in the plan of any other change to the instance; its
+  value does not change. The new image must be in the image library of the instance's host, or Nova leaves the
+  instance in `ERROR`. An instance in `ERROR` is rebuilt before any `power_state` change in the same apply,
+  since a rebuild is how Nova recovers it.
+- **`pcd_compute_instance` reimages a root volume in place.** For an instance that boots from a volume written
+  from an image, changing the `uuid` of the `block_device` with `boot_index = 0` and `source_type = "image"`
+  used to replace the instance; it now rebuilds it, and Nova has Cinder rewrite the root volume from the new
+  image (compute microversion 2.93). The volume, the instance ID, its ports and addresses, its other volumes,
+  its metadata, key pair and user data are kept; the root volume's data is erased. The plan shows
+  `~ update in-place`. Any other change to `block_device` still replaces the instance, and a root device with
+  `destination_type = "local"` still forces replacement. Refresh does not read `block_device` back, so a
+  reimage of the root volume done outside Terraform does not show as drift. The `pcd_compute_instance_rebuild`
+  action now also reimages an instance that boots from a volume, with the image its root volume was last
+  written from.
 
 ## [0.1.16] - 2026-10-08
 

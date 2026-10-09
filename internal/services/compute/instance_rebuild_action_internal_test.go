@@ -113,7 +113,7 @@ func TestInstanceRebuildActionRefusals(t *testing.T) {
 		{name: "paused", server: rebuildServerJSON("PAUSED", "", "img-1"), want: rerun},
 		{name: "task in progress", server: rebuildServerJSON("ACTIVE", "image_uploading", "img-1"), want: rerun},
 		{name: "rescued", server: rebuildServerJSON("RESCUE", "", "img-1"), want: rerun},
-		{name: "volume-backed", server: rebuildServerJSON("ACTIVE", "", ""), want: "boots from a volume"},
+		{name: "volume-backed without a bootable volume", server: rebuildServerJSON("ACTIVE", "", ""), want: "no bootable volume"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rebuildFastPolls(t)
