@@ -104,9 +104,8 @@ A few resources differ slightly from their upstream counterparts:
   system/read-only properties are ignored to avoid a perpetual diff.
 - **`pcd_networking_floatingip`** — allocate from an external network by its name
   via `pool`, exactly as upstream.
-- **`pcd_compute_flavor_access`** — refuses a public flavor at apply time, adopts a grant
-  that already exists instead of failing, and on refresh drops a grant only when Nova no
-  longer lists it (other errors are reported).
+- **`pcd_compute_flavor_access`** — refuses a public flavor at apply time, and on refresh
+  drops a grant only when Nova no longer lists it (other errors are reported).
 - **`pcd_lb_loadbalancer`** and the LB tree — PCD ships only the **OVN** Octavia provider,
   which is Layer 4. `loadbalancer_provider` defaults to `ovn`; use TCP/UDP/SCTP listener
   protocols and OVN-supported pool algorithms. There are no L7 policy/rule resources

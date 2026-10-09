@@ -106,7 +106,8 @@ func (r *flavorAccessResource) Create(ctx context.Context, req resource.CreateRe
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.Diagnostics.AddAttributeError(path.Root("flavor_id"), "Flavor not found",
-				fmt.Sprintf("No flavor with ID %q exists.", flavorID))
+				fmt.Sprintf("No flavor with ID %q was found. Either it does not exist or it is not visible to "+
+					"these credentials; granting access needs the admin role.", flavorID))
 			return
 		}
 		resp.Diagnostics.AddError("compute: reading flavor", err.Error())

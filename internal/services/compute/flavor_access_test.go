@@ -28,7 +28,8 @@ func TestAccComputeFlavorAccess_basic(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { acctest.PreCheck(t) },
 		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckFlavorAccessDestroy(t),
+		// The last step removes the grant and checks the revoke, so CheckDestroy sees no grant in state.
+		CheckDestroy: testAccCheckFlavorAccessDestroy(t),
 		Steps: []resource.TestStep{
 			{
 				Config: testAccFlavorAccessConfig(false),

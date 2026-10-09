@@ -10,7 +10,7 @@ All notable changes to this project are documented here. The format is based on
 
 - **`pcd_compute_flavor_access`**, a new resource that grants one project access to one private
   flavor, as the PCD UI's "Edit Tenants" does. Nova keeps an access list only for a private flavor,
-  so a grant on a public one is refused before anything is sent: Nova would otherwise accept it,
+  so a grant on a public one is refused before the grant is sent: Nova would otherwise accept it,
   then report no access list, and the grant would disappear from state on every refresh. A grant
   that already exists (made in the UI, say) is adopted rather than failing the apply, so
   destroying the resource revokes it. A grant revoked outside Terraform is dropped from state on
