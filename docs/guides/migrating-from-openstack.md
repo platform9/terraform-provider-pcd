@@ -108,6 +108,10 @@ A few resources differ slightly from their upstream counterparts:
   protocols and OVN-supported pool algorithms. There are no L7 policy/rule resources
   (`openstack_lb_l7policy_v2` / `_l7rule_v2` have no PCD equivalent) because OVN does not
   do L7.
+- **`pcd_compute_instance`** — as upstream, changing `image_id` or `image_name` rebuilds the
+  instance in place. In addition, a new `uuid` on the root `block_device` (`boot_index = 0`,
+  `source_type = "image"`) also rebuilds it in place, reimaging a root volume through Cinder,
+  where upstream replaces the instance.
 
 ## Moving existing infrastructure
 

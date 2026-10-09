@@ -9,16 +9,25 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
+	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/volumes"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
 	"github.com/gophercloud/gophercloud/v2/openstack/image/v2/images"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
 )
+
+// computeMicroversionRebuildVolumeBacked is the first compute microversion
+// that rebuilds an instance booted from a volume with a different image:
+// Nova then has Cinder rewrite the root volume from the image.
+const computeMicroversionRebuildVolumeBacked = "2.93"
 
 // rebuildTimeout bounds the wait for Nova to finish a rebuild, matching the
 // provider's other instance waits.
@@ -184,18 +193,32 @@ func checkRebuildTarget(ctx context.Context, imgClient *gophercloud.ServiceClien
 }
 
 // rebuildIfImageChanged rebuilds the instance in place when the configured
-// image differs from the one it runs, then sets plan.ImageID, which is
-// unknown in the plan whenever image_id is not configured. It returns the
-// status the instance settled in after a rebuild, or "" when it sent none,
-// so that Update's later power_state step starts from that status.
+// image differs from the one it runs: image_id or image_name for an instance
+// booted from an image, the uuid of the root block_device for one that boots
+// from a volume (Nova then reimages the root volume through Cinder). It then
+// sets plan.ImageID, which is unknown in the plan whenever image_id is not
+// configured. It returns the status the instance settled in after a rebuild,
+// or "" when it sent none, so that Update's later power_state step starts
+// from that status.
 func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *gophercloud.ServiceClient, plan, state *instanceModel, diags *diag.Diagnostics) string {
 	id := state.ID.ValueString()
 	current := state.ImageID.ValueString()
+	rootTarget, rootChanged := rootImageChange(ctx, plan.BlockDevice, state.BlockDevice, diags)
+	if diags.HasError() {
+		return ""
+	}
 	target, changed := r.configuredImage(ctx, plan, state, diags)
 	if diags.HasError() {
 		return ""
 	}
-	if !changed || target == current {
+	switch {
+	case rootChanged && changed && target != current && target != rootTarget:
+		diags.AddError("Invalid image", fmt.Sprintf("The root block_device names image %s but image_id or "+
+			"image_name names %s; change one of them.", rootTarget, target))
+		return ""
+	case rootChanged:
+		target = rootTarget
+	case !changed || target == current:
 		setPlannedImageID(plan, current)
 		return ""
 	}
@@ -210,10 +233,11 @@ func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *go
 				"was rescued there"))
 		return ""
 	}
-	if serverImageID(before) == "" {
+	volumeBacked := serverImageID(before) == ""
+	if volumeBacked && !rootChanged {
 		diags.AddError("compute: rebuilding instance",
-			fmt.Sprintf("Instance %s boots from a volume, so image_id and image_name do not apply to it: "+
-				"they name the image of an instance booted from an image.", id))
+			fmt.Sprintf("Instance %s boots from a volume, so image_id and image_name do not apply to it. To reimage "+
+				"its root volume, change the uuid of the block_device with boot_index = 0.", id))
 		return ""
 	}
 	imgClient, err := r.config.ForRegion(plan.Region.ValueString()).ImageV2Client()
@@ -225,18 +249,50 @@ func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *go
 		diags.AddError("compute: rebuilding instance", err.Error())
 		return ""
 	}
-	if err := sendRebuild(ctx, client, id, target, ""); err != nil {
+	microversion := ""
+	if volumeBacked {
+		microversion = computeMicroversionRebuildVolumeBacked
+	}
+	if err := sendRebuild(ctx, client, id, target, microversion); err != nil {
 		diags.AddError("compute: rebuilding instance", err.Error()+"\n\n"+rebuildRefusalHint)
 		return ""
 	}
 	server, err := waitForServerSettled(ctx, client, id, rebuildSettleTarget(before.Status), rebuildTimeout)
 	if err != nil {
-		diags.AddError("compute: waiting for instance rebuild", err.Error()+
-			"\n\nA rebuild that fails leaves the instance in ERROR with the new image already recorded by Nova, "+
-			"so the next apply does not rebuild it again. A hard reboot (the pcd_compute_instance_reboot action "+
-			"with type = \"HARD\") may bring it back up on the new image; otherwise replace the instance with "+
-			"terraform apply -replace=pcd_compute_instance.<name>.")
+		recovery := "A rebuild that fails leaves the instance in ERROR with the new image already recorded by Nova, " +
+			"so the next apply does not rebuild it again. A hard reboot (the pcd_compute_instance_reboot action " +
+			"with type = \"HARD\") may bring it back up on the new image; otherwise replace the instance with " +
+			"terraform apply -replace=pcd_compute_instance.<name>."
+		if volumeBacked {
+			recovery = "A reimage that fails leaves the instance in ERROR. Nova records no image on an instance that " +
+				"boots from a volume, and refresh does not read block_device back, so the next apply sends the same " +
+				"rebuild again; if it keeps failing, replace the instance with " +
+				"terraform apply -replace=pcd_compute_instance.<name>."
+		}
+		diags.AddError("compute: waiting for instance rebuild", err.Error()+"\n\n"+recovery)
 		return ""
+	}
+	if volumeBacked {
+		// Nova keeps no image on a volume-backed server; Cinder records the
+		// image a volume was last written from.
+		bs, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
+		if err != nil {
+			diags.AddError("compute: building block storage v3 client", err.Error())
+			return ""
+		}
+		root, err := rootVolume(ctx, bs, server)
+		if err != nil {
+			diags.AddError("compute: checking the reimaged root volume", err.Error())
+			return ""
+		}
+		if got := root.VolumeImageMetadata["image_id"]; got != target {
+			diags.AddError("compute: rebuilding instance",
+				fmt.Sprintf("Nova finished the rebuild of instance %s, but its root volume %s holds image %q instead of %q. Nova's last fault: %q.",
+					id, root.ID, got, target, server.Fault.Message))
+			return ""
+		}
+		setPlannedImageID(plan, current)
+		return server.Status
 	}
 	if got := serverImageID(server); got != target {
 		diags.AddError("compute: rebuilding instance",
@@ -316,4 +372,113 @@ func (r *instanceResource) refreshImageName(ctx context.Context, m *instanceMode
 			"%q and %q until a refresh can read it.", m.ID.ValueString(), m.ImageID.ValueString(), err,
 			priorImageID, m.ImageName.ValueString()))
 	m.ImageID = types.StringValue(priorImageID)
+}
+
+// blockDeviceRequiresReplace lets one block_device change through without
+// replacing the instance: a new uuid on the root device (boot_index 0) whose
+// source is an image, with every other field and device unchanged. Update
+// rebuilds the instance with that image. Any other change replaces it, as it
+// did before.
+func blockDeviceRequiresReplace(ctx context.Context, req planmodifier.ListRequest, resp *listplanmodifier.RequiresReplaceIfFuncResponse) {
+	resp.RequiresReplace = true
+	if req.PlanValue.IsNull() || req.PlanValue.IsUnknown() || req.StateValue.IsNull() || req.StateValue.IsUnknown() {
+		return
+	}
+	var plan, state []instanceBlockDeviceModel
+	if d := req.PlanValue.ElementsAs(ctx, &plan, false); d.HasError() {
+		return
+	}
+	if d := req.StateValue.ElementsAs(ctx, &state, false); d.HasError() {
+		return
+	}
+	if len(plan) != len(state) {
+		return
+	}
+	changed := -1
+	for i := range plan {
+		if blockDeviceEqual(plan[i], state[i]) {
+			continue
+		}
+		if changed >= 0 {
+			return
+		}
+		changed = i
+	}
+	if changed < 0 {
+		return
+	}
+	p, s := plan[changed], state[changed]
+	if !isImageRoot(p) || !isImageRoot(s) {
+		return
+	}
+	p.UUID, s.UUID = types.StringNull(), types.StringNull()
+	resp.RequiresReplace = !blockDeviceEqual(p, s)
+}
+
+// isImageRoot reports whether a block_device is the root disk written from
+// an image.
+func isImageRoot(m instanceBlockDeviceModel) bool {
+	return m.SourceType.ValueString() == string(servers.SourceImage) &&
+		!m.BootIndex.IsNull() && !m.BootIndex.IsUnknown() && m.BootIndex.ValueInt64() == 0
+}
+
+func blockDeviceEqual(a, b instanceBlockDeviceModel) bool {
+	return a.SourceType.Equal(b.SourceType) && a.UUID.Equal(b.UUID) && a.VolumeSize.Equal(b.VolumeSize) &&
+		a.DestinationType.Equal(b.DestinationType) && a.BootIndex.Equal(b.BootIndex) &&
+		a.DeleteOnTermination.Equal(b.DeleteOnTermination) && a.VolumeType.Equal(b.VolumeType) &&
+		a.GuestFormat.Equal(b.GuestFormat) && a.DeviceType.Equal(b.DeviceType) && a.DiskBus.Equal(b.DiskBus)
+}
+
+// rootImageChange returns the new image of the root block_device when the
+// plan changes it. blockDeviceRequiresReplace has already turned every other
+// block_device change into a replacement, so Update sees only this one.
+func rootImageChange(ctx context.Context, planList, stateList types.List, diags *diag.Diagnostics) (string, bool) {
+	if planList.IsNull() || planList.IsUnknown() || stateList.IsNull() || stateList.IsUnknown() || planList.Equal(stateList) {
+		return "", false
+	}
+	var plan, state []instanceBlockDeviceModel
+	diags.Append(planList.ElementsAs(ctx, &plan, false)...)
+	diags.Append(stateList.ElementsAs(ctx, &state, false)...)
+	if diags.HasError() || len(plan) != len(state) {
+		return "", false
+	}
+	for i := range state {
+		if isImageRoot(state[i]) && isImageRoot(plan[i]) && !plan[i].UUID.Equal(state[i].UUID) {
+			return plan[i].UUID.ValueString(), true
+		}
+	}
+	return "", false
+}
+
+// rootVolume finds the volume a server boots from. Cinder marks it bootable,
+// and Nova names the root disk first (vda before vdb), which separates it
+// from a bootable data volume.
+func rootVolume(ctx context.Context, bs *gophercloud.ServiceClient, server *servers.Server) (*volumes.Volume, error) {
+	var root *volumes.Volume
+	rootDevice := ""
+	for _, attached := range server.AttachedVolumes {
+		v, err := volumes.Get(ctx, bs, attached.ID).Extract()
+		if err != nil {
+			return nil, fmt.Errorf("reading volume %s: %w", attached.ID, err)
+		}
+		if v == nil {
+			return nil, fmt.Errorf("reading volume %s: %w", attached.ID, clients.ErrNoObject)
+		}
+		if !strings.EqualFold(v.Bootable, "true") {
+			continue
+		}
+		device := ""
+		for _, a := range v.Attachments {
+			if a.ServerID == server.ID {
+				device = a.Device
+			}
+		}
+		if root == nil || (device != "" && (rootDevice == "" || device < rootDevice)) {
+			root, rootDevice = v, device
+		}
+	}
+	if root == nil {
+		return nil, fmt.Errorf("instance %s has no bootable volume attached", server.ID)
+	}
+	return root, nil
 }
