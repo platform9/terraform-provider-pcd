@@ -67,6 +67,7 @@ func TestAccNetworkingSubnet_noGateway(t *testing.T) {
 				},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(rn, "gateway_ip", ""),
+					resource.TestCheckResourceAttr(rn, "no_gateway", "true"),
 					resource.TestCheckResourceAttr(ds, "gateway_ip", ""),
 				),
 			},
@@ -116,6 +117,9 @@ func TestAccNetworkingSubnet_noGatewayIPv6(t *testing.T) {
 			},
 			{
 				Config: testAccSubnetGatewayConfig(6, "fd00:138::/64", "fd00:138::10", "fd00:138::ff", `no_gateway = false`),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(rn, plancheck.ResourceActionUpdate)},
+				},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(rn, "gateway_ip", "fd00:138::"),
 					resource.TestCheckResourceAttr("data.pcd_networking_subnet.gw", "gateway_ip", "fd00:138::"),

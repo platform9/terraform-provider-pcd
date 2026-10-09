@@ -108,12 +108,13 @@ func (r *subnetResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 					"a non-empty `gateway_ip`. `false` restores a gateway in place: at `gateway_ip` when that is set, otherwise at " +
 					"Neutron's default for the subnet (see `gateway_ip`). Neutron refuses a gateway inside " +
 					"`allocation_pools`: an IPv4 subnet created without a gateway gets pools that start at the default " +
-					"address, and a subnet whose earlier gateway was not the default usually has pools that cover it, so " +
-					"restore such a gateway with a `gateway_ip` outside the pools, or narrow `allocation_pools` in the same " +
-					"change. Neutron also refuses to remove a gateway that a router interface holds. When `no_gateway` is " +
-					"not set, the provider leaves the gateway as it is and reports whether the subnet has one, so removing " +
-					"the attribute from a configuration does not restore a gateway. A subnet without a gateway attaches to " +
-					"a router only through a port: use `port_id`, not `subnet_id`, on `pcd_networking_router_interface`.",
+					"address when Neutron derives them, and a subnet whose earlier gateway was not the default usually has " +
+					"pools that cover it, so restore such a gateway with a `gateway_ip` outside the pools, or narrow " +
+					"`allocation_pools` in the same change. Neutron also refuses to remove a gateway that a router interface " +
+					"holds. When `no_gateway` is not set, the provider leaves the gateway as it is and reports whether the " +
+					"subnet has one, so removing the attribute from a configuration does not restore a gateway. A subnet " +
+					"without a gateway attaches to a router only through a port: use `port_id`, not `subnet_id`, on " +
+					"`pcd_networking_router_interface`.",
 			},
 			"enable_dhcp": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Whether DHCP is enabled for the subnet."},
 			"dns_nameservers": schema.ListAttribute{
@@ -375,7 +376,10 @@ func subnetUpdateOpts(ctx context.Context, plan, state *subnetModel, diags *diag
 	// The gateway goes out on every update, as before: a planned gateway, or
 	// null when no_gateway is true. Neutron ignores an unchanged value, and
 	// sending it means a stale state (an apply with -refresh=false) cannot leave
-	// the subnet different from the plan.
+	// the subnet different from the plan. When the configuration sets neither
+	// attribute, the gateway (or null) resent is the one state holds, so under
+	// -refresh=false a stale state writes it back over a change made outside
+	// Terraform; that is the price of resending.
 	if plan.NoGateway.ValueBool() {
 		noGateway := ""
 		updateOpts.GatewayIP = &noGateway
@@ -542,8 +546,12 @@ func (r *subnetResource) ModifyPlan(ctx context.Context, req resource.ModifyPlan
 	// framework marks every computed attribute the configuration omits unknown.
 	// Deriving an omitted no_gateway from the planned gateway, which
 	// UseStateForUnknown keeps, leaves the plan empty when nothing changes.
-	if cfg.NoGateway.IsNull() && plan.NoGateway.IsUnknown() && !plan.GatewayIP.IsNull() && !plan.GatewayIP.IsUnknown() {
-		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("no_gateway"), types.BoolValue(plan.GatewayIP.ValueString() == ""))...)
+	if cfg.NoGateway.IsNull() && plan.NoGateway.IsUnknown() {
+		var plannedGateway types.String
+		resp.Diagnostics.Append(resp.Plan.GetAttribute(ctx, path.Root("gateway_ip"), &plannedGateway)...)
+		if !plannedGateway.IsNull() && !plannedGateway.IsUnknown() {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("no_gateway"), types.BoolValue(plannedGateway.ValueString() == ""))...)
+		}
 	}
 }
 

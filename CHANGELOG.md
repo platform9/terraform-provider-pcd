@@ -15,10 +15,11 @@ All notable changes to this project are documented here. The format is based on
   gateway the apply will produce. Left unset, the provider leaves the gateway as it is, so
   upgrading changes no existing subnet, and a gateway removed outside Terraform stays removed
   until the configuration says otherwise. Neutron refuses a gateway inside `allocation_pools`,
-  and an IPv4 subnet created without a gateway has its default address in its pools, so restore
-  such a gateway with a `gateway_ip` outside the pools or narrow the pools; Neutron also refuses
-  to remove a gateway that a router interface holds. A subnet without a gateway attaches to a
-  router through `port_id` on `pcd_networking_router_interface`, not `subnet_id`.
+  and an IPv4 subnet created without a gateway has its default address in its pools when Neutron
+  derives them, so restore such a gateway with a `gateway_ip` outside the pools or narrow the
+  pools; Neutron also refuses to remove a gateway that a router interface holds. A subnet without
+  a gateway attaches to a router through `port_id` on `pcd_networking_router_interface`, not
+  `subnet_id`.
 
 ### Changed
 
