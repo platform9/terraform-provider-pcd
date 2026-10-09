@@ -12,8 +12,10 @@ import (
 	"fmt"
 
 	"github.com/gophercloud/gophercloud/v2/openstack/image/v2/images"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
@@ -41,6 +43,8 @@ type imageIDsDataSourceModel struct {
 	Visibility types.String `tfsdk:"visibility"`
 	IDs        types.List   `tfsdk:"ids"`
 	Region     types.String `tfsdk:"region"`
+
+	MemberStatus types.String `tfsdk:"member_status"`
 }
 
 func (d *imageIDsDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -58,6 +62,13 @@ func (d *imageIDsDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 			"visibility": schema.StringAttribute{Optional: true, MarkdownDescription: "Filter by visibility."},
 			"ids":        schema.ListAttribute{Computed: true, ElementType: types.StringType, MarkdownDescription: "The matching image IDs."},
 			"region":     schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region."},
+			"member_status": schema.StringAttribute{
+				Optional:   true,
+				Validators: []validator.String{stringvalidator.OneOf(imageMemberStatusFilters...)},
+				MarkdownDescription: "Filter images shared with this project by this project's member status: `accepted`, " +
+					"`pending`, `rejected` or `all`. Glance lists only accepted shares by default, and applies the filter " +
+					"only to projects without the admin role.",
+			},
 		},
 	}
 }
@@ -94,6 +105,9 @@ func (d *imageIDsDataSource) Read(ctx context.Context, req datasource.ReadReques
 	}
 	if v := data.Visibility.ValueString(); v != "" {
 		listOpts.Visibility = images.ImageVisibility(v)
+	}
+	if v := data.MemberStatus.ValueString(); v != "" {
+		listOpts.MemberStatus = images.ImageMemberStatus(v)
 	}
 	if v := data.Tag.ValueString(); v != "" {
 		listOpts.Tags = []string{v}

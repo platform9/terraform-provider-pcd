@@ -21,6 +21,25 @@ All notable changes to this project are documented here. The format is based on
   image is still shared, for example under a provider scoped to another project, is an error.
   Same attributes and import ID (`<image_id>/<member_id>`) as terraform-provider-openstack's
   `openstack_images_image_access_v2`.
+- **`pcd_images_image_access_accept`**, a new resource for the member's side of image sharing: it
+  accepts or rejects an image another project shared, as the PCD UI's "Accept Shared Images"
+  does. Glance lets only the member project, or an admin, decide, so the resource runs under a
+  provider scoped to the member project, typically a second `provider "pcd"` block with an
+  `alias` and that project's `tenant_name`. Give the alias literal values or variables: an auth
+  setting unknown at plan time falls back to the `OS_*` environment without an error. Do not
+  export `OS_PROJECT_ID` or `OS_TENANT_ID` for such a configuration: the alias would inherit it
+  next to `tenant_name`, and authentication fails. With `member_id` omitted it uses the image's
+  only visible member, and otherwise the provider's own project. Destroying it rejects the image,
+  since a member cannot remove itself; a refusal is a warning when the image is no longer shared
+  and an error while it is still shared. Same attributes and import ID as
+  terraform-provider-openstack's `openstack_images_image_access_accept_v2`; the import also takes
+  a bare `<image_id>`.
+- **`member_status` on the `pcd_images_image` and `pcd_images_image_ids` data sources**, which
+  filters images shared with the project by the project's decision: `accepted`, `pending`,
+  `rejected` or `all`. Glance lists only accepted shares by default, so this is how a project
+  finds an image shared with it before accepting it. Glance applies the filter only to projects
+  without the admin role. A configuration that also accepts the image should use `all`: once the
+  share is accepted, `pending` no longer finds it.
 
 ## [0.1.17] - 2026-10-09
 

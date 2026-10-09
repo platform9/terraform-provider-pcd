@@ -164,6 +164,7 @@ ID alone.
 |---|---|---|
 | `pcd_images_image` | `<id>` | `pcdctl image list` |
 | `pcd_images_image_access` | `<image_id>/<member_id>` | `pcdctl image list`; `pcdctl image member list <image_id>` |
+| `pcd_images_image_access_accept` | `<image_id>/<member_id>`, or `<image_id>` for the provider's own project | `pcdctl image list --shared` |
 
 ### Identity
 

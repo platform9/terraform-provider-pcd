@@ -53,7 +53,13 @@ func TestAccImagesImageAccess_basic(t *testing.T) {
 					resource.TestCheckResourceAttr(rn, "status", "accepted"),
 				),
 			},
-			{ResourceName: rn, ImportState: true, ImportStateVerify: true},
+			{
+				ResourceName:      rn,
+				ImportState:       true,
+				ImportStateVerify: true,
+				// Glance's PUT answer can carry updated_at a second before the stored, rounded value; Computed, it never plans a change.
+				ImportStateVerifyIgnore: []string{"updated_at"},
+			},
 			{
 				// The member is removed while the image and the project stay,
 				// so the image is still shared and Glance must no longer list
