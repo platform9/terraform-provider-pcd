@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/gophercloud/gophercloud/v2"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -279,8 +280,12 @@ func TestImageAccessCreateKeepsMemberWhenStatusFails(t *testing.T) {
 	if resp.State.Raw.IsNull() {
 		t.Fatal("create returned no state: the member Glance kept is lost to Terraform")
 	}
-	if got := imageAccessStateModel(ctx, t, resp.State); got.ID.ValueString() != "i1/p1" {
+	got := imageAccessStateModel(ctx, t, resp.State)
+	if got.ID.ValueString() != "i1/p1" {
 		t.Fatalf("recorded id = %s, want i1/p1", got.ID)
+	}
+	if got.Status.ValueString() != "pending" {
+		t.Fatalf("recorded status = %s, want Glance's pending, not the planned accepted", got.Status)
 	}
 }
 
@@ -360,6 +365,98 @@ func TestImageAccessRead(t *testing.T) {
 				if got := imageAccessStateModel(ctx, t, resp.State); got.Status.ValueString() != tc.wantStatus {
 					t.Fatalf("status = %s, want %s", got.Status, tc.wantStatus)
 				}
+			}
+		})
+	}
+}
+
+// imageAccessUpdatePlan is the plan for changing the stored membership's
+// status to status (unknown when the configuration leaves it unset):
+// updated_at is unknown, the other attributes keep their stored values.
+func imageAccessUpdatePlan(status types.String) imageAccessModel {
+	return imageAccessModel{
+		ID:        types.StringValue("i1/p1"),
+		ImageID:   types.StringValue("i1"),
+		MemberID:  types.StringValue("p1"),
+		Status:    status,
+		CreatedAt: types.StringValue("2026-10-06T10:00:00Z"),
+		UpdatedAt: types.StringUnknown(),
+		Schema:    types.StringValue("/v2/schemas/member"),
+		Region:    types.StringValue("region-one"),
+	}
+}
+
+// imageAccessUpdate runs Update from the stored membership of p1 (status
+// pending, last changed at 10:01, before Glance's 10:05 answer) to planned.
+// The response starts from the prior state, as the framework's does, so an
+// Update that fails without writing state leaves the prior state in place.
+func imageAccessUpdate(ctx context.Context, t *testing.T, r resource.Resource, planned imageAccessModel) (tfsdk.State, resource.UpdateResponse) {
+	t.Helper()
+	prior := imageAccessState(ctx, t, r, "pending")
+	if d := prior.SetAttribute(ctx, path.Root("updated_at"), "2026-10-06T10:01:00Z"); d.HasError() {
+		t.Fatalf("building the prior state: %v", d)
+	}
+	s := imageAccessSchema(ctx, t, r)
+	plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+	if d := plan.Set(ctx, &planned); d.HasError() {
+		t.Fatalf("building the plan: %v", d)
+	}
+	resp := resource.UpdateResponse{State: tfsdk.State{Schema: s, Raw: prior.Raw.Copy()}}
+	r.Update(ctx, resource.UpdateRequest{Plan: plan, State: prior}, &resp)
+	return prior, resp
+}
+
+// Update sends the planned status and records Glance's answer, updated_at
+// included. With status unset there is nothing to send, so it reads the
+// member instead; there is no other read after a PUT. A refused change is an
+// error and leaves state as it was.
+func TestImageAccessUpdate(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		status     types.String // the planned status
+		putCode    int
+		wantMethod string // the one member call Update sends
+		wantStatus string // in state afterward; "" when the update fails
+	}{
+		{name: "status set", status: types.StringValue("accepted"), wantMethod: http.MethodPut, wantStatus: "accepted"},
+		{name: "status unset", status: types.StringUnknown(), wantMethod: http.MethodGet, wantStatus: "rejected"},
+		{name: "refused", status: types.StringValue("accepted"), putCode: http.StatusForbidden, wantMethod: http.MethodPut},
+		{name: "server error", status: types.StringValue("rejected"), putCode: http.StatusInternalServerError, wantMethod: http.MethodPut},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &imageAccessGlance{putCode: tc.putCode, getBody: imageMemberJSON("p1", "rejected")}
+			srv := g.serve(t)
+			r := &imageAccessResource{config: imageAccessTestConfig(srv.URL)}
+			prior, resp := imageAccessUpdate(ctx, t, r, imageAccessUpdatePlan(tc.status))
+
+			calls := g.seen()
+			if len(calls) != 1 || calls[0].method != tc.wantMethod || calls[0].path != "/v2/images/i1/members/p1" {
+				t.Fatalf("calls = %+v, want one %s /v2/images/i1/members/p1", calls, tc.wantMethod)
+			}
+			if tc.wantMethod == http.MethodPut && (calls[0].body["status"] != tc.status.ValueString() || len(calls[0].body) != 1) {
+				t.Fatalf("PUT body = %v, want {\"status\": %q}", calls[0].body, tc.status.ValueString())
+			}
+			if tc.wantStatus == "" {
+				if !resp.Diagnostics.HasError() {
+					t.Fatal("update succeeded although Glance refused the change")
+				}
+				if !resp.State.Raw.Equal(prior.Raw) {
+					t.Fatalf("a failed update changed state to %v", resp.State.Raw)
+				}
+				return
+			}
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("update: %v", resp.Diagnostics)
+			}
+			got := imageAccessStateModel(ctx, t, resp.State)
+			if got.Status.ValueString() != tc.wantStatus || got.UpdatedAt.ValueString() != "2026-10-06T10:05:00Z" {
+				t.Fatalf("state status=%s updated_at=%s, want %s and Glance's 2026-10-06T10:05:00Z",
+					got.Status, got.UpdatedAt, tc.wantStatus)
+			}
+			if got.ID.ValueString() != "i1/p1" || got.Region.ValueString() != "region-one" || !resp.State.Raw.IsFullyKnown() {
+				t.Fatalf("state id=%s region=%s fully known=%v, want i1/p1, region-one, true",
+					got.ID, got.Region, resp.State.Raw.IsFullyKnown())
 			}
 		})
 	}

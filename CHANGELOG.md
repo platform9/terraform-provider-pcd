@@ -9,8 +9,8 @@ All notable changes to this project are documented here. The format is based on
 ### Added
 
 - **`pcd_images_image_access`**, a new resource for the owner's side of image sharing: it adds
-  a project as a member of an image, as the PCD UI's image members list does. Glance keeps
-  members only while the image's `visibility` is `shared` (an image created without
+  a project as a member of an image, as the PCD UI's image members list does. Glance accepts
+  and serves members only while the image's `visibility` is `shared` (an image created without
   `visibility` gets that by default), and the provider says so when Glance refuses a member.
   The member project decides with `pcd_images_image_access_accept`; an admin can decide for it
   by setting `status` here instead, but never both for one membership. A membership that

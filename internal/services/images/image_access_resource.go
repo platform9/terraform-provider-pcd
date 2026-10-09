@@ -73,7 +73,7 @@ func (r *imageAccessResource) Schema(_ context.Context, _ resource.SchemaRequest
 	stable := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Shares an image with another project: the owner's side of PCD image sharing (the UI's " +
-			"image members). Glance keeps members only while the image's `visibility` is `\"shared\"` (an image created " +
+			"image members). Glance accepts and serves members only while the image's `visibility` is `\"shared\"` (an image created " +
 			"without `visibility` gets Glance's default, `\"shared\"`), and only the image's owner or an admin can add " +
 			"one. The member starts `pending` until the other project accepts or rejects the image, which it does with " +
 			"`pcd_images_image_access_accept` under a provider scoped to that project. An admin can instead set " +

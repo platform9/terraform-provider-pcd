@@ -3,18 +3,18 @@
 page_title: "pcd_images_image_access Resource - PCD"
 subcategory: "Images"
 description: |-
-  Shares an image with another project: the owner's side of PCD image sharing (the UI's image members). Glance keeps members only while the image's visibility is "shared" (an image created without visibility gets Glance's default, "shared"), and only the image's owner or an admin can add one. The member starts pending until the other project accepts or rejects the image, which it does with pcd_images_image_access_accept under a provider scoped to that project. An admin can instead set status here to decide for the member. Use one or the other for a given membership, never both: each would undo the other's status on every apply. A membership that already exists when the resource is created is adopted, so destroying the resource removes it. Glance refuses to remove a member once the image is no longer shared; destroying the resource then only drops it from state, with a warning, and Glance keeps the membership, which grants access again if the image is shared again.
+  Shares an image with another project: the owner's side of PCD image sharing (the UI's image members). Glance accepts and serves members only while the image's visibility is "shared" (an image created without visibility gets Glance's default, "shared"), and only the image's owner or an admin can add one. The member starts pending until the other project accepts or rejects the image, which it does with pcd_images_image_access_accept under a provider scoped to that project. An admin can instead set status here to decide for the member. Use one or the other for a given membership, never both: each would undo the other's status on every apply. A membership that already exists when the resource is created is adopted, so destroying the resource removes it. Glance refuses to remove a member once the image is no longer shared; destroying the resource then only drops it from state, with a warning, and Glance keeps the membership, which grants access again if the image is shared again.
 ---
 
 # pcd_images_image_access (Resource)
 
-Shares an image with another project: the owner's side of PCD image sharing (the UI's image members). Glance keeps members only while the image's `visibility` is `"shared"` (an image created without `visibility` gets Glance's default, `"shared"`), and only the image's owner or an admin can add one. The member starts `pending` until the other project accepts or rejects the image, which it does with `pcd_images_image_access_accept` under a provider scoped to that project. An admin can instead set `status` here to decide for the member. Use one or the other for a given membership, never both: each would undo the other's status on every apply. A membership that already exists when the resource is created is adopted, so destroying the resource removes it. Glance refuses to remove a member once the image is no longer shared; destroying the resource then only drops it from state, with a warning, and Glance keeps the membership, which grants access again if the image is shared again.
+Shares an image with another project: the owner's side of PCD image sharing (the UI's image members). Glance accepts and serves members only while the image's `visibility` is `"shared"` (an image created without `visibility` gets Glance's default, `"shared"`), and only the image's owner or an admin can add one. The member starts `pending` until the other project accepts or rejects the image, which it does with `pcd_images_image_access_accept` under a provider scoped to that project. An admin can instead set `status` here to decide for the member. Use one or the other for a given membership, never both: each would undo the other's status on every apply. A membership that already exists when the resource is created is adopted, so destroying the resource removes it. Glance refuses to remove a member once the image is no longer shared; destroying the resource then only drops it from state, with a warning, and Glance keeps the membership, which grants access again if the image is shared again.
 
 ## Example Usage
 
 ```terraform
-# The image owner shares an image with another project. Members exist only
-# while the image's visibility is "shared".
+# The image owner shares an image with another project. Glance accepts and
+# serves members only while the image's visibility is "shared".
 resource "pcd_images_image" "golden" {
   name             = "golden-ubuntu"
   container_format = "bare"

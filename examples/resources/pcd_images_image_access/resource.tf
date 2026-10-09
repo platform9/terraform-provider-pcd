@@ -1,5 +1,5 @@
-# The image owner shares an image with another project. Members exist only
-# while the image's visibility is "shared".
+# The image owner shares an image with another project. Glance accepts and
+# serves members only while the image's visibility is "shared".
 resource "pcd_images_image" "golden" {
   name             = "golden-ubuntu"
   container_format = "bare"
