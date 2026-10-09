@@ -130,6 +130,7 @@ ID alone.
 |---|---|---|
 | `pcd_compute_flavor` | `<id>` | `pcdctl flavor list` |
 | `pcd_compute_instance` | `<id>` | `pcdctl server list` |
+| `pcd_compute_instance_snapshot` | `<image_id>` | `pcdctl image list`; a snapshot's `instance_uuid` property names its instance |
 | `pcd_compute_keypair` | `<name>` | `pcdctl keypair list` |
 | `pcd_compute_servergroup` | `<id>` | `pcdctl server group list` |
 | `pcd_compute_interface_attach` | `<instance_id>/<port_id>` | `pcdctl server list`; `pcdctl port list --server <instance_id>` |
