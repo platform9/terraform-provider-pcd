@@ -2,7 +2,9 @@ resource "pcd_networking_network" "example" {
   name = "tf-example-network"
 }
 
-# Boot from an image (ephemeral root disk on the hypervisor).
+# Boot from an image (ephemeral root disk on the hypervisor). Changing the
+# image later rebuilds this instance in place: the root disk is rewritten from
+# the new image, and the instance keeps its ID, addresses and volumes.
 resource "pcd_compute_instance" "from_image" {
   name        = "tf-example-instance"
   image_name  = "Ubuntu-22.04"

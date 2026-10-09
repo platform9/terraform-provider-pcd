@@ -276,10 +276,26 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a compute instance (server) in PCD's Nova service.",
 		Attributes: map[string]schema.Attribute{
-			"id":         schema.StringAttribute{Computed: true, MarkdownDescription: "The instance ID.", PlanModifiers: stable},
-			"name":       schema.StringAttribute{Required: true, MarkdownDescription: "The name of the instance."},
-			"image_id":   schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The image ID to boot from (alternative to image_name). Required unless a `block_device` with `boot_index = 0` supplies the boot disk. Changing this forces a new resource.", PlanModifiers: fnC},
-			"image_name": schema.StringAttribute{Optional: true, MarkdownDescription: "The image name to boot from, resolved via Glance (alternative to image_id). Required unless a `block_device` with `boot_index = 0` supplies the boot disk. Changing this forces a new resource.", PlanModifiers: fn},
+			"id":   schema.StringAttribute{Computed: true, MarkdownDescription: "The instance ID.", PlanModifiers: stable},
+			"name": schema.StringAttribute{Required: true, MarkdownDescription: "The name of the instance."},
+			// No plan modifiers on image_id: UseStateForUnknown would pin the old ID
+			// into the plan when a rebuild is driven by image_name, and Update then
+			// writes the new one ("inconsistent result after apply"), the same reason
+			// flavor_id has none. Update always sets the image ID explicitly.
+			"image_id": schema.StringAttribute{Optional: true, Computed: true,
+				MarkdownDescription: "The image ID to boot from (alternative to image_name). Required unless a `block_device` with `boot_index = 0` " +
+					"supplies the boot disk. Changing this **rebuilds the instance in place** (a Nova rebuild): the root disk is erased and " +
+					"rewritten from the new image, while the instance ID, ports and IP addresses, attached volumes, metadata, key pair and " +
+					"user data are kept. Read reports the image the instance runs, so a rebuild done outside Terraform shows as drift. " +
+					"An `image_id` taken from another resource (a `pcd_compute_instance_snapshot`, say) rebuilds the instance whenever " +
+					"that resource is replaced. Not used for an instance that boots from a volume.",
+				PlanModifiers: []planmodifier.String{}},
+			"image_name": schema.StringAttribute{Optional: true,
+				MarkdownDescription: "The image name to boot from, resolved via Glance (alternative to image_id). Required unless a " +
+					"`block_device` with `boot_index = 0` supplies the boot disk. Changing this **rebuilds the instance in place**, as for " +
+					"`image_id`; the name is resolved only when it changes, so an image uploaded again under the same name does not rebuild " +
+					"the instance. When the instance is rebuilt outside Terraform, Read sets this to the new image's name.",
+				PlanModifiers: []planmodifier.String{}},
 			// No UseStateForUnknown: it would pin the stale flavor_id into the plan
 			// when a resize is driven by flavor_name, causing an "inconsistent result"
 			// error. Update always sets the resolved flavor_id explicitly.
@@ -697,7 +713,14 @@ func (r *instanceResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
+	priorImageID := state.ImageID.ValueString()
 	resp.Diagnostics.Append(r.flatten(ctx, server, &state)...)
+	if id := state.ImageID.ValueString(); !state.ImageName.IsNull() && id != "" && id != priorImageID {
+		r.refreshImageName(ctx, &state, priorImageID, &resp.Diagnostics)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -762,6 +785,20 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		resizing = false
 	}
 	status := live.Status
+
+	// A rebuild is Nova's way out of ERROR, and the power_state steps below
+	// refuse an instance in ERROR, so an image change rebuilds such an
+	// instance first. Any other instance is rebuilt after the resize.
+	rebuiltFirst := status == "ERROR"
+	if rebuiltFirst {
+		if s := r.rebuildIfImageChanged(ctx, client, &plan, &state, &resp.Diagnostics); s != "" {
+			status = s
+		}
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	target := ""
 	if !plan.PowerState.IsNull() && !plan.PowerState.IsUnknown() {
 		target = plan.PowerState.ValueString()
@@ -952,6 +989,18 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 	// by flavor_name), so the applied state matches what Terraform expects.
 	plan.FlavorID = types.StringValue(targetFlavorID)
 
+	// Rebuild after the resize, as upstream does: an image change reimages the
+	// root disk in place instead of replacing the instance. The power step
+	// below starts from the status the rebuild left.
+	if !rebuiltFirst {
+		if s := r.rebuildIfImageChanged(ctx, client, &plan, &state, &resp.Diagnostics); s != "" {
+			status = s
+		}
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	// Power off, pause or suspend last, after every change above has met an
 	// instance that was running (or at least not paused).
 	if target != "" && target != "active" {
@@ -1000,12 +1049,22 @@ func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportS
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-// flatten updates the server-derived attributes; ForceNew inputs (image, flavor
+// flatten updates the server-derived attributes; ForceNew inputs (flavor
 // name, key_pair, network, user_data, ...) are preserved from the plan/state.
 func (r *instanceResource) flatten(ctx context.Context, server *servers.Server, m *instanceModel) (diags diag.Diagnostics) {
 	m.ID = types.StringValue(server.ID)
 	m.Name = types.StringValue(server.Name)
 	m.Status = types.StringValue(server.Status)
+
+	// image_id follows the image the server runs, so a rebuild done outside
+	// Terraform shows as drift and an import records the image. A server that
+	// boots from a volume reports no image and keeps "" (or a configured value).
+	if img := serverImageID(server); img != "" {
+		m.ImageID = types.StringValue(img)
+	} else if m.ImageID.IsNull() || m.ImageID.IsUnknown() {
+		m.ImageID = types.StringValue("")
+	}
+
 	// power_state follows the four steady statuses. Any other status keeps
 	// the last known value, so a reboot, a migration or a rescue shows no
 	// drift (status has the raw value), and an unknown value becomes null.

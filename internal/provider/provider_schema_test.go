@@ -34,4 +34,7 @@ func TestProviderSchemaIsValid(t *testing.T) {
 		}
 		t.Errorf("action pcd_compute_instance_reboot is not served; actions: %v", names)
 	}
+	if _, ok := resp.ActionSchemas["pcd_compute_instance_rebuild"]; !ok {
+		t.Error("action pcd_compute_instance_rebuild is not served")
+	}
 }
