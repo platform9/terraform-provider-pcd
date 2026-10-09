@@ -36,3 +36,20 @@ resource "pcd_networking_subnet" "app" {
   cidr                 = "10.1.0.0/24"
   dns_publish_fixed_ip = true
 }
+
+# A subnet with no gateway (the UI's "Disable Gateway"). Setting no_gateway to
+# false later restores Neutron's default gateway in place, 10.2.0.1 here; the
+# pool starts above it so that address stays free.
+resource "pcd_networking_subnet" "isolated" {
+  network_id = pcd_networking_network.example.id
+  name       = "isolated-subnet"
+  cidr       = "10.2.0.0/24"
+  no_gateway = true
+
+  allocation_pools = [
+    {
+      start = "10.2.0.10"
+      end   = "10.2.0.200"
+    }
+  ]
+}

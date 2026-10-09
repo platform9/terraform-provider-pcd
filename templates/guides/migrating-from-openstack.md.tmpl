@@ -108,6 +108,11 @@ A few resources differ slightly from their upstream counterparts:
   protocols and OVN-supported pool algorithms. There are no L7 policy/rule resources
   (`openstack_lb_l7policy_v2` / `_l7rule_v2` have no PCD equivalent) because OVN does not
   do L7.
+- **`pcd_networking_subnet`** `no_gateway` — has no default: omitted, the provider leaves the
+  gateway as it is (upstream defaults to `false`, which restores a gateway removed outside
+  Terraform). `no_gateway = false` without `gateway_ip` restores Neutron's default gateway,
+  where upstream sends nothing and keeps planning the change, and `gateway_ip = ""` is refused
+  at plan time unless `no_gateway = true` is set too.
 - **`pcd_compute_instance`** — as upstream, changing `image_id` or `image_name` rebuilds the
   instance in place. In addition, a new `uuid` on the root `block_device` (`boot_index = 0`,
   `source_type = "image"`, `destination_type = "volume"`) also rebuilds it in place, reimaging

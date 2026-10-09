@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`no_gateway` on `pcd_networking_subnet`**, the PCD UI's "Disable Gateway": `true` creates a
+  subnet without a gateway or removes the gateway from an existing subnet in place, and `false`
+  restores one in place, at `gateway_ip` when that is set and otherwise at Neutron's default
+  (the network address + 1 for IPv4, the network address itself for IPv6). The plan shows the
+  gateway the apply will produce. Left unset, the provider leaves the gateway as it is, so
+  upgrading changes no existing subnet, and a gateway removed outside Terraform stays removed
+  until the configuration says otherwise. Neutron refuses a gateway inside `allocation_pools`,
+  and an IPv4 subnet created without a gateway has its default address in its pools, so restore
+  such a gateway with a `gateway_ip` outside the pools or narrow the pools; Neutron also refuses
+  to remove a gateway that a router interface holds. A subnet without a gateway attaches to a
+  router through `port_id` on `pcd_networking_router_interface`, not `subnet_id`.
+
+### Changed
+
+- `pcd_networking_subnet`: `gateway_ip = ""` is now refused at plan time ("Invalid gateway_ip")
+  unless `no_gateway = true` is set too. It never removed a gateway: on a new subnet Neutron
+  assigned its default and the apply failed with "Provider produced inconsistent result after
+  apply". A configuration that sets `gateway_ip = ""` without `no_gateway = true`, for example
+  one written for an imported subnet without a gateway, worked before and now fails at plan:
+  add `no_gateway = true`, which plans no change for a subnet that has no gateway. The
+  `gateway_ip` description no longer says the default is the first address in the CIDR.
+
 ## [0.1.17] - 2026-10-09
 
 ### Added
