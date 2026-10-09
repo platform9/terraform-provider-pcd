@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`pcd_compute_flavor_access`**, a new resource that grants one project access to one private
+  flavor, as the PCD UI's "Edit Tenants" does. Nova keeps an access list only for a private flavor,
+  so a grant on a public one is refused before anything is sent: Nova would otherwise accept it,
+  then report no access list, and the grant would disappear from state on every refresh. A grant
+  that already exists (made in the UI, say) is adopted rather than failing the apply, so
+  destroying the resource revokes it. A grant revoked outside Terraform is dropped from state on
+  the next refresh and planned again; any other error reading the access list is reported
+  instead. Needs the admin role. Same attributes (`flavor_id`, `tenant_id`) and import ID
+  (`<flavor_id>/<tenant_id>`) as terraform-provider-openstack's
+  `openstack_compute_flavor_access_v2`.
+
 ## [0.1.17] - 2026-10-09
 
 ### Added
