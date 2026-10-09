@@ -96,7 +96,8 @@ func (d *imageDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, 
 					"`pending`, `rejected` or `all`. Glance lists only accepted shares by default, so an image shared with " +
 					"the project and not yet accepted is found with `visibility = \"shared\"` and " +
 					"`member_status = \"pending\"`. Glance applies the filter only to projects without the admin role (an " +
-					"admin's list includes every image whatever its member status), and ignores it when `image_id` is set. " +
+					"admin's list includes every image whatever its member status). With `image_id` set, the provider " +
+					"reads that image directly and does not send the filter. " +
 					"In a configuration that also accepts the image with `pcd_images_image_access_accept`, use `\"all\"`: " +
 					"once the share is accepted, `\"pending\"` no longer finds it and the data source fails.",
 			},

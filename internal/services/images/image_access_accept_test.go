@@ -143,11 +143,18 @@ func TestAccImagesImageAccessAccept_crossProject(t *testing.T) {
 			{
 				// Shared, not yet decided: Glance lists only accepted shares by
 				// default, so the consumer finds it by name with
-				// member_status = "pending".
-				Config: testAccImageAccessCrossConfig(imgFile, project.Name, projectID, "pending", ""),
+				// member_status = "pending". The consumer runs as the second
+				// project, and among its accepted images there is none yet: an
+				// admin would see the image whatever its member status, so the
+				// empty list also shows the filter reaches Glance under a token
+				// without the admin role.
+				Config: testAccImageAccessCrossConfig(imgFile, project.Name, projectID, "pending", "") +
+					testAccImageAccessCrossAcceptedIDs,
 				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("data.pcd_identity_auth_scope.consumer", "project_id", projectID),
 					testAccCheckImageMemberStatus(t, "pcd_images_image_access.share", "pending"),
 					resource.TestCheckResourceAttrPair("data.pcd_images_image.found", "id", "pcd_images_image.shared", "id"),
+					resource.TestCheckResourceAttr("data.pcd_images_image_ids.accepted", "ids.#", "0"),
 				),
 			},
 			{
@@ -157,6 +164,7 @@ func TestAccImagesImageAccessAccept_crossProject(t *testing.T) {
 				// no longer find the image then.
 				Config: testAccImageAccessCrossConfig(imgFile, project.Name, projectID, "all", "accepted"),
 				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("data.pcd_identity_auth_scope.consumer", "project_id", projectID),
 					testAccCheckImageMemberStatus(t, rn, "accepted"),
 					resource.TestCheckResourceAttr(rn, "member_id", projectID),
 				),
@@ -167,6 +175,7 @@ func TestAccImagesImageAccessAccept_crossProject(t *testing.T) {
 				// rejected. "all" still finds the image once it is rejected.
 				Config: testAccImageAccessCrossConfig(imgFile, project.Name, projectID, "all", ""),
 				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("data.pcd_identity_auth_scope.consumer", "project_id", projectID),
 					testAccCheckImageExists(t, "pcd_images_image.shared"),
 					testAccCheckImageMemberStatus(t, "pcd_images_image_access.share", "rejected"),
 				),
@@ -189,6 +198,18 @@ func testAccImageAccessConsumerFactories() map[string]func() (tfprotov6.Provider
 	}
 }
 
+// testAccImageAccessCrossAcceptedIDs looks the shared image up as the consumer
+// among the images it accepted. It is appended to a testAccImageAccessCrossConfig.
+const testAccImageAccessCrossAcceptedIDs = `
+data "pcd_images_image_ids" "accepted" {
+  provider      = pcdconsumer
+  name          = pcd_images_image.shared.name
+  visibility    = "shared"
+  member_status = "accepted"
+  depends_on    = [pcd_images_image_access.share]
+}
+`
+
 // testAccImageAccessCrossConfig shares the image with the consumer project and,
 // when acceptStatus is set, decides as that project. lookupStatus is the
 // member_status the consumer's image lookup uses.
@@ -208,6 +229,11 @@ provider "pcd" {}
 
 provider "pcdconsumer" {
   tenant_name = %q
+}
+
+data "pcd_identity_auth_scope" "consumer" {
+  provider = pcdconsumer
+  name     = "consumer"
 }
 
 resource "pcd_images_image" "shared" {

@@ -49,7 +49,7 @@ resource "pcd_images_image_access_accept" "golden" {
 
 ### Optional
 
-- `member_id` (String) The member project's ID. When omitted, the provider uses the image's only member if exactly one is visible (always the case for a project that is not an admin), and otherwise the project the provider is scoped to. Changing this forces a new resource.
+- `member_id` (String) The member project's ID. When omitted, the provider uses the image's only visible member, otherwise the project the provider is scoped to. Changing this forces a new resource.
 - `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only
@@ -66,7 +66,8 @@ Import is supported using the following syntax. The IDs are assigned by PCD; the
 explains how to look them up.
 
 ```shell
-# image_id: pcdctl image list --shared. The member is the provider's project when
-# omitted; give it as <image_id>/<member_id> otherwise.
+# image_id: pcdctl image list --shared. With <image_id> alone, the member is the
+# image's only visible member, otherwise the provider's project; give
+# <image_id>/<member_id> to name it.
 terraform import pcd_images_image_access_accept.example <image_id>
 ```

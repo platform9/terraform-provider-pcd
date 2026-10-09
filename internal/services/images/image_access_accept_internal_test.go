@@ -6,10 +6,12 @@ package images
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -23,7 +25,9 @@ const imageAccessToken = `{"token": {"project": {"id": "p-self", "name": "team-b
 	"user": {"id": "u1", "name": "admin", "domain": {"id": "default", "name": "Default"}}}}`
 
 // member_id detection follows upstream (the only visible member) and falls
-// back to the token's project when the list does not single one out.
+// back to the token's project when the list does not single one out: no
+// member, several, one without an ID, or an image this project cannot see
+// (Glance answers 404, or 403 when policy hides it).
 func TestImageAccessAcceptDetectsMember(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -37,6 +41,8 @@ func TestImageAccessAcceptDetectsMember(t *testing.T) {
 		{name: "none visible", listBody: `{"members": []}`, wantMember: "p-self", wantToken: true},
 		{name: "admin sees several", listBody: `{"members": [` + imageMemberJSON("p-a", "pending") + `, ` + imageMemberJSON("p-b", "pending") + `]}`, wantMember: "p-self", wantToken: true},
 		{name: "image not visible", listCode: http.StatusNotFound, wantMember: "p-self", wantToken: true},
+		{name: "image hidden by policy", listCode: http.StatusForbidden, wantMember: "p-self", wantToken: true},
+		{name: "one member without an ID", listBody: `{"members": [` + imageMemberJSON("", "pending") + `]}`, wantMember: "p-self", wantToken: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g := &imageAccessGlance{listCode: tc.listCode, listBody: tc.listBody, tokenBody: imageAccessToken}
@@ -97,18 +103,52 @@ func TestImageAccessAcceptNeedsAProjectScopedToken(t *testing.T) {
 	}
 }
 
-// A project with no share to decide on gets the provider's explanation.
+// A project with no share to decide on gets the provider's explanation,
+// whether Glance answers 404 or 403.
 func TestImageAccessAcceptExplainsMissingShare(t *testing.T) {
 	ctx := context.Background()
-	g := &imageAccessGlance{putCode: http.StatusNotFound}
-	srv := g.serve(t)
-	r := &imageAccessAcceptResource{config: imageAccessTestConfig(srv.URL)}
-	resp := imageAccessCreate(ctx, t, r, imageAccessPlan(types.StringValue("p2"), types.StringValue("accepted")))
-	if !resp.Diagnostics.HasError() {
-		t.Fatal("create succeeded with no share")
+	for _, code := range []int{http.StatusNotFound, http.StatusForbidden} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			g := &imageAccessGlance{putCode: code}
+			srv := g.serve(t)
+			r := &imageAccessAcceptResource{config: imageAccessTestConfig(srv.URL)}
+			resp := imageAccessCreate(ctx, t, r, imageAccessPlan(types.StringValue("p2"), types.StringValue("accepted")))
+			if !resp.Diagnostics.HasError() {
+				t.Fatal("create succeeded with no share")
+			}
+			if summary := resp.Diagnostics.Errors()[0].Summary(); summary != "Image is not shared with this project" {
+				t.Fatalf("summary = %q, want %q", summary, "Image is not shared with this project")
+			}
+		})
 	}
-	if summary := resp.Diagnostics.Errors()[0].Summary(); summary != "Image is not shared with this project" {
-		t.Fatalf("summary = %q, want %q", summary, "Image is not shared with this project")
+}
+
+// A failed token read is reported as that, not as a token without a project.
+func TestImageAccessAcceptReportsATokenReadError(t *testing.T) {
+	ctx := context.Background()
+	g := &imageAccessGlance{listBody: `{"members": []}`}
+	srv := g.serve(t)
+	keystone := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(keystone.Close)
+	cfg := imageAccessTestConfig(srv.URL)
+	cfg.Provider.EndpointLocator = func(eo gophercloud.EndpointOpts) (string, error) {
+		if eo.Type == "identity" {
+			return keystone.URL + "/", nil
+		}
+		return srv.URL + "/", nil
+	}
+	r := &imageAccessAcceptResource{config: cfg}
+	resp := imageAccessCreate(ctx, t, r, imageAccessPlan(types.StringUnknown(), types.StringValue("accepted")))
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("create succeeded although the token read failed")
+	}
+	if d := resp.Diagnostics.Errors()[0]; !strings.Contains(d.Detail(), "reading the provider token's project") {
+		t.Fatalf("diagnostic = %q: %q, want the token read's error", d.Summary(), d.Detail())
+	}
+	if n := len(g.seen()); n != 1 {
+		t.Fatalf("calls = %+v, want only the member list", g.seen())
 	}
 }
 

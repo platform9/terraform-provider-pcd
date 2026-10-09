@@ -73,9 +73,8 @@ func (r *imageAccessAcceptResource) Schema(_ context.Context, _ resource.SchemaR
 				MarkdownDescription: "The ID of the shared image. Changing this forces a new resource."},
 			"member_id": schema.StringAttribute{Optional: true, Computed: true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()},
-				MarkdownDescription: "The member project's ID. When omitted, the provider uses the image's only member " +
-					"if exactly one is visible (always the case for a project that is not an admin), and otherwise the " +
-					"project the provider is scoped to. Changing this forces a new resource."},
+				MarkdownDescription: "The member project's ID. When omitted, the provider uses the image's only visible " +
+					"member, otherwise the project the provider is scoped to. Changing this forces a new resource."},
 			"status": schema.StringAttribute{Required: true,
 				Validators:          []validator.String{stringvalidator.OneOf(memberStatuses...)},
 				MarkdownDescription: "The decision: `accepted`, `rejected` or `pending`."},
@@ -235,9 +234,10 @@ func (r *imageAccessAcceptResource) Delete(ctx context.Context, req resource.Del
 					"check the project this provider is scoped to. Glance said: %v", imageID, memberID, err))
 		default:
 			resp.Diagnostics.AddWarning("Image membership not rejected",
-				fmt.Sprintf("Glance refused to reject image %s for project %s (403) because the image's visibility "+
-					"is no longer \"shared\". The resource was removed from state; the membership keeps its last "+
-					"status and applies again if the image is shared again.", imageID, memberID))
+				fmt.Sprintf("Glance refused to reject image %s for project %s (403), and the image is no longer "+
+					"shared with, or visible to, the provider's project: its visibility changed, the owner removed "+
+					"the membership, or the provider is scoped to another project. The resource was removed from "+
+					"state.", imageID, memberID))
 		}
 	default:
 		resp.Diagnostics.AddError("images: rejecting image membership", err.Error())
@@ -270,9 +270,10 @@ func (r *imageAccessAcceptResource) ImportState(ctx context.Context, req resourc
 }
 
 // detectMemberID follows upstream: when exactly one member of the image is
-// visible, that is the member. A project that is not an admin only ever sees
-// its own membership. Otherwise (none visible, or an admin seeing several) it
-// falls back to the project the provider's token is scoped to.
+// visible, that is the member. A member project sees only its own membership;
+// the image's owner and an admin see every member. Otherwise (none visible,
+// several, or one without an ID) it falls back to the project the provider's
+// token is scoped to.
 func (r *imageAccessAcceptResource) detectMemberID(ctx context.Context, client *gophercloud.ServiceClient, region, imageID string) (string, error) {
 	pages, err := members.List(client, imageID).AllPages(ctx)
 	switch {
@@ -281,7 +282,7 @@ func (r *imageAccessAcceptResource) detectMemberID(ctx context.Context, client *
 		if err != nil {
 			return "", fmt.Errorf("reading the members of image %s: %w", imageID, err)
 		}
-		if len(all) == 1 {
+		if len(all) == 1 && all[0].MemberID != "" {
 			return all[0].MemberID, nil
 		}
 	case gophercloud.ResponseCodeIs(err, http.StatusNotFound), gophercloud.ResponseCodeIs(err, http.StatusForbidden):

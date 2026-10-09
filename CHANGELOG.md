@@ -31,9 +31,9 @@ All notable changes to this project are documented here. The format is based on
   next to `tenant_name`, and authentication fails. With `member_id` omitted it uses the image's
   only visible member, and otherwise the provider's own project. Destroying it rejects the image,
   since a member cannot remove itself; a refusal is a warning when the image is no longer shared
-  and an error while it is still shared. Same attributes and import ID as
-  terraform-provider-openstack's `openstack_images_image_access_accept_v2`; the import also takes
-  a bare `<image_id>`.
+  or visible, and an error while it is still shared and visible to the caller. Same attributes
+  and import ID as terraform-provider-openstack's `openstack_images_image_access_accept_v2`; the
+  import also takes a bare `<image_id>`.
 - **`member_status` on the `pcd_images_image` and `pcd_images_image_ids` data sources**, which
   filters images shared with the project by the project's decision: `accepted`, `pending`,
   `rejected` or `all`. Glance lists only accepted shares by default, so this is how a project
