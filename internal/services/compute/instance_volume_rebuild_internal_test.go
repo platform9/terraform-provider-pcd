@@ -284,6 +284,44 @@ func TestUpdateSkipsReimageTheRootVolumeAlreadyHolds(t *testing.T) {
 	}
 }
 
+// A rebuild is how Nova recovers an instance in ERROR, so Update reimages a
+// volume-backed instance in ERROR although Cinder shows its root volume
+// already holding the new image (Nova failed after Cinder finished): the
+// rebuild is sent at 2.93 and the instance settles ACTIVE.
+func TestUpdateReimagesRootVolumeOutOfError(t *testing.T) {
+	rebuildFastPolls(t)
+	f := &rebuildFake{t: t,
+		before: volumeRebuildServerJSON("ERROR", ""),
+		after: []string{
+			volumeRebuildServerJSON("ERROR", "rebuilding"),
+			volumeRebuildServerJSON("ACTIVE", ""),
+		},
+		images: map[string]string{"img-2": rebuildImageJSON("img-2", "ubuntu", "")},
+		volumes: map[string]string{
+			"vol-data": cinderVolumeJSON("vol-data", "false", "/dev/vdb", ""),
+			"vol-root": cinderVolumeJSON("vol-root", "true", "/dev/vda", "img-2"),
+		},
+	}
+	r := f.start()
+	s := rebuildSchema(t)
+	state := rebuildTestModel(t, s, types.StringValue(""), types.StringNull())
+	state.Status = types.StringValue("ERROR")
+	state.BlockDevice = blockDeviceList(t, map[string]attr.Value{})
+	plan := rebuildTestModel(t, s, types.StringUnknown(), types.StringNull())
+	plan.Status = types.StringUnknown()
+	plan.BlockDevice = blockDeviceList(t, map[string]attr.Value{"uuid": types.StringValue("img-2")})
+	resp, got := rebuildUpdate(t, r, s, plan, state)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("update: %v", resp.Diagnostics)
+	}
+	if len(f.rebuilds) != 1 || f.versions[0] != "2.93" {
+		t.Fatalf("rebuilds %v at microversions %v; want one at 2.93", f.rebuilds, f.versions)
+	}
+	if uuid := stateRootImage(t, got); uuid != "img-2" || got.ImageID.ValueString() != "" || got.Status.ValueString() != "ACTIVE" {
+		t.Errorf("state root uuid %q, image_id %q, status %s; want img-2, \"\" and ACTIVE", uuid, got.ImageID.ValueString(), got.Status)
+	}
+}
+
 // A block_device that did not change on a volume-backed instance sends no
 // rebuild and reads no volume.
 func TestUpdateUnchangedRootBlockDeviceReadsNoVolume(t *testing.T) {
@@ -338,9 +376,9 @@ func TestUpdateRootVolumeKeptOldImage(t *testing.T) {
 // A reimage that ends in ERROR fails the update. Nova records no image on a
 // volume-backed instance and refresh does not read block_device back, so the
 // next apply plans the same change, and sends the rebuild again unless Cinder
-// shows the root volume already holds the new image: the error says so, and
-// gives none of the image path's advice, which rests on Nova recording the
-// new image.
+// shows the root volume already holds the new image and the instance is not
+// in ERROR: the error says so, and gives none of the image path's advice,
+// which rests on Nova recording the new image.
 func TestUpdateRootVolumeReimageEndingInError(t *testing.T) {
 	rebuildFastPolls(t)
 	f := &rebuildFake{t: t,
@@ -366,7 +404,7 @@ func TestUpdateRootVolumeReimageEndingInError(t *testing.T) {
 	}
 	detail := resp.Diagnostics.Errors()[0].Detail()
 	for _, want := range []string{"the next apply plans the same change",
-		"it sends the rebuild again unless Cinder shows the root volume already holds the new image",
+		"it sends the rebuild again unless Cinder shows the root volume already holds the new image and the instance is not in ERROR",
 		"terraform apply -replace="} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("error %q does not mention %q", detail, want)

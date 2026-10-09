@@ -206,9 +206,9 @@ func checkRebuildTarget(ctx context.Context, imgClient *gophercloud.ServiceClien
 // from a volume (Nova then reimages the root volume through Cinder). It then
 // sets plan.ImageID, which is unknown in the plan whenever image_id is not
 // configured. A volume-backed instance whose root volume Cinder already shows
-// on the new image is not reimaged again. It returns the status the instance
-// settled in after a rebuild, or "" when it sent none, so that Update's later
-// power_state step starts from that status.
+// on the new image is not reimaged again, unless it is in ERROR. It returns
+// the status the instance settled in after a rebuild, or "" when it sent
+// none, so that Update's later power_state step starts from that status.
 func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *gophercloud.ServiceClient, plan, state *instanceModel, diags *diag.Diagnostics) string {
 	id := state.ID.ValueString()
 	current := state.ImageID.ValueString()
@@ -258,8 +258,10 @@ func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *go
 		// the same change. Cinder records the image a volume was last
 		// written from: a root volume that already holds the new image is
 		// not erased again. A root that cannot be told or read is reimaged.
+		// An instance in ERROR is reimaged anyway, because a rebuild is how
+		// Nova recovers it and Cinder may have finished before Nova failed.
 		bs, bsErr = r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
-		if bsErr == nil {
+		if bsErr == nil && before.Status != "ERROR" {
 			if root, err := rootVolume(ctx, bs, before); err == nil && root.VolumeImageMetadata["image_id"] == target {
 				setPlannedImageID(plan, current)
 				return ""
@@ -292,8 +294,9 @@ func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *go
 		if volumeBacked {
 			recovery = "A reimage that fails leaves the instance in ERROR. Nova records no image on an instance that " +
 				"boots from a volume, and refresh does not read block_device back, so the next apply plans the same " +
-				"change; it sends the rebuild again unless Cinder shows the root volume already holds the new image. " +
-				"If it keeps failing, replace the instance with terraform apply -replace=pcd_compute_instance.<name>."
+				"change; it sends the rebuild again unless Cinder shows the root volume already holds the new image and " +
+				"the instance is not in ERROR. If it keeps failing, replace the instance with " +
+				"terraform apply -replace=pcd_compute_instance.<name>."
 		}
 		diags.AddError("compute: waiting for instance rebuild", err.Error()+"\n\n"+recovery)
 		return ""
