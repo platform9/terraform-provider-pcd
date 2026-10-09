@@ -205,9 +205,10 @@ func checkRebuildTarget(ctx context.Context, imgClient *gophercloud.ServiceClien
 // booted from an image, the uuid of the root block_device for one that boots
 // from a volume (Nova then reimages the root volume through Cinder). It then
 // sets plan.ImageID, which is unknown in the plan whenever image_id is not
-// configured. It returns the status the instance settled in after a rebuild,
-// or "" when it sent none, so that Update's later power_state step starts
-// from that status.
+// configured. A volume-backed instance whose root volume Cinder already shows
+// on the new image is not reimaged again. It returns the status the instance
+// settled in after a rebuild, or "" when it sent none, so that Update's later
+// power_state step starts from that status.
 func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *gophercloud.ServiceClient, plan, state *instanceModel, diags *diag.Diagnostics) string {
 	id := state.ID.ValueString()
 	current := state.ImageID.ValueString()
@@ -248,6 +249,23 @@ func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *go
 				"its root volume, change the uuid of the block_device with boot_index = 0.", id))
 		return ""
 	}
+	var bs *gophercloud.ServiceClient
+	var bsErr error
+	if volumeBacked {
+		// An apply interrupted, timed out or failed in a later step after
+		// Nova reimaged the root volume keeps the old uuid in state, and
+		// refresh does not read block_device back, so the next apply plans
+		// the same change. Cinder records the image a volume was last
+		// written from: a root volume that already holds the new image is
+		// not erased again. A root that cannot be told or read is reimaged.
+		bs, bsErr = r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
+		if bsErr == nil {
+			if root, err := rootVolume(ctx, bs, before); err == nil && root.VolumeImageMetadata["image_id"] == target {
+				setPlannedImageID(plan, current)
+				return ""
+			}
+		}
+	}
 	imgClient, err := r.config.ForRegion(plan.Region.ValueString()).ImageV2Client()
 	if err != nil {
 		diags.AddError("compute: building image v2 client", err.Error())
@@ -273,33 +291,49 @@ func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *go
 			"terraform apply -replace=pcd_compute_instance.<name>."
 		if volumeBacked {
 			recovery = "A reimage that fails leaves the instance in ERROR. Nova records no image on an instance that " +
-				"boots from a volume, and refresh does not read block_device back, so the next apply sends the same " +
-				"rebuild again; if it keeps failing, replace the instance with " +
-				"terraform apply -replace=pcd_compute_instance.<name>."
+				"boots from a volume, and refresh does not read block_device back, so the next apply plans the same " +
+				"change; it sends the rebuild again unless Cinder shows the root volume already holds the new image. " +
+				"If it keeps failing, replace the instance with terraform apply -replace=pcd_compute_instance.<name>."
 		}
 		diags.AddError("compute: waiting for instance rebuild", err.Error()+"\n\n"+recovery)
 		return ""
 	}
 	if volumeBacked {
 		// Nova keeps no image on a volume-backed server; Cinder records the
-		// image a volume was last written from. Nova's rebuild writes only
-		// the root volume, so any bootable volume that holds the new image
-		// confirms it, without telling the root from a data volume.
-		var bootable []bootableVolume
-		bs, err := r.config.ForRegion(plan.Region.ValueString()).BlockStorageV3Client()
+		// image a volume was last written from. The root volume keeps its ID
+		// through a reimage, so before's attachments and root device name
+		// still find it.
+		var attached []attachedVolume
+		err := bsErr
 		if err == nil {
-			bootable, err = bootableVolumes(ctx, bs, server)
+			attached, err = attachedVolumes(ctx, bs, before)
 		}
 		if err != nil {
 			diags.AddWarning("compute: could not confirm the reimaged root volume",
-				fmt.Sprintf("Nova reported the rebuild of instance %s finished, but reading its volumes failed: %v. Check the root volume's image in Cinder.",
-					id, err))
+				fmt.Sprintf("Nova reported the rebuild of instance %s finished, but reading its volumes failed: %v. "+
+					"Terraform recorded the new uuid for block_device; check the root volume's image in Cinder.", id, err))
 			setPlannedImageID(plan, current)
 			return server.Status
 		}
-		held := make([]string, 0, len(bootable))
-		for _, b := range bootable {
-			got := b.volume.VolumeImageMetadata["image_id"]
+		if root, err := findRootVolume(before, attached); err == nil {
+			if got := root.VolumeImageMetadata["image_id"]; got != target {
+				diags.AddError("compute: rebuilding instance",
+					fmt.Sprintf("Nova finished the rebuild of instance %s, but its root volume %s holds image %q instead of %q. Nova's last fault: %q.",
+						id, root.ID, got, target, server.Fault.Message))
+				return ""
+			}
+			setPlannedImageID(plan, current)
+			return server.Status
+		}
+		// The root cannot be told from a data volume. Nova's rebuild writes
+		// only the root volume, so any bootable volume that holds the new
+		// image confirms it.
+		held := make([]string, 0, len(attached))
+		for _, a := range attached {
+			if !a.bootable {
+				continue
+			}
+			got := a.volume.VolumeImageMetadata["image_id"]
 			if got == target {
 				setPlannedImageID(plan, current)
 				return server.Status
@@ -307,7 +341,7 @@ func (r *instanceResource) rebuildIfImageChanged(ctx context.Context, client *go
 			if got == "" {
 				got = "no image"
 			}
-			held = append(held, b.volume.ID+": "+got)
+			held = append(held, a.volume.ID+": "+got)
 		}
 		if len(held) == 0 {
 			held = append(held, "no bootable volume attached")
@@ -476,82 +510,95 @@ func rootImageChange(ctx context.Context, planList, stateList types.List, diags 
 	return "", false
 }
 
-// bootableVolume is a volume attached to a server that Cinder marks bootable,
-// with the device it is attached on for that server ("" when Cinder names
-// none).
-type bootableVolume struct {
-	volume *volumes.Volume
-	device string
+// attachedVolume is a volume attached to a server: what Cinder reports for
+// it, the device it is attached on for that server ("" when Cinder names none
+// yet) and whether Cinder flags it bootable.
+type attachedVolume struct {
+	volume   *volumes.Volume
+	device   string
+	bootable bool
 }
 
-// bootableVolumes reads every volume attached to server and returns the ones
-// Cinder marks bootable. Cinder marks every volume written from an image
-// bootable, so a data volume can be among them.
-func bootableVolumes(ctx context.Context, bs *gophercloud.ServiceClient, server *servers.Server) ([]bootableVolume, error) {
-	var bootable []bootableVolume
-	for _, attached := range server.AttachedVolumes {
-		v, err := volumes.Get(ctx, bs, attached.ID).Extract()
+// attachedVolumes reads every volume attached to server. Cinder flags every
+// volume written from an image bootable, so a data volume can be bootable,
+// and a root volume written by hand need not be.
+func attachedVolumes(ctx context.Context, bs *gophercloud.ServiceClient, server *servers.Server) ([]attachedVolume, error) {
+	attached := make([]attachedVolume, 0, len(server.AttachedVolumes))
+	for _, a := range server.AttachedVolumes {
+		v, err := volumes.Get(ctx, bs, a.ID).Extract()
 		if err != nil {
-			return nil, fmt.Errorf("reading volume %s: %w", attached.ID, err)
+			return nil, fmt.Errorf("reading volume %s: %w", a.ID, err)
 		}
 		if v == nil {
-			return nil, fmt.Errorf("reading volume %s: %w", attached.ID, clients.ErrNoObject)
-		}
-		if !strings.EqualFold(v.Bootable, "true") {
-			continue
+			return nil, fmt.Errorf("reading volume %s: %w", a.ID, clients.ErrNoObject)
 		}
 		device := ""
-		for _, a := range v.Attachments {
-			if a.ServerID == server.ID {
-				device = a.Device
+		for _, at := range v.Attachments {
+			if at.ServerID == server.ID {
+				device = at.Device
 			}
 		}
-		bootable = append(bootable, bootableVolume{volume: v, device: device})
+		attached = append(attached, attachedVolume{volume: v, device: device, bootable: strings.EqualFold(v.Bootable, "true")})
 	}
-	return bootable, nil
+	return attached, nil
 }
 
-// rootVolume finds the volume a server boots from among its bootable
-// volumes. When Nova reports the server's root device name, the root is the
-// bootable volume on that device. Its callers read the server through
-// getRebuildable, which asks for compute microversion 2.3, so the name is
-// present whenever Nova's policy returns it. Otherwise a single bootable
-// volume is the root, and among several on one bus the root is the first
-// device name, because Nova names the root first on its bus (vda before
-// vdb). Bootable volumes on different buses cannot be told apart that way (a
-// scsi sda sorts before a virtio vda), so rootVolume refuses them rather
-// than guess.
+// rootVolume reads the volumes attached to server and returns the one it
+// boots from, as findRootVolume tells it.
 func rootVolume(ctx context.Context, bs *gophercloud.ServiceClient, server *servers.Server) (*volumes.Volume, error) {
-	candidates, err := bootableVolumes(ctx, bs, server)
+	attached, err := attachedVolumes(ctx, bs, server)
 	if err != nil {
 		return nil, err
 	}
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("instance %s has no bootable volume attached", server.ID)
+	return findRootVolume(server, attached)
+}
+
+// findRootVolume finds the volume a server boots from among the volumes
+// attached to it. When Nova reports the server's root device name, the root
+// is the volume on that device, whether or not Cinder flags it bootable. Its
+// callers read the server through getRebuildable, which asks for compute
+// microversion 2.3, so the name is present whenever Nova's policy returns it.
+// Otherwise the root is the volume with the first device name, because Nova
+// names the root first on its bus (vda before vdb), but only when every
+// attached volume has a device name, all of them are on one bus (a scsi sda
+// sorts before a virtio vda) and that first volume is bootable (a data volume
+// written from an image is bootable, a root written by hand need not be). In
+// any other case findRootVolume refuses rather than guess.
+func findRootVolume(server *servers.Server, attached []attachedVolume) (*volumes.Volume, error) {
+	if len(attached) == 0 {
+		return nil, fmt.Errorf("instance %s has no volume attached, so there is no bootable volume to reimage", server.ID)
 	}
 	if server.RootDeviceName != nil && *server.RootDeviceName != "" {
 		want := strings.TrimPrefix(*server.RootDeviceName, "/dev/")
-		for _, c := range candidates {
-			if strings.TrimPrefix(c.device, "/dev/") == want {
-				return c.volume, nil
+		for _, a := range attached {
+			if strings.TrimPrefix(a.device, "/dev/") == want {
+				return a.volume, nil
 			}
 		}
-		return nil, fmt.Errorf("instance %s: Nova reports its root device as %s, but no bootable attached volume is on it (candidates: %s)",
-			server.ID, *server.RootDeviceName, describeBootable(candidates))
+		return nil, fmt.Errorf("instance %s: Nova reports its root device as %s, but no attached volume is on it (attached: %s)",
+			server.ID, *server.RootDeviceName, describeAttached(attached))
 	}
-	if len(candidates) == 1 {
-		return candidates[0].volume, nil
+	unknown := func(reason string) error {
+		return fmt.Errorf("instance %s: Nova did not report its root device, and %s, so the root cannot be told from a "+
+			"data volume; reimage it through the root block_device of its pcd_compute_instance, which names the image "+
+			"explicitly", server.ID, reason)
 	}
-	root, bus := candidates[0], deviceBus(candidates[0].device)
-	for _, c := range candidates[1:] {
-		if bus == "" || deviceBus(c.device) != bus {
-			return nil, fmt.Errorf("instance %s has %d bootable volumes attached on different buses (%s), and Nova did not "+
-				"report its root device, so the root cannot be told from a data volume; reimage it by changing the root "+
-				"block_device uuid of its pcd_compute_instance instead", server.ID, len(candidates), describeBootable(candidates))
+	for _, a := range attached {
+		if a.device == "" {
+			return nil, unknown(fmt.Sprintf("an attachment has no device name yet (%s)", a.volume.ID))
 		}
-		if c.device < root.device {
-			root = c
+	}
+	root, bus := attached[0], deviceBus(attached[0].device)
+	for _, a := range attached[1:] {
+		if bus == "" || deviceBus(a.device) != bus {
+			return nil, unknown(fmt.Sprintf("its volumes are attached on different buses (%s)", describeAttached(attached)))
 		}
+		if a.device < root.device {
+			root = a
+		}
+	}
+	if !root.bootable {
+		return nil, unknown(fmt.Sprintf("the first attached device %s is not a bootable volume", root.device))
 	}
 	return root.volume, nil
 }
@@ -571,16 +618,16 @@ func deviceBus(device string) string {
 	return ""
 }
 
-// describeBootable lists bootable volumes for an error: "vol-1 on /dev/vda,
+// describeAttached lists attached volumes for an error: "vol-1 on /dev/vda,
 // vol-2 on /dev/sda".
-func describeBootable(candidates []bootableVolume) string {
-	parts := make([]string, 0, len(candidates))
-	for _, c := range candidates {
-		if c.device == "" {
-			parts = append(parts, c.volume.ID+" (no device)")
+func describeAttached(attached []attachedVolume) string {
+	parts := make([]string, 0, len(attached))
+	for _, a := range attached {
+		if a.device == "" {
+			parts = append(parts, a.volume.ID+" (no device)")
 			continue
 		}
-		parts = append(parts, c.volume.ID+" on "+c.device)
+		parts = append(parts, a.volume.ID+" on "+a.device)
 	}
 	return strings.Join(parts, ", ")
 }

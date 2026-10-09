@@ -56,8 +56,9 @@ func (a *instanceRebuildAction) Schema(_ context.Context, _ action.SchemaRequest
 			"from that image, and the instance keeps its ID, ports and IP addresses, attached volumes, metadata, key pair " +
 			"and user data. This is the PCD UI's Rebuild action with the image left as it is, used to return an instance to " +
 			"its golden image. Nothing in Terraform state changes, so the action can run again at any time. To move an " +
-			"instance to a different image, change `image_id` or `image_name` on `pcd_compute_instance` instead, which " +
-			"rebuilds it in place. For an instance that boots from a volume, the image is the one its root volume was " +
+			"instance to a different image, change `image_id` or `image_name` on `pcd_compute_instance` instead (the " +
+			"`uuid` of its root `block_device` for an instance that boots from a volume), which rebuilds it in place. " +
+			"For an instance that boots from a volume, the image is the one its root volume was " +
 			"last written from, and Nova has Cinder rewrite the volume (compute microversion 2.93). The instance must be " +
 			"`ACTIVE`, `SHUTOFF` or in `ERROR` with no task in progress; a stopped instance is stopped again afterward.",
 		Attributes: map[string]schema.Attribute{
@@ -116,7 +117,7 @@ func (a *instanceRebuildAction) Invoke(ctx context.Context, req action.InvokeReq
 		}
 		if image = root.VolumeImageMetadata["image_id"]; image == "" {
 			resp.Diagnostics.AddError("compute: rebuilding instance",
-				fmt.Sprintf("The root volume %s of instance %s was not created from an image, so there is no image to reimage it with.", root.ID, id))
+				fmt.Sprintf("The root volume %s of instance %s was not written from an image, so there is no image to reimage it with.", root.ID, id))
 			return
 		}
 		microversion = computeMicroversionRebuildVolumeBacked
