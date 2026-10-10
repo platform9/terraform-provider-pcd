@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -33,9 +34,11 @@ import (
 )
 
 var (
-	_ resource.Resource                = (*subnetResource)(nil)
-	_ resource.ResourceWithConfigure   = (*subnetResource)(nil)
-	_ resource.ResourceWithImportState = (*subnetResource)(nil)
+	_ resource.Resource                   = (*subnetResource)(nil)
+	_ resource.ResourceWithConfigure      = (*subnetResource)(nil)
+	_ resource.ResourceWithImportState    = (*subnetResource)(nil)
+	_ resource.ResourceWithValidateConfig = (*subnetResource)(nil)
+	_ resource.ResourceWithModifyPlan     = (*subnetResource)(nil)
 )
 
 // poolObjType is the element type of the allocation_pools list.
@@ -61,6 +64,7 @@ type subnetModel struct {
 	CIDR              types.String `tfsdk:"cidr"`
 	IPVersion         types.Int64  `tfsdk:"ip_version"`
 	GatewayIP         types.String `tfsdk:"gateway_ip"`
+	NoGateway         types.Bool   `tfsdk:"no_gateway"`
 	EnableDHCP        types.Bool   `tfsdk:"enable_dhcp"`
 	DNSNameservers    types.List   `tfsdk:"dns_nameservers"`
 	AllocationPools   types.List   `tfsdk:"allocation_pools"`
@@ -90,7 +94,28 @@ func (r *subnetResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"description": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "A description of the subnet.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
 			"cidr":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The CIDR of the subnet. Changing this forces a new resource.", PlanModifiers: forceNewStr},
 			"ip_version":  schema.Int64Attribute{Optional: true, Computed: true, Default: int64default.StaticInt64(4), MarkdownDescription: "IP version (4 or 6)."},
-			"gateway_ip":  schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The gateway IP. Defaults to the first address in the CIDR.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"gateway_ip": schema.StringAttribute{
+				Optional: true, Computed: true, PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				MarkdownDescription: "The gateway IP. When omitted, Neutron picks the network address + 1 for IPv4 (`10.0.0.1` " +
+					"in `10.0.0.0/24`) and the network address itself for IPv6 (`2001:db8::` in `2001:db8::/64`). Reads as " +
+					"`\"\"` when the subnet has no gateway. To remove the gateway, set `no_gateway = true`; " +
+					"`gateway_ip = \"\"` is refused unless `no_gateway = true` is set too.",
+			},
+			"no_gateway": schema.BoolAttribute{
+				Optional: true, Computed: true,
+				MarkdownDescription: "Whether the subnet has no gateway (the PCD UI's \"Disable Gateway\"). `true` creates the " +
+					"subnet without one, or removes it from an existing subnet in place; it cannot be combined with " +
+					"a non-empty `gateway_ip`. `false` restores a gateway in place: at `gateway_ip` when that is set, otherwise at " +
+					"Neutron's default for the subnet (see `gateway_ip`). Neutron refuses a gateway inside " +
+					"`allocation_pools`: an IPv4 subnet created without a gateway gets pools that start at the default " +
+					"address when Neutron derives them, and a subnet whose earlier gateway was not the default usually has " +
+					"pools that cover it, so restore such a gateway with a `gateway_ip` outside the pools, or narrow " +
+					"`allocation_pools` in the same change. Neutron also refuses to remove a gateway that a router interface " +
+					"holds. When `no_gateway` is not set, the provider leaves the gateway as it is and reports whether the " +
+					"subnet has one, so removing the attribute from a configuration does not restore a gateway. A subnet " +
+					"without a gateway attaches to a router only through a port: use `port_id`, not `subnet_id`, on " +
+					"`pcd_networking_router_interface`.",
+			},
 			"enable_dhcp": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Whether DHCP is enabled for the subnet."},
 			"dns_nameservers": schema.ListAttribute{
 				Optional: true, Computed: true, ElementType: types.StringType, MarkdownDescription: "DNS nameservers for the subnet.",
@@ -327,7 +352,11 @@ func subnetCreateOpts(ctx context.Context, plan *subnetModel, diags *diag.Diagno
 		DNSNameservers:  listToStrings(ctx, plan.DNSNameservers, diags),
 		AllocationPools: poolsFromList(ctx, plan.AllocationPools, diags),
 	}
-	if v := plan.GatewayIP.ValueString(); v != "" {
+	if plan.NoGateway.ValueBool() {
+		// gophercloud sends "" as "gateway_ip": null, Neutron's "no gateway".
+		noGateway := ""
+		createOpts.GatewayIP = &noGateway
+	} else if v := plan.GatewayIP.ValueString(); v != "" {
 		createOpts.GatewayIP = &v
 	}
 	if plan.DNSPublishFixedIP.ValueBool() {
@@ -344,7 +373,17 @@ func subnetUpdateOpts(ctx context.Context, plan, state *subnetModel, diags *diag
 	description := plan.Description.ValueString()
 	enableDHCP := plan.EnableDHCP.ValueBool()
 	updateOpts := subnets.UpdateOpts{Name: &name, Description: &description, EnableDHCP: &enableDHCP}
-	if v := plan.GatewayIP.ValueString(); v != "" {
+	// The gateway goes out on every update, as before: a planned gateway, or
+	// null when no_gateway is true. Neutron ignores an unchanged value, and
+	// sending it means a stale state (an apply with -refresh=false) cannot leave
+	// the subnet different from the plan. When the configuration sets neither
+	// attribute, the gateway (or null) resent is the one state holds, so under
+	// -refresh=false a stale state writes it back over a change made outside
+	// Terraform; that is the price of resending.
+	if plan.NoGateway.ValueBool() {
+		noGateway := ""
+		updateOpts.GatewayIP = &noGateway
+	} else if v := plan.GatewayIP.ValueString(); v != "" {
 		updateOpts.GatewayIP = &v
 	}
 	if !plan.DNSNameservers.Equal(state.DNSNameservers) {
@@ -385,6 +424,7 @@ func (r *subnetResource) readInto(ctx context.Context, client *gophercloud.Servi
 	m.CIDR = types.StringValue(sub.CIDR)
 	m.IPVersion = types.Int64Value(int64(sub.IPVersion))
 	m.GatewayIP = types.StringValue(sub.GatewayIP)
+	m.NoGateway = types.BoolValue(sub.GatewayIP == "")
 	m.EnableDHCP = types.BoolValue(sub.EnableDHCP)
 	m.DNSPublishFixedIP = types.BoolValue(sub.DNSPublishFixedIP)
 	m.TenantID = types.StringValue(sub.TenantID)
@@ -435,4 +475,127 @@ func poolsFromList(ctx context.Context, l types.List, diags *diag.Diagnostics) [
 		out = append(out, subnets.AllocationPool{Start: p.Start.ValueString(), End: p.End.ValueString()})
 	}
 	return out
+}
+
+// ValidateConfig refuses gateway settings that cannot round-trip, at plan
+// time: gateway_ip = "" without no_gateway = true (Neutron would assign a
+// gateway and Terraform would report an inconsistent result), and a non-empty
+// gateway_ip together with no_gateway = true. Unknown values are skipped.
+func (r *subnetResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var cfg subnetModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(gatewayConfigDiags(cfg.NoGateway, cfg.GatewayIP)...)
+}
+
+// gatewayConfigDiags holds ValidateConfig's gateway rules, apart from the
+// framework so they can be unit-tested.
+func gatewayConfigDiags(noGateway types.Bool, gatewayIP types.String) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if gatewayIP.IsNull() || gatewayIP.IsUnknown() {
+		return diags
+	}
+	if gatewayIP.ValueString() == "" {
+		// gateway_ip = "" next to no_gateway = true agrees with it: it is how a
+		// subnet without a gateway reads back after import.
+		if noGateway.IsUnknown() || noGateway.ValueBool() {
+			return diags
+		}
+		diags.AddAttributeError(path.Root("gateway_ip"), "Invalid gateway_ip",
+			`gateway_ip = "" on its own does not remove a gateway. Set no_gateway = true, with or without `+
+				`gateway_ip = ""; for a subnet that already has no gateway, that plans no change.`)
+		return diags
+	}
+	if noGateway.ValueBool() {
+		diags.AddAttributeError(path.Root("gateway_ip"), "Conflicting gateway settings",
+			"gateway_ip cannot be set together with no_gateway = true. Remove gateway_ip to have no gateway, "+
+				"or set no_gateway = false.")
+	}
+	return diags
+}
+
+// ModifyPlan plans gateway_ip for a configured no_gateway, so the plan shows
+// the gateway the apply will produce: "" when no_gateway is true, overriding
+// the prior gateway that gateway_ip's UseStateForUnknown would otherwise carry
+// into the plan, and Neutron's default when no_gateway = false restores a
+// gateway that the subnet does not have. An omitted no_gateway is planned from
+// the planned gateway.
+func (r *subnetResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() {
+		return // destroy
+	}
+	var cfg, plan subnetModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	priorGateway := types.StringNull()
+	if !req.State.Raw.IsNull() {
+		resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("gateway_ip"), &priorGateway)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+	if gw, override := plannedGatewayIP(cfg.NoGateway, cfg.GatewayIP, priorGateway, plan.CIDR); override {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("gateway_ip"), gw)...)
+	}
+	// An omitted allocation_pools makes Terraform propose null for it, so the
+	// framework marks every computed attribute the configuration omits unknown.
+	// Deriving an omitted no_gateway from the planned gateway, which
+	// UseStateForUnknown keeps, leaves the plan empty when nothing changes.
+	if cfg.NoGateway.IsNull() && plan.NoGateway.IsUnknown() {
+		var plannedGateway types.String
+		resp.Diagnostics.Append(resp.Plan.GetAttribute(ctx, path.Root("gateway_ip"), &plannedGateway)...)
+		if !plannedGateway.IsNull() && !plannedGateway.IsUnknown() {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("no_gateway"), types.BoolValue(plannedGateway.ValueString() == ""))...)
+		}
+	}
+}
+
+// plannedGatewayIP decides the gateway_ip a plan carries for a configured
+// no_gateway, and whether ModifyPlan overrides what gateway_ip's own plan
+// modifier produced. A configured gateway_ip always wins, and an unmanaged
+// no_gateway (null in configuration) changes nothing. no_gateway = false plans
+// a gateway only for a subnet that has none now (prior gateway ""): on create
+// Neutron picks it, and an existing gateway is kept.
+func plannedGatewayIP(cfgNoGateway types.Bool, cfgGatewayIP, priorGatewayIP, cidr types.String) (types.String, bool) {
+	switch {
+	case !cfgGatewayIP.IsNull() || cfgNoGateway.IsNull():
+		return types.StringNull(), false
+	case cfgNoGateway.IsUnknown():
+		return types.StringUnknown(), true
+	case cfgNoGateway.ValueBool():
+		return types.StringValue(""), true
+	case priorGatewayIP.IsNull() || priorGatewayIP.IsUnknown() || priorGatewayIP.ValueString() != "":
+		return types.StringNull(), false
+	case cidr.IsNull() || cidr.IsUnknown():
+		return types.StringUnknown(), true
+	}
+	gw, err := neutronDefaultGateway(cidr.ValueString())
+	if err != nil {
+		return types.StringUnknown(), true
+	}
+	return types.StringValue(gw), true
+}
+
+// neutronDefaultGateway returns the gateway Neutron gives a subnet created
+// without gateway_ip: the network address + 1 for IPv4, and the network address
+// itself (the subnet-router anycast address) for IPv6.
+func neutronDefaultGateway(cidr string) (string, error) {
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return "", err
+	}
+	prefix = prefix.Masked()
+	if !prefix.Addr().Is4() {
+		return prefix.Addr().String(), nil
+	}
+	gw := prefix.Addr().Next()
+	if !prefix.Contains(gw) {
+		return "", fmt.Errorf("%s has no address after its network address", cidr)
+	}
+	return gw.String(), nil
 }

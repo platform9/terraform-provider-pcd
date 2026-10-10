@@ -119,6 +119,7 @@ ID alone.
 | Resource | Import ID | Where to find it |
 |---|---|---|
 | `pcd_blockstorage_volume_type` | `<volume_type_id>` | `pcdctl volume type list` |
+| `pcd_blockstorage_volume_type_access` | `<volume_type_id>/<project_id>` | `pcdctl volume type list --private`; `pcdctl volume type show <volume_type_id>` (its `access_project_ids` lists the projects that hold access) |
 | `pcd_blockstorage_volume` | `<id>` | `pcdctl volume list` |
 | `pcd_blockstorage_snapshot` | `<snapshot_id>` | `pcdctl volume snapshot list` |
 | `pcd_blockstorage_volume_backup` | `<backup_id>` | `pcdctl volume backup list` |
@@ -129,6 +130,7 @@ ID alone.
 | Resource | Import ID | Where to find it |
 |---|---|---|
 | `pcd_compute_flavor` | `<id>` | `pcdctl flavor list` |
+| `pcd_compute_flavor_access` | `<flavor_id>/<tenant_id>` | `pcdctl flavor list --private`; `pcdctl flavor show <flavor_id>` (its `access_project_ids` lists the projects that hold access) |
 | `pcd_compute_instance` | `<id>` | `pcdctl server list` |
 | `pcd_compute_instance_snapshot` | `<image_id>` | `pcdctl image list`; a snapshot's `instance_uuid` property names its instance |
 | `pcd_compute_instance_rescue` | `<instance_id>` | `pcdctl server list --status RESCUE` (only an instance in rescue mode imports) |

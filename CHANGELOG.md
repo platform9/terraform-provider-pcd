@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`pcd_compute_flavor_access`**, a new resource that grants one project access to one private
+  flavor, as the PCD UI's "Edit Tenants" does. Nova keeps an access list only for a private flavor,
+  so a grant on a public one is refused before the grant is sent: Nova would otherwise accept it,
+  then report no access list, and the grant would disappear from state on every refresh. A grant
+  that already exists (made in the UI, say) is adopted rather than failing the apply, so
+  destroying the resource revokes it. A grant revoked outside Terraform is dropped from state on
+  the next refresh and planned again; any other error reading the access list is reported
+  instead. Needs the admin role. Same attributes (`flavor_id`, `tenant_id`) and import ID
+  (`<flavor_id>/<tenant_id>`) as terraform-provider-openstack's
+  `openstack_compute_flavor_access_v2`.
 - **`pcd_images_image_access`**, a new resource for the owner's side of image sharing: it adds
   a project as a member of an image, as the PCD UI's image members list does. Glance accepts
   and serves members only while the image's `visibility` is `shared` (an image created without
@@ -39,6 +49,39 @@ All notable changes to this project are documented here. The format is based on
   finds an image shared with it before accepting it. Glance applies the filter only to projects
   without the admin role. A configuration that also accepts the image should use `all`: once the
   share is accepted, `pending` no longer finds it.
+- **`pcd_blockstorage_volume_type_access`**, a new resource that grants one project access to
+  one private volume type, as the PCD UI's tenant list on a volume type does. Cinder grants no
+  project access to a private type, not even the one that created it, so until now a type with
+  `is_public = false` was usable only by admins; the `is_public` description of
+  `pcd_blockstorage_volume_type` now points to the new resource. A grant that already exists is
+  adopted rather than failing the apply, so destroying the resource revokes it. A grant revoked
+  outside Terraform, or whose type was deleted or made public, is dropped from state on the next
+  refresh, and destroying a grant on a type that has since become public succeeds with a
+  warning. Needs the admin role. Same attributes and import ID (`<volume_type_id>/<project_id>`)
+  as terraform-provider-openstack's `openstack_blockstorage_volume_type_access_v3`, whose refresh
+  failed instead when the grant was gone.
+- **`no_gateway` on `pcd_networking_subnet`**, the PCD UI's "Disable Gateway": `true` creates a
+  subnet without a gateway or removes the gateway from an existing subnet in place, and `false`
+  restores one in place, at `gateway_ip` when that is set and otherwise at Neutron's default
+  (the network address + 1 for IPv4, the network address itself for IPv6). The plan shows the
+  gateway the apply will produce. Left unset, the provider leaves the gateway as it is, so
+  upgrading changes no existing subnet, and a gateway removed outside Terraform stays removed
+  until the configuration says otherwise. Neutron refuses a gateway inside `allocation_pools`,
+  and an IPv4 subnet created without a gateway has its default address in its pools when Neutron
+  derives them, so restore such a gateway with a `gateway_ip` outside the pools or narrow the
+  pools; Neutron also refuses to remove a gateway that a router interface holds. A subnet without
+  a gateway attaches to a router through `port_id` on `pcd_networking_router_interface`, not
+  `subnet_id`.
+
+### Changed
+
+- `pcd_networking_subnet`: `gateway_ip = ""` is now refused at plan time ("Invalid gateway_ip")
+  unless `no_gateway = true` is set too. It never removed a gateway: on a new subnet Neutron
+  assigned its default and the apply failed with "Provider produced inconsistent result after
+  apply". A configuration that sets `gateway_ip = ""` without `no_gateway = true`, for example
+  one written for an imported subnet without a gateway, worked before and now fails at plan:
+  add `no_gateway = true`, which plans no change for a subnet that has no gateway. The
+  `gateway_ip` description no longer says the default is the first address in the CIDR.
 
 ## [0.1.17] - 2026-10-09
 
