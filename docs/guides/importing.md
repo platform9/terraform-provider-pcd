@@ -165,6 +165,8 @@ ID alone.
 | Resource | Import ID | Where to find it |
 |---|---|---|
 | `pcd_images_image` | `<id>` | `pcdctl image list` |
+| `pcd_images_image_access` | `<image_id>/<member_id>` | `pcdctl image list`; `pcdctl image member list <image_id>` |
+| `pcd_images_image_access_accept` | `<image_id>/<member_id>`, or `<image_id>` for the image's only visible member, otherwise the provider's project | `pcdctl image list --member-status pending` (`--member-status all` for any status) |
 
 ### Identity
 

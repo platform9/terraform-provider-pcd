@@ -55,6 +55,8 @@ So `openstack_networking_network_v2` becomes `pcd_networking_network`.
 | `openstack_identity_role_assignment_v3` | `pcd_identity_role_assignment` |
 | `openstack_identity_application_credential_v3` | `pcd_identity_application_credential` |
 | `openstack_images_image_v2` | `pcd_images_image` |
+| `openstack_images_image_access_v2` | `pcd_images_image_access` |
+| `openstack_images_image_access_accept_v2` | `pcd_images_image_access_accept` |
 | `openstack_networking_network_v2` | `pcd_networking_network` |
 | `openstack_networking_subnet_v2` | `pcd_networking_subnet` |
 | `openstack_networking_port_v2` | `pcd_networking_port` |
@@ -106,6 +108,13 @@ A few resources differ slightly from their upstream counterparts:
   has since become public succeeds with a warning.
 - **`pcd_images_image`** — `properties` tracks only the keys you set; Glance's many
   system/read-only properties are ignored to avoid a perpetual diff.
+- **`pcd_images_image`** `visibility` — left unset, it takes Glance's default, `shared`
+  (upstream defaults to `private`), so the image can take members without setting it.
+- **`pcd_images_image_access` and `pcd_images_image_access_accept`** — an existing membership
+  is adopted instead of failing, and a 403 on destroy (the image is no longer shared with, or
+  visible to, the provider's project) is a warning. With `member_id` omitted, the accept
+  resource uses the image's only visible member, as upstream does, and falls back to the
+  provider's own project where upstream fails.
 - **`pcd_networking_floatingip`** — allocate from an external network by its name
   via `pool`, exactly as upstream.
 - **`pcd_compute_flavor_access`** — refuses a public flavor at apply time, and on refresh
