@@ -69,6 +69,7 @@ So `openstack_networking_network_v2` becomes `pcd_networking_network`.
 | `openstack_networking_port_secgroup_associate_v2` | `pcd_networking_port_secgroup_associate` |
 | `openstack_compute_instance_v2` | `pcd_compute_instance` |
 | `openstack_compute_flavor_v2` | `pcd_compute_flavor` |
+| `openstack_compute_flavor_access_v2` | `pcd_compute_flavor_access` |
 | `openstack_compute_keypair_v2` | `pcd_compute_keypair` |
 | `openstack_compute_servergroup_v2` | `pcd_compute_servergroup` |
 | `openstack_compute_interface_attach_v2` | `pcd_compute_interface_attach` |
@@ -103,6 +104,8 @@ A few resources differ slightly from their upstream counterparts:
   system/read-only properties are ignored to avoid a perpetual diff.
 - **`pcd_networking_floatingip`** — allocate from an external network by its name
   via `pool`, exactly as upstream.
+- **`pcd_compute_flavor_access`** — refuses a public flavor at apply time, and on refresh
+  drops a grant only when Nova no longer lists it (other errors are reported).
 - **`pcd_lb_loadbalancer`** and the LB tree — PCD ships only the **OVN** Octavia provider,
   which is Layer 4. `loadbalancer_provider` defaults to `ovn`; use TCP/UDP/SCTP listener
   protocols and OVN-supported pool algorithms. There are no L7 policy/rule resources
