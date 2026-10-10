@@ -55,6 +55,8 @@ So `openstack_networking_network_v2` becomes `pcd_networking_network`.
 | `openstack_identity_role_assignment_v3` | `pcd_identity_role_assignment` |
 | `openstack_identity_application_credential_v3` | `pcd_identity_application_credential` |
 | `openstack_images_image_v2` | `pcd_images_image` |
+| `openstack_images_image_access_v2` | `pcd_images_image_access` |
+| `openstack_images_image_access_accept_v2` | `pcd_images_image_access_accept` |
 | `openstack_networking_network_v2` | `pcd_networking_network` |
 | `openstack_networking_subnet_v2` | `pcd_networking_subnet` |
 | `openstack_networking_port_v2` | `pcd_networking_port` |
@@ -69,11 +71,13 @@ So `openstack_networking_network_v2` becomes `pcd_networking_network`.
 | `openstack_networking_port_secgroup_associate_v2` | `pcd_networking_port_secgroup_associate` |
 | `openstack_compute_instance_v2` | `pcd_compute_instance` |
 | `openstack_compute_flavor_v2` | `pcd_compute_flavor` |
+| `openstack_compute_flavor_access_v2` | `pcd_compute_flavor_access` |
 | `openstack_compute_keypair_v2` | `pcd_compute_keypair` |
 | `openstack_compute_servergroup_v2` | `pcd_compute_servergroup` |
 | `openstack_compute_interface_attach_v2` | `pcd_compute_interface_attach` |
 | `openstack_compute_volume_attach_v2` | `pcd_compute_volume_attach` |
 | `openstack_blockstorage_volume_v3` | `pcd_blockstorage_volume` |
+| `openstack_blockstorage_volume_type_access_v3` | `pcd_blockstorage_volume_type_access` |
 
 Not every OpenStack resource has a PCD equivalent yet; unported resources are
 tracked on the project roadmap.
@@ -103,15 +107,32 @@ A few resources differ slightly from their upstream counterparts:
   requested configuration and are not refreshed from the server (Neutron fills in
   addresses and MACs that would otherwise churn the plan). Use the computed
   `all_fixed_ips` to reference the addresses Neutron actually assigned.
+- **`pcd_blockstorage_volume_type_access`** — on refresh, a grant that is gone is dropped from
+  state instead of failing; an existing grant is adopted, and destroying a grant on a type that
+  has since become public succeeds with a warning.
 - **`pcd_images_image`** — `properties` tracks only the keys you set; Glance's many
   system/read-only properties are ignored to avoid a perpetual diff.
+- **`pcd_images_image`** `visibility` — left unset, it takes Glance's default, `shared`
+  (upstream defaults to `private`), so the image can take members without setting it.
+- **`pcd_images_image_access` and `pcd_images_image_access_accept`** — an existing membership
+  is adopted instead of failing, and a 403 on destroy (the image is no longer shared with, or
+  visible to, the provider's project) is a warning. With `member_id` omitted, the accept
+  resource uses the image's only visible member, as upstream does, and falls back to the
+  provider's own project where upstream fails.
 - **`pcd_networking_floatingip`** — allocate from an external network by its name
   via `pool`, exactly as upstream.
+- **`pcd_compute_flavor_access`** — refuses a public flavor at apply time, and on refresh
+  drops a grant only when Nova no longer lists it (other errors are reported).
 - **`pcd_lb_loadbalancer`** and the LB tree — PCD ships only the **OVN** Octavia provider,
   which is Layer 4. `loadbalancer_provider` defaults to `ovn`; use TCP/UDP/SCTP listener
   protocols and OVN-supported pool algorithms. There are no L7 policy/rule resources
   (`openstack_lb_l7policy_v2` / `_l7rule_v2` have no PCD equivalent) because OVN does not
   do L7.
+- **`pcd_networking_subnet`** `no_gateway` — has no default: omitted, the provider leaves the
+  gateway as it is (upstream defaults to `false`, so a subnet without a gateway shows a change on
+  every plan that the apply never makes). `no_gateway = false` without `gateway_ip` restores
+  Neutron's default gateway, where upstream sends nothing and keeps planning the change, and
+  `gateway_ip = ""` is refused at plan time unless `no_gateway = true` is set too.
 - **`pcd_compute_instance`** — as upstream, changing `image_id` or `image_name` rebuilds the
   instance in place. In addition, a new `uuid` on the root `block_device` (`boot_index = 0`,
   `source_type = "image"`, `destination_type = "volume"`) also rebuilds it in place, reimaging

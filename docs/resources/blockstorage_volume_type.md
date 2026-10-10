@@ -40,7 +40,7 @@ resource "pcd_blockstorage_volume_type" "nfs" {
 
 - `description` (String) A description of the volume type.
 - `extra_specs` (Map of String) Key-value backend specs. `volume_backend_name` selects the blueprint storage backend this type provisions on.
-- `is_public` (Boolean) Whether the volume type is visible to all projects.
+- `is_public` (Boolean) Whether the volume type is visible to all projects. A private type (`false`) is usable only by the projects granted access with `pcd_blockstorage_volume_type_access`; Cinder does not grant it even to the project that creates it.
 - `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
 ### Read-Only

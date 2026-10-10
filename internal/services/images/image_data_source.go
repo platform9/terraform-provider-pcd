@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2/openstack/image/v2/images"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
@@ -25,6 +27,10 @@ var (
 	_ datasource.DataSource              = (*imageDataSource)(nil)
 	_ datasource.DataSourceWithConfigure = (*imageDataSource)(nil)
 )
+
+// imageMemberStatusFilters are the values Glance's member_status list filter
+// accepts; pcd_images_image_ids uses them too.
+var imageMemberStatusFilters = []string{"accepted", "pending", "rejected", "all"}
 
 // NewImageDataSource is the factory registered with the provider.
 func NewImageDataSource() datasource.DataSource {
@@ -54,6 +60,7 @@ type imageDataSourceModel struct {
 	UpdatedAt       types.String `tfsdk:"updated_at"`
 	Tags            types.Set    `tfsdk:"tags"`
 	Region          types.String `tfsdk:"region"`
+	MemberStatus    types.String `tfsdk:"member_status"`
 }
 
 func (d *imageDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -82,6 +89,18 @@ func (d *imageDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, 
 			"updated_at":       schema.StringAttribute{Computed: true, MarkdownDescription: "Last-update timestamp (RFC3339)."},
 			"tags":             schema.SetAttribute{Computed: true, ElementType: types.StringType, MarkdownDescription: "Image tags."},
 			"region":           schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region."},
+			"member_status": schema.StringAttribute{
+				Optional:   true,
+				Validators: []validator.String{stringvalidator.OneOf(imageMemberStatusFilters...)},
+				MarkdownDescription: "Filter images shared with this project by this project's member status: `accepted`, " +
+					"`pending`, `rejected` or `all`. Glance lists only accepted shares by default, so an image shared with " +
+					"the project and not yet accepted is found with `visibility = \"shared\"` and " +
+					"`member_status = \"pending\"`. Glance applies the filter only to projects without the admin role (an " +
+					"admin's list includes every image whatever its member status). With `image_id` set, the provider " +
+					"reads that image directly and does not send the filter. " +
+					"In a configuration that also accepts the image with `pcd_images_image_access_accept`, use `\"all\"`: " +
+					"once the share is accepted, `\"pending\"` no longer finds it and the data source fails.",
+			},
 		},
 	}
 }
@@ -126,6 +145,9 @@ func (d *imageDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		}
 		if v := data.Visibility.ValueString(); v != "" {
 			listOpts.Visibility = images.ImageVisibility(v)
+		}
+		if v := data.MemberStatus.ValueString(); v != "" {
+			listOpts.MemberStatus = images.ImageMemberStatus(v)
 		}
 		if v := data.Tag.ValueString(); v != "" {
 			listOpts.Tags = []string{v}

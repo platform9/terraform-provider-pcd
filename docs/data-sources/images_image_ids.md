@@ -25,6 +25,7 @@ data "pcd_images_image_ids" "example" {
 
 ### Optional
 
+- `member_status` (String) Filter images shared with this project by this project's member status: `accepted`, `pending`, `rejected` or `all`. Glance lists only accepted shares by default, and applies the filter only to projects without the admin role.
 - `name` (String) Filter by exact image name.
 - `owner` (String) Filter by owning project.
 - `region` (String) The region. Defaults to the provider's region.
