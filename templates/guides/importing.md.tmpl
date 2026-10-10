@@ -130,6 +130,7 @@ ID alone.
 | Resource | Import ID | Where to find it |
 |---|---|---|
 | `pcd_compute_flavor` | `<id>` | `pcdctl flavor list` |
+| `pcd_compute_flavor_access` | `<flavor_id>/<tenant_id>` | `pcdctl flavor list --private`; `pcdctl flavor show <flavor_id>` (its `access_project_ids` lists the projects that hold access) |
 | `pcd_compute_instance` | `<id>` | `pcdctl server list` |
 | `pcd_compute_instance_snapshot` | `<image_id>` | `pcdctl image list`; a snapshot's `instance_uuid` property names its instance |
 | `pcd_compute_instance_rescue` | `<instance_id>` | `pcdctl server list --status RESCUE` (only an instance in rescue mode imports) |
