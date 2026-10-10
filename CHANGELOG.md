@@ -72,6 +72,18 @@ All notable changes to this project are documented here. The format is based on
   pools; Neutron also refuses to remove a gateway that a router interface holds. A subnet without
   a gateway attaches to a router through `port_id` on `pcd_networking_router_interface`, not
   `subnet_id`.
+- **`pcd_compute_instance` data source**, which looks up an existing instance by `instance_id` or
+  by exact `name` (in another project with `project_id`, for admins), including one Terraform
+  does not manage, and reports its status, image, flavor, key pair, security groups, metadata,
+  tags, addresses and, in `network`, each port with its network, MAC and fixed addresses, so a
+  port can feed `pcd_networking_floatingip_associate`. The ports are listed oldest first, so
+  `network` and `access_ip_v4` do not move between plans. Ports created in the same second, as
+  an instance's ports at boot usually are, are ordered by port ID rather than boot order, so on
+  an instance with several ports, select an entry by `uuid` or `name` rather than by index. A
+  name that matches no instance, or several, is an error. Unlike terraform-provider-openstack's
+  `openstack_compute_instance_v2` data source, it looks up by name, fills each network's `uuid`
+  and `port`, and does not fail on statuses such as `SUSPENDED`; it has no `power_state` (use
+  `status` or `vm_state`).
 
 ### Changed
 
