@@ -69,11 +69,13 @@ So `openstack_networking_network_v2` becomes `pcd_networking_network`.
 | `openstack_networking_port_secgroup_associate_v2` | `pcd_networking_port_secgroup_associate` |
 | `openstack_compute_instance_v2` | `pcd_compute_instance` |
 | `openstack_compute_flavor_v2` | `pcd_compute_flavor` |
+| `openstack_compute_flavor_access_v2` | `pcd_compute_flavor_access` |
 | `openstack_compute_keypair_v2` | `pcd_compute_keypair` |
 | `openstack_compute_servergroup_v2` | `pcd_compute_servergroup` |
 | `openstack_compute_interface_attach_v2` | `pcd_compute_interface_attach` |
 | `openstack_compute_volume_attach_v2` | `pcd_compute_volume_attach` |
 | `openstack_blockstorage_volume_v3` | `pcd_blockstorage_volume` |
+| `openstack_blockstorage_volume_type_access_v3` | `pcd_blockstorage_volume_type_access` |
 
 Not every OpenStack resource has a PCD equivalent yet; unported resources are
 tracked on the project roadmap.
@@ -99,10 +101,15 @@ A few resources differ slightly from their upstream counterparts:
   requested configuration and are not refreshed from the server (Neutron fills in
   addresses and MACs that would otherwise churn the plan). Use the computed
   `all_fixed_ips` to reference the addresses Neutron actually assigned.
+- **`pcd_blockstorage_volume_type_access`** — on refresh, a grant that is gone is dropped from
+  state instead of failing; an existing grant is adopted, and destroying a grant on a type that
+  has since become public succeeds with a warning.
 - **`pcd_images_image`** — `properties` tracks only the keys you set; Glance's many
   system/read-only properties are ignored to avoid a perpetual diff.
 - **`pcd_networking_floatingip`** — allocate from an external network by its name
   via `pool`, exactly as upstream.
+- **`pcd_compute_flavor_access`** — refuses a public flavor at apply time, and on refresh
+  drops a grant only when Nova no longer lists it (other errors are reported).
 - **`pcd_lb_loadbalancer`** and the LB tree — PCD ships only the **OVN** Octavia provider,
   which is Layer 4. `loadbalancer_provider` defaults to `ovn`; use TCP/UDP/SCTP listener
   protocols and OVN-supported pool algorithms. There are no L7 policy/rule resources
