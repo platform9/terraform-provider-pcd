@@ -75,6 +75,7 @@ So `openstack_networking_network_v2` becomes `pcd_networking_network`.
 | `openstack_compute_interface_attach_v2` | `pcd_compute_interface_attach` |
 | `openstack_compute_volume_attach_v2` | `pcd_compute_volume_attach` |
 | `openstack_blockstorage_volume_v3` | `pcd_blockstorage_volume` |
+| `openstack_blockstorage_volume_type_access_v3` | `pcd_blockstorage_volume_type_access` |
 
 Not every OpenStack resource has a PCD equivalent yet; unported resources are
 tracked on the project roadmap.
@@ -100,6 +101,9 @@ A few resources differ slightly from their upstream counterparts:
   requested configuration and are not refreshed from the server (Neutron fills in
   addresses and MACs that would otherwise churn the plan). Use the computed
   `all_fixed_ips` to reference the addresses Neutron actually assigned.
+- **`pcd_blockstorage_volume_type_access`** — on refresh, a grant that is gone is dropped from
+  state instead of failing; an existing grant is adopted, and destroying a grant on a type that
+  has since become public succeeds with a warning.
 - **`pcd_images_image`** — `properties` tracks only the keys you set; Glance's many
   system/read-only properties are ignored to avoid a perpetual diff.
 - **`pcd_networking_floatingip`** — allocate from an external network by its name
