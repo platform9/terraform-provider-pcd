@@ -18,11 +18,14 @@ import (
 )
 
 // TestAccComputeVolumeAttach_deleteOnTermination attaches a volume with
-// delete_on_termination = true, turns the flag off in place (no detach),
-// drops it from the configuration (unmanaged: no change planned), and imports
-// the attachment. Every step reads the flag back from Nova at microversion
-// 2.85 as well as from state. The instance uses m1.small, whose 20 GB disk
-// holds a typical cloud image; m1.tiny's 1 GB disk does not.
+// delete_on_termination = true and checks the flag in state and in Nova (read
+// at microversion 2.85). It then drops the attribute from the configuration
+// and expects an empty plan, with true still in state and in Nova: an unset
+// flag is left alone, where a default of false would plan an update. Next it
+// sets false and expects an in-place update, with false in state and in Nova.
+// Last it imports the attachment and verifies the imported state against the
+// prior one. The instance uses m1.small, whose 20 GB disk holds a typical
+// cloud image; m1.tiny's 1 GB disk does not.
 func TestAccComputeVolumeAttach_deleteOnTermination(t *testing.T) {
 	imageName := testAccBootImageName(t)
 	const rn = "pcd_compute_volume_attach.test"
@@ -40,6 +43,16 @@ func TestAccComputeVolumeAttach_deleteOnTermination(t *testing.T) {
 				),
 			},
 			{
+				Config: testAccVolumeAttachDeleteOnTerminationConfig(imageName, ""),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(rn, "delete_on_termination", "true"),
+					testAccCheckVolumeAttachDeleteOnTermination(t, rn, true),
+				),
+			},
+			{
 				Config: testAccVolumeAttachDeleteOnTerminationConfig(imageName, "delete_on_termination = false"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(rn, plancheck.ResourceActionUpdate)},
@@ -48,13 +61,6 @@ func TestAccComputeVolumeAttach_deleteOnTermination(t *testing.T) {
 					resource.TestCheckResourceAttr(rn, "delete_on_termination", "false"),
 					testAccCheckVolumeAttachDeleteOnTermination(t, rn, false),
 				),
-			},
-			{
-				Config: testAccVolumeAttachDeleteOnTerminationConfig(imageName, ""),
-				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
-				},
-				Check: testAccCheckVolumeAttachDeleteOnTermination(t, rn, false),
 			},
 			{
 				ResourceName:      rn,

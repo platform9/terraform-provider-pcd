@@ -12,17 +12,19 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 // These tests build their client with fakeConfig, and their schema, plans,
-// states and calls with schemaOf, newPlan, newState, runCreate, runRead and
-// runUpdate, all from fake_nova_internal_test.go. volumeAttachFake keeps its
-// own server instead of fakeNova's route table, because it models one
-// attachment whose flag a PUT changes and records each request's body and
-// microversion.
+// states and calls with schemaOf, newPlan, newState, runCreate, runRead,
+// runUpdate and runDelete, all from fake_nova_internal_test.go.
+// volumeAttachFake keeps its own server instead of fakeNova's route table,
+// because it models one attachment whose flag a PUT changes and records each
+// request's body and microversion.
 
 // volumeAttachCall is one request the fake Nova and Cinder saw.
 type volumeAttachCall struct {
@@ -33,12 +35,22 @@ type volumeAttachCall struct {
 // volumeAttachFake answers the compute and block-storage calls
 // pcd_compute_volume_attach makes, records every request, and serves the
 // attachment's delete_on_termination from deleteOnTermination (nil leaves the
-// field out, as Nova does below microversion 2.79). A PUT updates it.
+// field out, as Nova does below microversion 2.79). A PUT updates it, and a
+// DELETE detaches the volume from srv-1.
 type volumeAttachFake struct {
 	t                   *testing.T
 	mu                  sync.Mutex
 	calls               []volumeAttachCall
 	deleteOnTermination *bool
+
+	// putStatus, when set, is the error status a PUT answers with; the flag
+	// then stays as it was.
+	putStatus int
+	// detached records that srv-1's attachment was deleted.
+	detached bool
+	// otherServers are servers the volume stays attached to after srv-1's
+	// attachment is gone, as a multiattach volume can be.
+	otherServers []string
 }
 
 func (f *volumeAttachFake) handler(w http.ResponseWriter, r *http.Request) {
@@ -68,12 +80,35 @@ func (f *volumeAttachFake) handler(w http.ResponseWriter, r *http.Request) {
 	case "GET /servers/srv-1/os-volume_attachments/vol-1":
 		_ = json.NewEncoder(w).Encode(attachment())
 	case "PUT /servers/srv-1/os-volume_attachments/vol-1":
+		if f.putStatus != 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(f.putStatus)
+			fmt.Fprintf(w, `{"forbidden": {"code": %d, "message": "Policy does not allow this request."}}`, f.putStatus)
+			return
+		}
 		att, _ := call.body["volumeAttachment"].(map[string]any)
 		v, _ := att["delete_on_termination"].(bool)
 		f.deleteOnTermination = &v
 		w.WriteHeader(http.StatusAccepted)
+	case "DELETE /servers/srv-1/os-volume_attachments/vol-1":
+		f.detached = true
+		w.WriteHeader(http.StatusAccepted)
 	case "GET /volumes/vol-1":
-		fmt.Fprint(w, `{"volume": {"id": "vol-1", "status": "in-use"}}`)
+		servers := f.otherServers
+		if !f.detached {
+			servers = append([]string{"srv-1"}, servers...)
+		}
+		attachments := []map[string]any{}
+		for _, id := range servers {
+			attachments = append(attachments, map[string]any{"server_id": id, "volume_id": "vol-1"})
+		}
+		status := "in-use"
+		if len(servers) == 0 {
+			status = "available"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"volume": map[string]any{
+			"id": "vol-1", "status": status, "multiattach": len(f.otherServers) > 0, "attachments": attachments,
+		}})
 	default:
 		f.t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		w.WriteHeader(http.StatusNotImplemented)
@@ -242,9 +277,9 @@ func TestVolumeAttachUpdateTogglesTheFlagInPlace(t *testing.T) {
 	}
 }
 
-// An unset delete_on_termination is unmanaged: an update for another reason
-// (a region change) must not write the flag, so a value set in the PCD UI
-// survives. A configured value that already matches Nova is not sent either.
+// An unset delete_on_termination is unmanaged: an update that leaves the flag
+// unchanged must not write it, so a value set in the PCD UI survives. A
+// configured value that already matches Nova is not sent either.
 func TestVolumeAttachUpdateLeavesTheFlagAloneWhenNothingChanges(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -330,5 +365,63 @@ func TestVolumeAttachDeleteOnTerminationSchema(t *testing.T) {
 	}
 	if len(attr.PlanModifiers) != 0 {
 		t.Fatalf("delete_on_termination has %d plan modifiers, want none", len(attr.PlanModifiers))
+	}
+}
+
+// A refused PUT (here a 403 from Nova's policy) is an error, and the prior
+// state stays: Update neither reads the attachment again nor records the
+// planned value.
+func TestVolumeAttachUpdateReportsARefusedPut(t *testing.T) {
+	f, r := newVolumeAttachFake(t, attachFlag(true))
+	f.mu.Lock()
+	f.putStatus = http.StatusForbidden
+	f.mu.Unlock()
+	s := schemaOf(t, r)
+	prior := attachedModel(types.BoolValue(true))
+	planned := attachedModel(types.BoolValue(false))
+	priorState := newState(t, s, &prior)
+	resp := runUpdate(r, newPlan(t, s, &planned), priorState)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("update reported no error for a refused PUT")
+	}
+	if n := len(f.requests("PUT", "/servers/srv-1/os-volume_attachments/vol-1")); n != 1 {
+		t.Fatalf("PUT requests = %d, want 1", n)
+	}
+	if n := len(f.requests("GET", "/servers/srv-1/os-volume_attachments/vol-1")); n != 1 {
+		t.Fatalf("attachment reads = %d, want 1: nothing is read back after a refused PUT", n)
+	}
+	if !resp.State.Raw.Equal(priorState.Raw) {
+		t.Fatalf("state changed after a refused PUT:\n got  %v\n want %v", resp.State.Raw, priorState.Raw)
+	}
+}
+
+// Detaching a multiattach volume that stays attached to another server leaves
+// it in-use. Delete stops waiting once the volume no longer lists this
+// instance, instead of polling for available until its bound runs out.
+func TestVolumeAttachDeleteFinishesWhileTheVolumeStaysInUseElsewhere(t *testing.T) {
+	f, r := newVolumeAttachFake(t, attachFlag(false))
+	f.mu.Lock()
+	f.otherServers = []string{"srv-2"}
+	f.mu.Unlock()
+	s := schemaOf(t, r)
+	prior := attachedModel(types.BoolValue(false))
+	priorState := newState(t, s, &prior)
+
+	done := make(chan resource.DeleteResponse, 1)
+	go func() { done <- runDelete(r, priorState) }()
+	select {
+	case resp := <-done:
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("delete: %v", resp.Diagnostics)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatalf("Delete is still waiting after 20s (%d volume reads): the volume stays in-use on srv-2, so it never becomes available",
+			len(f.requests("GET", "/volumes/vol-1")))
+	}
+	if n := len(f.requests("DELETE", "/servers/srv-1/os-volume_attachments/vol-1")); n != 1 {
+		t.Fatalf("detach requests = %d, want 1", n)
+	}
+	if n := len(f.requests("GET", "/volumes/vol-1")); n > 2 {
+		t.Fatalf("volume reads = %d, want at most 2: the wait ends once srv-1 is no longer attached", n)
 	}
 }

@@ -72,8 +72,8 @@ func (r *volumeAttachResource) Schema(_ context.Context, _ resource.SchemaReques
 	stable := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Attaches a Cinder volume to a compute instance via Nova. Changing `instance_id`, " +
-			"`volume_id` or `device` forces a new attachment (a detach, then an attach); `delete_on_termination` " +
-			"changes in place. Deleting this resource detaches the volume without deleting it.\n\n" +
+			"`volume_id`, `device` or `region` forces a new attachment (a detach, then an attach); " +
+			"`delete_on_termination` changes in place. Deleting this resource detaches the volume without deleting it.\n\n" +
 			"This resource is for data volumes. An instance's root volume comes from `pcd_compute_instance` (its " +
 			"image, or a `block_device` with `boot_index = 0`), and Nova refuses to detach a root volume, so a root " +
 			"volume's attachment imported here could never be destroyed.",
@@ -123,7 +123,7 @@ func (r *volumeAttachResource) Create(ctx context.Context, req resource.CreateRe
 
 	// Best-effort: wait for the volume to report in-use. Skipped silently when the
 	// block-storage service is unavailable (e.g. no Cinder backend on the lab).
-	r.waitForVolume(ctx, plan.Region.ValueString(), plan.VolumeID.ValueString(), "in-use", 5*time.Minute)
+	r.waitForVolume(ctx, plan.Region.ValueString(), plan.VolumeID.ValueString(), "in-use", "", 5*time.Minute)
 
 	plan.ID = types.StringValue(att.ID)
 	plan.Device = types.StringValue(att.Device)
@@ -172,9 +172,9 @@ func (r *volumeAttachResource) Read(ctx context.Context, req resource.ReadReques
 }
 
 // Update changes delete_on_termination in place; every other argument forces
-// a new attachment. The flag is sent
-// only when the configuration sets it and Nova holds a different value, so an
-// unset flag stays whatever it is (for example, set in the PCD UI).
+// a new attachment. The flag is sent only when the configuration sets it and
+// Nova holds a different value, so an unset flag stays whatever it is (for
+// example, set in the PCD UI).
 func (r *volumeAttachResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan, state volumeAttachModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -239,8 +239,9 @@ func (r *volumeAttachResource) Delete(ctx context.Context, req resource.DeleteRe
 		return
 	}
 
-	// Best-effort: wait for the volume to return to available.
-	r.waitForVolume(ctx, state.Region.ValueString(), state.VolumeID.ValueString(), "available", 5*time.Minute)
+	// Best-effort: wait for the volume to return to available, or to stop
+	// listing this instance (a multiattach volume attached elsewhere stays in-use).
+	r.waitForVolume(ctx, state.Region.ValueString(), state.VolumeID.ValueString(), "available", state.InstanceID.ValueString(), 5*time.Minute)
 }
 
 func (r *volumeAttachResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
@@ -288,11 +289,14 @@ func updateDeleteOnTermination(ctx context.Context, client *gophercloud.ServiceC
 	return err
 }
 
-// waitForVolume best-effort polls a Cinder volume until it reaches target status.
+// waitForVolume best-effort polls a Cinder volume until it reaches target status
+// or, when detachedFrom is set, until the volume no longer lists that server
+// among its attachments: a multiattach volume still attached to another server
+// stays in-use after this detach.
 // Any failure (no block-storage service, volume error, timeout) returns silently:
 // the Nova attachment call is the source of truth, and this is only a courtesy
 // wait so the volume's state has settled before Terraform reports success.
-func (r *volumeAttachResource) waitForVolume(ctx context.Context, region, volumeID, target string, timeout time.Duration) {
+func (r *volumeAttachResource) waitForVolume(ctx context.Context, region, volumeID, target, detachedFrom string, timeout time.Duration) {
 	bs, err := r.config.ForRegion(region).BlockStorageV3Client()
 	if err != nil {
 		return
@@ -307,6 +311,9 @@ func (r *volumeAttachResource) waitForVolume(ctx context.Context, region, volume
 		case target, "error", "error_deleting", "error_extending":
 			return
 		}
+		if detachedFrom != "" && !volumeAttachedTo(vol, detachedFrom) {
+			return
+		}
 		if time.Now().After(deadline) {
 			return
 		}
@@ -316,4 +323,14 @@ func (r *volumeAttachResource) waitForVolume(ctx context.Context, region, volume
 		case <-time.After(3 * time.Second):
 		}
 	}
+}
+
+// volumeAttachedTo reports whether vol lists serverID among its attachments.
+func volumeAttachedTo(vol *volumes.Volume, serverID string) bool {
+	for _, a := range vol.Attachments {
+		if a.ServerID == serverID {
+			return true
+		}
+	}
+	return false
 }

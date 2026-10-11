@@ -19,9 +19,10 @@ All notable changes to this project are documented here. The format is based on
 ### Changed
 
 - `pcd_compute_volume_attach` now attaches, reads and updates attachments at compute API microversion 2.85
-  instead of 2.1. As well as carrying `delete_on_termination`, this lets it attach multiattach volumes, which
-  Nova refuses below 2.60 ("Multiattach volumes are only supported starting with compute API version 2.60").
-  The attachment keeps its `id`, which Nova stops returning only from 2.89.
+  instead of 2.1, so creating and reading an attachment need a compute API that serves 2.85, as every PCD
+  release this provider targets does. As well as carrying `delete_on_termination`, this lets it attach
+  multiattach volumes, which Nova refuses below 2.60 ("Multiattach volumes are only supported starting with
+  compute API version 2.60"). The attachment keeps its `id`, which Nova stops returning only from 2.89.
 
 ## [0.1.18] - 2026-10-11
 

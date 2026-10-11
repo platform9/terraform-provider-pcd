@@ -3,13 +3,13 @@
 page_title: "pcd_compute_volume_attach Resource - PCD"
 subcategory: "Compute"
 description: |-
-  Attaches a Cinder volume to a compute instance via Nova. Changing instance_id, volume_id or device forces a new attachment (a detach, then an attach); delete_on_termination changes in place. Deleting this resource detaches the volume without deleting it.
+  Attaches a Cinder volume to a compute instance via Nova. Changing instance_id, volume_id, device or region forces a new attachment (a detach, then an attach); delete_on_termination changes in place. Deleting this resource detaches the volume without deleting it.
   This resource is for data volumes. An instance's root volume comes from pcd_compute_instance (its image, or a block_device with boot_index = 0), and Nova refuses to detach a root volume, so a root volume's attachment imported here could never be destroyed.
 ---
 
 # pcd_compute_volume_attach (Resource)
 
-Attaches a Cinder volume to a compute instance via Nova. Changing `instance_id`, `volume_id` or `device` forces a new attachment (a detach, then an attach); `delete_on_termination` changes in place. Deleting this resource detaches the volume without deleting it.
+Attaches a Cinder volume to a compute instance via Nova. Changing `instance_id`, `volume_id`, `device` or `region` forces a new attachment (a detach, then an attach); `delete_on_termination` changes in place. Deleting this resource detaches the volume without deleting it.
 
 This resource is for data volumes. An instance's root volume comes from `pcd_compute_instance` (its image, or a `block_device` with `boot_index = 0`), and Nova refuses to detach a root volume, so a root volume's attachment imported here could never be destroyed.
 
