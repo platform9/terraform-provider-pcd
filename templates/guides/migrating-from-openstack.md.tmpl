@@ -99,6 +99,10 @@ service. There is nothing to migrate *from*; these are net-new capability:
 
 A few resources differ slightly from their upstream counterparts:
 
+- **`pcd_compute_instance` data source** — looks up by `instance_id` or exact `name`
+  (upstream's takes `id` only), fills `network.*.uuid` and `.port` (upstream leaves them empty),
+  and has no `power_state`: use `status` or `vm_state`, which also cover the statuses upstream
+  fails on, such as `SUSPENDED`.
 - **`pcd_networking_port`** — `fixed_ip` and `allowed_address_pairs` capture your
   requested configuration and are not refreshed from the server (Neutron fills in
   addresses and MACs that would otherwise churn the plan). Use the computed
