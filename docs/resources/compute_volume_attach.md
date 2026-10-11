@@ -3,12 +3,15 @@
 page_title: "pcd_compute_volume_attach Resource - PCD"
 subcategory: "Compute"
 description: |-
-  Attaches a Cinder volume to a compute instance via Nova. All attributes force replacement (attach/detach has no in-place update). Deleting this resource detaches the volume without deleting it.
+  Attaches a Cinder volume to a compute instance via Nova. Changing instance_id, volume_id or device forces a new attachment (a detach, then an attach); delete_on_termination changes in place. Deleting this resource detaches the volume without deleting it.
+  This resource is for data volumes. An instance's root volume comes from pcd_compute_instance (its image, or a block_device with boot_index = 0), and Nova refuses to detach a root volume, so a root volume's attachment imported here could never be destroyed.
 ---
 
 # pcd_compute_volume_attach (Resource)
 
-Attaches a Cinder volume to a compute instance via Nova. All attributes force replacement (attach/detach has no in-place update). Deleting this resource detaches the volume without deleting it.
+Attaches a Cinder volume to a compute instance via Nova. Changing `instance_id`, `volume_id` or `device` forces a new attachment (a detach, then an attach); `delete_on_termination` changes in place. Deleting this resource detaches the volume without deleting it.
+
+This resource is for data volumes. An instance's root volume comes from `pcd_compute_instance` (its image, or a `block_device` with `boot_index = 0`), and Nova refuses to detach a root volume, so a root volume's attachment imported here could never be destroyed.
 
 ## Example Usage
 
@@ -17,6 +20,11 @@ resource "pcd_compute_volume_attach" "example" {
   instance_id = pcd_compute_instance.example.id
   volume_id   = pcd_blockstorage_volume.example.id
   device      = "/dev/vdb"
+
+  # Keep the volume if the instance is deleted outside Terraform. Setting the
+  # flag makes Terraform own it: a change made elsewhere, for example in the
+  # PCD UI, is reverted on the next apply. Leave it out to leave it alone.
+  delete_on_termination = false
 }
 
 resource "pcd_compute_instance" "example" {
@@ -27,6 +35,8 @@ resource "pcd_compute_instance" "example" {
   network {
     uuid = pcd_networking_network.example.id
   }
+
+  depends_on = [pcd_networking_subnet.example]
 }
 
 resource "pcd_blockstorage_volume" "example" {
@@ -36,6 +46,11 @@ resource "pcd_blockstorage_volume" "example" {
 
 resource "pcd_networking_network" "example" {
   name = "tf-example-network"
+}
+
+resource "pcd_networking_subnet" "example" {
+  network_id = pcd_networking_network.example.id
+  cidr       = "10.0.0.0/24"
 }
 ```
 
@@ -49,6 +64,7 @@ resource "pcd_networking_network" "example" {
 
 ### Optional
 
+- `delete_on_termination` (Boolean) Whether Nova deletes the volume when the instance is deleted. Changing it updates the attachment in place. Leave it unset to leave the flag alone: the provider then sends nothing and reports the value Nova holds, which is `false` unless it was set elsewhere, for example in the PCD UI. Terraform detaches the volume before it destroys the instance, so the flag takes effect only when the instance is deleted outside Terraform. If the volume is also a `pcd_blockstorage_volume` in your configuration, such a deletion takes the volume with it, and the next apply creates an empty one.
 - `device` (String) Device path (e.g. /dev/vdb); omit for Nova to auto-assign. Nova may return a different device than requested. Changing this forces a new resource.
 - `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 
