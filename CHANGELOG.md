@@ -6,8 +6,23 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`delete_on_termination` on `pcd_compute_volume_attach`**, the per-volume switch the PCD UI offers when it
+  attaches a volume and in its volume-termination dialog: whether Nova deletes the volume when the instance is
+  deleted. Changing it updates the attachment in place, without a detach. Leaving it unset leaves the flag
+  alone: the provider sends nothing and reports what Nova holds, so upgrading changes no existing attachment,
+  including one whose flag was set in the UI. Terraform detaches a volume before it destroys the instance, so
+  the flag matters only when the instance is deleted outside Terraform. An instance's root volume is not
+  covered: it comes from `pcd_compute_instance`, and Nova refuses to detach it.
+
 ### Changed
 
+- `pcd_compute_volume_attach` now attaches, reads and updates attachments at compute API microversion 2.85
+  instead of 2.1, so creating and reading an attachment need a compute API that serves 2.85, as every PCD
+  release this provider targets does. As well as carrying `delete_on_termination`, this lets it attach
+  multiattach volumes, which Nova refuses below 2.60 ("Multiattach volumes are only supported starting with
+  compute API version 2.60"). The attachment keeps its `id`, which Nova stops returning only from 2.89.
 - **`pcd_blockstorage_volume` retypes in place.** Changing `volume_type` now asks Cinder to retype the existing
   volume, as terraform-provider-openstack and the PCD UI's Retype action do, instead of destroying the volume,
   with its data, and creating an empty one. The new `volume_retype_policy` says whether Cinder may migrate the
