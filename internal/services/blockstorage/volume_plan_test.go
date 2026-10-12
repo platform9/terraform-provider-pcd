@@ -21,9 +21,9 @@ import (
 // availability_zone and volume_type.
 
 // planVolume plans pcd_blockstorage_volume from prior to config the way
-// Terraform core does and returns the replace paths core acts on and the
-// planned state.
-func planVolume(t *testing.T, prior, config map[string]tftypes.Value) ([]*tftypes.AttributePath, map[string]tftypes.Value) {
+// Terraform core does and returns the replace paths core acts on, the replace
+// paths the provider returned before core filters them, and the planned state.
+func planVolume(t *testing.T, prior, config map[string]tftypes.Value) (replace, raw []*tftypes.AttributePath, attrs map[string]tftypes.Value) {
 	t.Helper()
 	ctx := context.Background()
 	server, err := acctest.ProtoV6ProviderFactories["pcd"]()
@@ -82,13 +82,11 @@ func planVolume(t *testing.T, prior, config map[string]tftypes.Value) ([]*tftype
 	if err != nil {
 		t.Fatalf("PlannedState.Unmarshal: %v", err)
 	}
-	var attrs map[string]tftypes.Value
 	if err := planned.As(&attrs); err != nil {
 		t.Fatalf("planned.As: %v", err)
 	}
 	// Terraform core drops a replace path whose planned value equals the
 	// prior value, so keep only the paths that would replace the volume.
-	var replace []*tftypes.AttributePath
 	for _, p := range resp.RequiresReplace {
 		before, _, errBefore := tftypes.WalkAttributePath(priorObj, p)
 		after, _, errAfter := tftypes.WalkAttributePath(planned, p)
@@ -98,7 +96,7 @@ func planVolume(t *testing.T, prior, config map[string]tftypes.Value) ([]*tftype
 			replace = append(replace, p)
 		}
 	}
-	return replace, attrs
+	return replace, resp.RequiresReplace, attrs
 }
 
 func volumePlanString(s string) tftypes.Value { return tftypes.NewValue(tftypes.String, s) }
@@ -137,9 +135,20 @@ func TestVolumePlanUpdatesInPlace(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			replace, planned := planVolume(t, volumePriorState(), tc.config)
+			replace, raw, planned := planVolume(t, volumePriorState(), tc.config)
 			if len(replace) != 0 {
 				t.Fatalf("RequiresReplace = %v, want none: a replacement deletes the volume and its data", replace)
+			}
+			// Before core's filter, too, the provider asks for no replacement
+			// over these two: availability_zone applies UseStateForUnknown
+			// before RequiresReplace, and volume_type no longer replaces.
+			// (region keeps the older order and relies on the filter.)
+			for _, p := range raw {
+				for _, name := range []string{"availability_zone", "volume_type"} {
+					if p.Equal(tftypes.NewAttributePath().WithAttributeName(name)) {
+						t.Fatalf("the provider returned RequiresReplace = %v before core's filter, want no %s", raw, name)
+					}
+				}
 			}
 			if !planned["availability_zone"].Equal(volumePlanString("nova")) {
 				t.Fatalf("planned availability_zone = %v, want the prior nova", planned["availability_zone"])
@@ -151,7 +160,7 @@ func TestVolumePlanUpdatesInPlace(t *testing.T) {
 // Changing the availability zone still replaces the volume: Cinder cannot
 // move a volume between zones in place.
 func TestVolumePlanZoneChangeReplaces(t *testing.T) {
-	replace, _ := planVolume(t, volumePriorState(), map[string]tftypes.Value{
+	replace, _, _ := planVolume(t, volumePriorState(), map[string]tftypes.Value{
 		"name": volumePlanString("data-1"), "size": tftypes.NewValue(tftypes.Number, 1), "availability_zone": volumePlanString("zone-2"),
 	})
 	want := tftypes.NewAttributePath().WithAttributeName("availability_zone")
@@ -166,7 +175,7 @@ func TestVolumePlanZoneChangeReplaces(t *testing.T) {
 func TestVolumePlanFillsTheRetypePolicyDefault(t *testing.T) {
 	prior := volumePriorState()
 	prior["volume_retype_policy"] = tftypes.NewValue(tftypes.String, nil)
-	replace, planned := planVolume(t, prior, map[string]tftypes.Value{
+	replace, _, planned := planVolume(t, prior, map[string]tftypes.Value{
 		"name": volumePlanString("data-1"), "size": tftypes.NewValue(tftypes.Number, 1),
 	})
 	if len(replace) != 0 {

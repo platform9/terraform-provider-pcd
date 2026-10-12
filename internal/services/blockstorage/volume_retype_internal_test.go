@@ -31,8 +31,11 @@ import (
 // retypeFake is a Cinder that holds one volume, vol-1. Before an os-retype
 // action every GET reports volumeType with status "available"; after it, GETs
 // walk through afterRetype (status, type) and then repeat its last entry. A
-// non-empty refuse makes os-retype answer 400 with that message. A PUT (the
-// name, description and metadata update) is counted and changes nothing.
+// wait still polling retypeFakeStuckPolls GETs past that sequence is stuck on
+// a status it should accept: the fake fails the test and answers "error",
+// which ends the wait within milliseconds instead of at its timeout. A
+// non-empty refuse makes os-retype answer 400 with that message. GETs and PUTs
+// (the name, description and metadata update) are counted and change nothing.
 type retypeFake struct {
 	t           *testing.T
 	mu          sync.Mutex
@@ -40,10 +43,15 @@ type retypeFake struct {
 	afterRetype [][2]string
 	refuse      string
 	retyped     bool
+	gets        int
 	polls       int
 	updates     int
 	actions     []map[string]any
 }
+
+// retypeFakeStuckPolls is how many GETs past its scripted statuses retypeFake
+// answers before it calls a retype wait stuck.
+const retypeFakeStuckPolls = 50
 
 func (f *retypeFake) handler(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
@@ -55,12 +63,19 @@ func (f *retypeFake) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method + " " + r.URL.Path {
 	case "GET /volumes/vol-1":
+		f.gets++
 		if !f.retyped {
 			volume("available", f.volumeType)
 			return
 		}
 		step := f.afterRetype[min(f.polls, len(f.afterRetype)-1)]
 		f.polls++
+		if stuck := len(f.afterRetype) + retypeFakeStuckPolls; f.polls >= stuck {
+			if f.polls == stuck {
+				f.t.Errorf("the retype wait polled %d times past the scripted statuses; it does not stop at %q", retypeFakeStuckPolls, step[0])
+			}
+			step[0] = "error"
+		}
 		volume(step[0], step[1])
 	case "POST /volumes/vol-1/action":
 		raw, _ := io.ReadAll(r.Body)
@@ -278,6 +293,10 @@ func TestVolumeRetypePolicyChangeAloneMakesNoRetype(t *testing.T) {
 			if f.updates != tc.wantPUTs {
 				t.Fatalf("update sent %d volume PUTs, want %d", f.updates, tc.wantPUTs)
 			}
+			// Only the final read: a retype would read the volume first.
+			if f.gets != 1 {
+				t.Fatalf("update read the volume %d times, want 1", f.gets)
+			}
 			if got.VolumeRetypePolicy.ValueString() != "on-demand" {
 				t.Fatalf("state volume_retype_policy = %s, want on-demand", got.VolumeRetypePolicy)
 			}
@@ -387,37 +406,56 @@ func TestVolumeRetypeAnswerWithoutTheVolumeIsAnError(t *testing.T) {
 	}
 }
 
-// The HTTP client has no timeout and the wait checks its deadline only between
-// polls, so a GET that Cinder never answers must be cut off by the wait's own
-// timeout instead of holding the apply.
+// The HTTP client has no timeout, so the wait's own timeout must end it,
+// whether Cinder never answers a GET or keeps reporting "retyping". The error
+// says that the wait timed out, for which volume and in what status.
 func TestVolumeRetypeWaitStopsAtItsTimeout(t *testing.T) {
-	fastRetypePolls(t)
-	release := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		select {
-		case <-r.Context().Done():
-		case <-release:
-		}
-	}))
-	t.Cleanup(srv.Close)
-	// Cleanups run last-in first-out: the handler is released before Close
-	// waits for it.
-	t.Cleanup(func() { close(release) })
-	client, err := fakeConfig(srv.URL).BlockStorageV3Client()
-	if err != nil {
-		t.Fatalf("client: %v", err)
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := waitForVolumeRetype(context.Background(), client, "vol-1", 100*time.Millisecond)
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("wait error = %v, want the timeout's context.DeadlineExceeded", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the retype wait was still blocked on an unanswered GET 5s after its 100ms timeout")
+	for _, tc := range []struct {
+		name       string
+		hang       bool
+		wantStatus string
+	}{
+		{name: "GET never answered", hang: true, wantStatus: `(last status "")`},
+		{name: "still retyping", wantStatus: `(last status "retyping")`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			release := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !tc.hang {
+					fmt.Fprint(w, `{"volume": {"id": "vol-1", "status": "retyping", "volume_type": "type-a"}}`)
+					return
+				}
+				select {
+				case <-r.Context().Done():
+				case <-release:
+				}
+			}))
+			t.Cleanup(srv.Close)
+			// Cleanups run last-in first-out: the handler is released before
+			// Close waits for it.
+			t.Cleanup(func() { close(release) })
+			client, err := fakeConfig(srv.URL).BlockStorageV3Client()
+			if err != nil {
+				t.Fatalf("client: %v", err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := waitForVolumeRetype(context.Background(), client, "vol-1", 500*time.Millisecond)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("wait error = %v, want the timeout's context.DeadlineExceeded", err)
+				}
+				for _, want := range []string{"timed out", "vol-1", tc.wantStatus} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("wait error %q does not contain %q", err, want)
+					}
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the retype wait was still running 5s after its 500ms timeout")
+			}
+		})
 	}
 }

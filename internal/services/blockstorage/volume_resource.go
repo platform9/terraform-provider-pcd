@@ -457,11 +457,14 @@ func retypeVolume(ctx context.Context, client *gophercloud.ServiceClient, id, ne
 // status, "available" or "in-use", when the retype ends, whether it worked or
 // not. "error" and "error_deleting" fail the wait.
 func waitForVolumeRetype(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*volumes.Volume, error) {
-	// The HTTP client has no timeout, and the deadline below is checked only
-	// between polls: the context also bounds a GET that never answers.
+	// The timeout is on the context, so it also ends a GET that Cinder never
+	// answers: the HTTP client has no timeout of its own.
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	deadline := time.Now().Add(timeout)
+	last := ""
+	timedOut := func() error {
+		return fmt.Errorf("timed out after %s waiting for volume %s to finish the retype (last status %q): %w", timeout, id, last, ctx.Err())
+	}
 	for {
 		vol, err := clients.RequireObject(volumes.Get(ctx, client, id).Extract())
 		// An empty volume (a 200 without the volume) has an empty status,
@@ -470,20 +473,21 @@ func waitForVolumeRetype(ctx context.Context, client *gophercloud.ServiceClient,
 			err = clients.ErrNoObject
 		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, timedOut()
+			}
 			return nil, err
 		}
+		last = vol.Status
 		switch vol.Status {
 		case "available", "in-use":
 			return vol, nil
 		case "error", "error_deleting":
 			return nil, fmt.Errorf("volume %s entered %q state during the retype", id, vol.Status)
 		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timed out after %s waiting for volume %s to finish the retype (last status %q)", timeout, id, vol.Status)
-		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, timedOut()
 		case <-time.After(volumeRetypePollInterval):
 		}
 	}
