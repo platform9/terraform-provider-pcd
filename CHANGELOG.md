@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`delete_on_termination` on `pcd_compute_volume_attach`**, the per-volume switch the PCD UI offers when it
+  attaches a volume and in its volume-termination dialog: whether Nova deletes the volume when the instance is
+  deleted. Changing it updates the attachment in place, without a detach. Leaving it unset leaves the flag
+  alone: the provider sends nothing and reports what Nova holds, so upgrading changes no existing attachment,
+  including one whose flag was set in the UI. Terraform detaches a volume before it destroys the instance, so
+  the flag matters only when the instance is deleted outside Terraform. An instance's root volume is not
+  covered: it comes from `pcd_compute_instance`, and Nova refuses to detach it.
 - **`pcd_blockstorage_volume_transfer` and `pcd_blockstorage_volume_transfer_accept`**, which move a volume
   from one project to another, like the PCD UI's Transfer Volume and Accept Transfer actions. The first offers
   a volume from the project the provider signs in to and records the transfer's `auth_key`, which Cinder
@@ -20,6 +27,22 @@ All notable changes to this project are documented here. The format is based on
   blocks for the volume, the offer and the volume's snapshots with `removed` blocks and import the volume
   where it now belongs; both resource pages show how. Encrypted volumes and transfers within one project are
   not supported.
+
+### Changed
+
+- `pcd_compute_volume_attach` now attaches, reads and updates attachments at compute API microversion 2.85
+  instead of 2.1, so creating and reading an attachment need a compute API that serves 2.85, as every PCD
+  release this provider targets does. As well as carrying `delete_on_termination`, this lets it attach
+  multiattach volumes, which Nova refuses below 2.60 ("Multiattach volumes are only supported starting with
+  compute API version 2.60"). The attachment keeps its `id`, which Nova stops returning only from 2.89.
+- **`pcd_blockstorage_volume` retypes in place.** Changing `volume_type` now asks Cinder to retype the existing
+  volume, as terraform-provider-openstack and the PCD UI's Retype action do, instead of destroying the volume,
+  with its data, and creating an empty one. The new `volume_retype_policy` says whether Cinder may migrate the
+  data to another storage backend: `never` (the default) or `on-demand`, which the PCD UI always uses. The
+  apply waits for the retype and fails if Cinder keeps the old type, which it does when a retype it accepted
+  cannot complete; Cinder also refuses at once to retype a volume that has snapshots. A volume retyped outside
+  Terraform now plans a retype back to the configured type rather than a replacement. Give `volume_type` the
+  type's name: Cinder reports types by name, so a type ID never matches.
 
 ## [0.1.18] - 2026-10-11
 
