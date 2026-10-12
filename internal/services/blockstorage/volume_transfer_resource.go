@@ -327,8 +327,9 @@ func transferPendingOfferHint(err error) string {
 		return ""
 	}
 	return "\n\nIf the volume's status is awaiting-transfer, an earlier offer for it is still pending: find it with " +
-		"\"pcdctl volume transfer request list\", then cancel it with \"pcdctl volume transfer request delete " +
-		"<transfer_id>\" or import it into this resource."
+		"\"pcdctl volume transfer request list\" and cancel it with \"pcdctl volume transfer request delete " +
+		"<transfer_id>\". Import it into this resource instead only if you still have its auth_key elsewhere: an " +
+		"imported offer's auth_key stays empty, and the offer cannot be accepted without it."
 }
 
 // offerAccepted decides what a vanished transfer means. An accepted transfer

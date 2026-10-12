@@ -5,8 +5,11 @@ package blockstorage
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/transfers"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -56,8 +59,16 @@ func (r *volumeTransferAcceptResource) Schema(_ context.Context, _ resource.Sche
 			"this resource records the acceptance and never refreshes it. Destroying it calls nothing: the volume " +
 			"stays in the receiving project, which manages it from then on (import it with its `volume_id`). It " +
 			"cannot be imported.\n\n" +
+			"**After the accept**, the offering configuration's blocks for the volume, the offer and the volume's " +
+			"snapshots must become `removed` blocks (Terraform 1.7 or later) before that configuration's next apply. " +
+			"With member credentials, its refresh no longer finds the moved volume, so Terraform plans a new volume " +
+			"and a new offer for it there; because `transfer_id` and `auth_key` force replacement, the next apply of " +
+			"this resource would then accept that new offer as well. With admin credentials, the offering " +
+			"configuration keeps managing the moved volume, and a destroy there would delete it.\n\n" +
 			"The accept fails when the key is wrong, when the offer was already accepted or canceled, or when the " +
-			"receiving project's volume or gigabyte quota cannot hold the volume and its snapshots.",
+			"receiving project's quotas cannot hold the volume and its snapshots: Cinder counts the volume, each " +
+			"snapshot and their gigabytes against the project's overall and per-volume-type quotas, and checks the " +
+			"volume's size against the per-volume limit.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed: true, PlanModifiers: stable,
@@ -111,7 +122,7 @@ func (r *volumeTransferAcceptResource) Create(ctx context.Context, req resource.
 		err = clients.ErrNoObject
 	}
 	if err != nil {
-		resp.Diagnostics.AddError("blockstorage: accepting volume transfer", err.Error())
+		resp.Diagnostics.AddError("blockstorage: accepting volume transfer", err.Error()+transferAcceptLostHint(err))
 		return
 	}
 
@@ -149,4 +160,16 @@ func (r *volumeTransferAcceptResource) Delete(ctx context.Context, req resource.
 		fmt.Sprintf("Removed the acceptance of transfer %s from state only. Volume %s stays in the project that "+
 			"accepted it; to move it back, offer it again with pcd_blockstorage_volume_transfer.",
 			state.ID.ValueString(), state.VolumeID.ValueString()))
+}
+
+// transferAcceptLostHint explains an accept error that an earlier accept may
+// have caused without being recorded: Cinder hides a spent transfer, so a
+// second accept answers 404, and an answer without the volume may still have
+// moved it.
+func transferAcceptLostHint(err error) string {
+	if !errors.Is(err, clients.ErrNoObject) && !gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+		return ""
+	}
+	return "\n\nIf an earlier apply reached Cinder, the volume is already in this project: import it with " +
+		"pcd_blockstorage_volume (the offer's volume_id) and remove this resource."
 }

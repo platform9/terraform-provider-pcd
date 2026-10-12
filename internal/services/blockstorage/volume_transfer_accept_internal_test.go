@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -106,7 +107,8 @@ func TestVolumeTransferAcceptWithAWrongKeyFails(t *testing.T) {
 }
 
 // An accept answer without the transfer, or without the volume it moved, names
-// no volume to record: it is an error, and nothing goes to state.
+// no volume to record: it is an error, and nothing goes to state. Cinder may
+// have moved the volume all the same, so the error says how to take it over.
 func TestVolumeTransferAcceptWithoutATransferObjectFails(t *testing.T) {
 	for name, body := range map[string]string{
 		"no transfer object":          `{}`,
@@ -127,8 +129,61 @@ func TestVolumeTransferAcceptWithoutATransferObjectFails(t *testing.T) {
 			if !reportsNoObject(resp.Diagnostics) {
 				t.Fatalf("create: %v; want an error for an answer without the transferred volume", resp.Diagnostics)
 			}
+			if detail := resp.Diagnostics.Errors()[0].Detail(); !strings.Contains(detail, transferAcceptLostHintMarker) {
+				t.Fatalf("error detail %q does not say how to take over a volume the accept may have moved", detail)
+			}
 			if !resp.State.Raw.IsNull() {
 				t.Fatalf("create left a row: %v", resp.State.Raw)
+			}
+		})
+	}
+}
+
+// transferAcceptLostHintMarker is part of the hint an accept error carries
+// when an earlier apply may already have moved the volume.
+const transferAcceptLostHintMarker = "import it with pcd_blockstorage_volume"
+
+// An accept Cinder refuses writes nothing. A 404 is also the answer to an
+// accept that already went through, since Cinder hides a spent transfer, for
+// example when an earlier apply moved the volume but never recorded it, so
+// that error says how to take the volume over. A full quota (413) gets no
+// such hint.
+func TestVolumeTransferAcceptRefusedRecordsNothing(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status         int
+		fault, message string
+		hint           bool
+	}{
+		"the transfer is gone": {http.StatusNotFound, "itemNotFound", "Transfer t-1 could not be found.", true},
+		"the quota is full": {http.StatusRequestEntityTooLarge, "overLimit",
+			"Maximum number of volumes allowed (10) exceeded for quota 'volumes'.", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newTransferFake(t).on("POST /os-volume-transfer/t-1/accept", tc.status,
+				`{"`+tc.fault+`": {"code": `+strconv.Itoa(tc.status)+`, "message": "`+tc.message+`"}}`)
+			r, s := f.acceptResource(t)
+			planned := acceptedTransferModel()
+			planned.ID, planned.VolumeID, planned.Region = types.StringUnknown(), types.StringUnknown(), types.StringUnknown()
+			plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+			if d := plan.Set(ctx, &planned); d.HasError() {
+				t.Fatalf("building the plan: %v", d)
+			}
+			resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+			r.Create(ctx, resource.CreateRequest{Plan: plan}, &resp)
+			errs := resp.Diagnostics.Errors()
+			if len(errs) != 1 {
+				t.Fatalf("create diagnostics = %v, want one error", resp.Diagnostics)
+			}
+			detail := errs[0].Detail()
+			if !strings.Contains(detail, tc.message) {
+				t.Fatalf("error detail %q does not carry Cinder's message", detail)
+			}
+			if hinted := strings.Contains(detail, transferAcceptLostHintMarker); hinted != tc.hint {
+				t.Fatalf("error detail %q: hint given = %v, want %v", detail, hinted, tc.hint)
+			}
+			if !resp.State.Raw.IsNull() {
+				t.Fatalf("a refused accept left a row: %v", resp.State.Raw)
 			}
 		})
 	}
@@ -186,57 +241,5 @@ func TestVolumeTransferAcceptSchema(t *testing.T) {
 		if !replaces {
 			t.Errorf("%s does not force a new acceptance", name)
 		}
-	}
-}
-
-// An offer for a volume that is not available is Cinder's 400. A volume
-// already awaiting a transfer has an earlier offer pending, often one a failed
-// apply left behind, so the error says how to find it and what to do with it.
-// Cinder's own message stays, and other 400s get no hint.
-func TestVolumeTransferCreateHintsAtAPendingOffer(t *testing.T) {
-	for name, tc := range map[string]struct {
-		message string
-		hint    bool
-	}{
-		"the volume is not available":  {message: "Invalid volume: status must be available", hint: true},
-		"a snapshot is not available":  {message: "Invalid snapshot: snapshot: snap-1 status must be available", hint: false},
-		"an encrypted volume is given": {message: "Invalid volume: transferring encrypted volume is not supported", hint: false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
-			f := newTransferFake(t).on("POST /os-volume-transfer", http.StatusBadRequest,
-				`{"badRequest": {"code": 400, "message": "`+tc.message+`"}}`)
-			r, s := f.offerResource(t)
-			planned := volumeTransferModel{
-				ID:              types.StringUnknown(),
-				VolumeID:        types.StringValue("vol-1"),
-				Name:            types.StringNull(),
-				AuthKey:         types.StringUnknown(),
-				SourceProjectID: types.StringUnknown(),
-				Accepted:        types.BoolUnknown(),
-				Region:          types.StringUnknown(),
-			}
-			plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
-			if d := plan.Set(ctx, &planned); d.HasError() {
-				t.Fatalf("building the plan: %v", d)
-			}
-			resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
-			r.Create(ctx, resource.CreateRequest{Plan: plan}, &resp)
-			errs := resp.Diagnostics.Errors()
-			if len(errs) != 1 {
-				t.Fatalf("create diagnostics = %v, want one error", resp.Diagnostics)
-			}
-			detail := errs[0].Detail()
-			if !strings.Contains(detail, tc.message) {
-				t.Fatalf("error detail %q does not carry Cinder's message", detail)
-			}
-			hinted := strings.Contains(detail, "pcdctl volume transfer request delete")
-			if hinted != tc.hint {
-				t.Fatalf("error detail %q: hint given = %v, want %v", detail, hinted, tc.hint)
-			}
-			if !resp.State.Raw.IsNull() {
-				t.Fatalf("create left a row: %v", resp.State.Raw)
-			}
-		})
 	}
 }

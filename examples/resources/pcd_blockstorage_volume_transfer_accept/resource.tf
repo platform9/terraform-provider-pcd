@@ -8,6 +8,10 @@ provider "pcd" {
   tenant_name = "team-b"
 }
 
+# Both variables come from the offering configuration's transfer_id and
+# transfer_auth_key outputs (terraform output -raw, remote state or a secret
+# store). Once the volume is imported (below), the accept block may be
+# removed: destroying it only warns.
 variable "transfer_id" {
   type = string
 }

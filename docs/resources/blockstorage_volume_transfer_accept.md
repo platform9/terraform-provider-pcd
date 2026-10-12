@@ -5,7 +5,8 @@ subcategory: "Block Storage"
 description: |-
   Accepts a volume transfer offered with pcd_blockstorage_volume_transfer, moving the volume and its snapshots into the project the provider authenticates in. Use it through a provider configuration for the receiving project, for example an aliased provider "pcd" block that sets tenant_id or tenant_name (the receiving project must already exist when Terraform plans, because the provider signs in during planning).
   Accepting is a one-time event, and Cinder keeps nothing the receiving project can read afterward, so this resource records the acceptance and never refreshes it. Destroying it calls nothing: the volume stays in the receiving project, which manages it from then on (import it with its volume_id). It cannot be imported.
-  The accept fails when the key is wrong, when the offer was already accepted or canceled, or when the receiving project's volume or gigabyte quota cannot hold the volume and its snapshots.
+  After the accept, the offering configuration's blocks for the volume, the offer and the volume's snapshots must become removed blocks (Terraform 1.7 or later) before that configuration's next apply. With member credentials, its refresh no longer finds the moved volume, so Terraform plans a new volume and a new offer for it there; because transfer_id and auth_key force replacement, the next apply of this resource would then accept that new offer as well. With admin credentials, the offering configuration keeps managing the moved volume, and a destroy there would delete it.
+  The accept fails when the key is wrong, when the offer was already accepted or canceled, or when the receiving project's quotas cannot hold the volume and its snapshots: Cinder counts the volume, each snapshot and their gigabytes against the project's overall and per-volume-type quotas, and checks the volume's size against the per-volume limit.
 ---
 
 # pcd_blockstorage_volume_transfer_accept (Resource)
@@ -14,7 +15,9 @@ Accepts a volume transfer offered with `pcd_blockstorage_volume_transfer`, movin
 
 Accepting is a one-time event, and Cinder keeps nothing the receiving project can read afterward, so this resource records the acceptance and never refreshes it. Destroying it calls nothing: the volume stays in the receiving project, which manages it from then on (import it with its `volume_id`). It cannot be imported.
 
-The accept fails when the key is wrong, when the offer was already accepted or canceled, or when the receiving project's volume or gigabyte quota cannot hold the volume and its snapshots.
+**After the accept**, the offering configuration's blocks for the volume, the offer and the volume's snapshots must become `removed` blocks (Terraform 1.7 or later) before that configuration's next apply. With member credentials, its refresh no longer finds the moved volume, so Terraform plans a new volume and a new offer for it there; because `transfer_id` and `auth_key` force replacement, the next apply of this resource would then accept that new offer as well. With admin credentials, the offering configuration keeps managing the moved volume, and a destroy there would delete it.
+
+The accept fails when the key is wrong, when the offer was already accepted or canceled, or when the receiving project's quotas cannot hold the volume and its snapshots: Cinder counts the volume, each snapshot and their gigabytes against the project's overall and per-volume-type quotas, and checks the volume's size against the per-volume limit.
 
 ## Example Usage
 
@@ -29,6 +32,10 @@ provider "pcd" {
   tenant_name = "team-b"
 }
 
+# Both variables come from the offering configuration's transfer_id and
+# transfer_auth_key outputs (terraform output -raw, remote state or a secret
+# store). Once the volume is imported (below), the accept block may be
+# removed: destroying it only warns.
 variable "transfer_id" {
   type = string
 }

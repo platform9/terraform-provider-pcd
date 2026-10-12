@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -498,5 +499,57 @@ func TestOfferAccepted(t *testing.T) {
 		if got := offerAccepted(tc.visible, tc.volumeProject, tc.sourceProject); got != tc.want {
 			t.Errorf("offerAccepted(%v, %q, %q) = %v, want %v: %s", tc.visible, tc.volumeProject, tc.sourceProject, got, tc.want, tc.why)
 		}
+	}
+}
+
+// An offer for a volume that is not available is Cinder's 400. A volume
+// already awaiting a transfer has an earlier offer pending, often one a failed
+// apply left behind, so the error says how to find it and what to do with it.
+// Cinder's own message stays, and other 400s get no hint.
+func TestVolumeTransferCreateHintsAtAPendingOffer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		message string
+		hint    bool
+	}{
+		"the volume is not available":  {message: "Invalid volume: status must be available", hint: true},
+		"a snapshot is not available":  {message: "Invalid snapshot: snapshot: snap-1 status must be available", hint: false},
+		"an encrypted volume is given": {message: "Invalid volume: transferring encrypted volume is not supported", hint: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newTransferFake(t).on("POST /os-volume-transfer", http.StatusBadRequest,
+				`{"badRequest": {"code": 400, "message": "`+tc.message+`"}}`)
+			r, s := f.offerResource(t)
+			planned := volumeTransferModel{
+				ID:              types.StringUnknown(),
+				VolumeID:        types.StringValue("vol-1"),
+				Name:            types.StringNull(),
+				AuthKey:         types.StringUnknown(),
+				SourceProjectID: types.StringUnknown(),
+				Accepted:        types.BoolUnknown(),
+				Region:          types.StringUnknown(),
+			}
+			plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
+			if d := plan.Set(ctx, &planned); d.HasError() {
+				t.Fatalf("building the plan: %v", d)
+			}
+			resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+			r.Create(ctx, resource.CreateRequest{Plan: plan}, &resp)
+			errs := resp.Diagnostics.Errors()
+			if len(errs) != 1 {
+				t.Fatalf("create diagnostics = %v, want one error", resp.Diagnostics)
+			}
+			detail := errs[0].Detail()
+			if !strings.Contains(detail, tc.message) {
+				t.Fatalf("error detail %q does not carry Cinder's message", detail)
+			}
+			hinted := strings.Contains(detail, "pcdctl volume transfer request delete")
+			if hinted != tc.hint {
+				t.Fatalf("error detail %q: hint given = %v, want %v", detail, hinted, tc.hint)
+			}
+			if !resp.State.Raw.IsNull() {
+				t.Fatalf("create left a row: %v", resp.State.Raw)
+			}
+		})
 	}
 }

@@ -15,10 +15,11 @@ All notable changes to this project are documented here. The format is based on
   the offer. The second accepts the offer in the receiving project, through an aliased provider block that
   names that project with `tenant_id` or `tenant_name`, and Cinder moves the volume with all of its
   snapshots. An acceptance cannot be undone, so destroying the accept resource only removes it from state.
-  The offer notices when it has been accepted and stays in state instead of being offered again. After the
-  transfer, replace the offering configuration's blocks for the volume, the offer and the volume's snapshots
-  with `removed` blocks and import the volume where it now belongs; both resource pages show how. Encrypted
-  volumes and transfers within one project are not supported.
+  The offer notices when it has been accepted and, with admin credentials in the offering configuration,
+  stays in state instead of being offered again. After the transfer, replace the offering configuration's
+  blocks for the volume, the offer and the volume's snapshots with `removed` blocks and import the volume
+  where it now belongs; both resource pages show how. Encrypted volumes and transfers within one project are
+  not supported.
 
 ## [0.1.18] - 2026-10-11
 
