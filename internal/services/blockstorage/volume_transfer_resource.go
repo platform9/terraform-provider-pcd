@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/transfers"
@@ -158,7 +159,7 @@ func (r *volumeTransferResource) Create(ctx context.Context, req resource.Create
 		err = clients.ErrNoObject
 	}
 	if err != nil {
-		resp.Diagnostics.AddError("blockstorage: creating volume transfer", err.Error())
+		resp.Diagnostics.AddError("blockstorage: creating volume transfer", err.Error()+transferPendingOfferHint(err))
 		return
 	}
 
@@ -316,6 +317,18 @@ func (r *volumeTransferResource) transferClient(region string) (*gophercloud.Ser
 		return nil, err
 	}
 	return withMicroversion(client, blockstorageMicroversionTransferResponse), nil
+}
+
+// transferPendingOfferHint explains Cinder's refusal to offer a volume that
+// is not available, which may mean the volume awaits an earlier offer, such
+// as one an interrupted apply left behind.
+func transferPendingOfferHint(err error) string {
+	if !gophercloud.ResponseCodeIs(err, http.StatusBadRequest) || !strings.Contains(err.Error(), "Invalid volume: status must be available") {
+		return ""
+	}
+	return "\n\nIf the volume's status is awaiting-transfer, an earlier offer for it is still pending: find it with " +
+		"\"pcdctl volume transfer request list\", then cancel it with \"pcdctl volume transfer request delete " +
+		"<transfer_id>\" or import it into this resource."
 }
 
 // offerAccepted decides what a vanished transfer means. An accepted transfer
