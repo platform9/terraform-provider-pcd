@@ -124,6 +124,7 @@ ID alone.
 | `pcd_blockstorage_snapshot` | `<snapshot_id>` | `pcdctl volume snapshot list` |
 | `pcd_blockstorage_volume_backup` | `<backup_id>` | `pcdctl volume backup list` |
 | `pcd_blockstorage_quotaset` | `<project_id>/<region>` | `pcdctl project list`; `pcdctl region list` |
+| `pcd_blockstorage_volume_transfer` | `<transfer_id>` | `pcdctl volume transfer request list`; `auth_key` stays empty after an import |
 
 ### Compute
 

@@ -15,6 +15,18 @@ All notable changes to this project are documented here. The format is based on
   including one whose flag was set in the UI. Terraform detaches a volume before it destroys the instance, so
   the flag matters only when the instance is deleted outside Terraform. An instance's root volume is not
   covered: it comes from `pcd_compute_instance`, and Nova refuses to detach it.
+- **`pcd_blockstorage_volume_transfer` and `pcd_blockstorage_volume_transfer_accept`**, which move a volume
+  from one project to another, like the PCD UI's Transfer Volume and Accept Transfer actions. The first offers
+  a volume from the project the provider signs in to and records the transfer's `auth_key`, which Cinder
+  returns only once (it is sensitive and kept in state); destroying it before the offer is accepted cancels
+  the offer. The second accepts the offer in the receiving project, through an aliased provider block that
+  names that project with `tenant_id` or `tenant_name`, and Cinder moves the volume with all of its
+  snapshots. An acceptance cannot be undone, so destroying the accept resource only removes it from state.
+  The offer notices when it has been accepted and, with admin credentials in the offering configuration,
+  stays in state instead of being offered again. After the transfer, replace the offering configuration's
+  blocks for the volume, the offer and the volume's snapshots with `removed` blocks and import the volume
+  where it now belongs; both resource pages show how. Encrypted volumes and transfers within one project are
+  not supported.
 
 ### Changed
 
