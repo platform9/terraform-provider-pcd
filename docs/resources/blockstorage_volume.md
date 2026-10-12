@@ -20,6 +20,11 @@ resource "pcd_blockstorage_volume" "example" {
   volume_type       = "__DEFAULT__"
   availability_zone = "nova"
 
+  # Changing volume_type retypes the volume in place. "on-demand" lets Cinder
+  # move the data when the new type is on another storage backend; the
+  # default, "never", fails such a retype instead.
+  volume_retype_policy = "on-demand"
+
   metadata = {
     environment = "dev"
   }
@@ -43,7 +48,8 @@ resource "pcd_blockstorage_volume" "example" {
 - `region` (String) The region. Defaults to the provider's region. Changing this forces a new resource.
 - `snapshot_id` (String) Create the volume from this snapshot. Changing this forces a new resource.
 - `source_vol_id` (String) Clone the volume from this source volume. Changing this forces a new resource.
-- `volume_type` (String) The volume type. Changing this forces a new resource.
+- `volume_retype_policy` (String) Whether Cinder may migrate the volume's data to another storage backend when `volume_type` changes: `never` (the default) or `on-demand`. With `never`, a retype to a type on another backend fails and the volume keeps its type; the PCD UI always sends `on-demand`. The value is used only for a retype: changing it alone never retypes the volume.
+- `volume_type` (String) The volume type, by name. Changing it retypes the volume in place (Cinder `os-retype`); `volume_retype_policy` decides whether Cinder may move the data to another storage backend to do so. Use the type's name, not its ID: Cinder reports the name, so an ID never matches what the provider reads back. Cinder refuses to retype a volume that has snapshots, that is attached and whose new type changes front-end QoS, or that is not `available` or `in-use`. Retyping an attached volume that has to move to another backend depends on the storage driver.
 
 ### Read-Only
 

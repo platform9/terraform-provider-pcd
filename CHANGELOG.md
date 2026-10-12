@@ -23,6 +23,14 @@ All notable changes to this project are documented here. The format is based on
   release this provider targets does. As well as carrying `delete_on_termination`, this lets it attach
   multiattach volumes, which Nova refuses below 2.60 ("Multiattach volumes are only supported starting with
   compute API version 2.60"). The attachment keeps its `id`, which Nova stops returning only from 2.89.
+- **`pcd_blockstorage_volume` retypes in place.** Changing `volume_type` now asks Cinder to retype the existing
+  volume, as terraform-provider-openstack and the PCD UI's Retype action do, instead of destroying the volume,
+  with its data, and creating an empty one. The new `volume_retype_policy` says whether Cinder may migrate the
+  data to another storage backend: `never` (the default) or `on-demand`, which the PCD UI always uses. The
+  apply waits for the retype and fails if Cinder keeps the old type, which it does when a retype it accepted
+  cannot complete; Cinder also refuses at once to retype a volume that has snapshots. A volume retyped outside
+  Terraform now plans a retype back to the configured type rather than a replacement. Give `volume_type` the
+  type's name: Cinder reports types by name, so a type ID never matches.
 
 ## [0.1.18] - 2026-10-11
 

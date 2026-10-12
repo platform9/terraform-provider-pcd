@@ -11,16 +11,20 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/volumes"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
@@ -57,6 +61,8 @@ type volumeModel struct {
 	Encrypted        types.Bool   `tfsdk:"encrypted"`
 	Status           types.String `tfsdk:"status"`
 	Region           types.String `tfsdk:"region"`
+
+	VolumeRetypePolicy types.String `tfsdk:"volume_retype_policy"`
 }
 
 func (r *volumeResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -65,7 +71,10 @@ func (r *volumeResource) Metadata(_ context.Context, req resource.MetadataReques
 
 func (r *volumeResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	stable := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
-	fnC := []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}
+	// UseStateForUnknown runs first: on an in-place update the framework marks
+	// an unset availability_zone unknown, and RequiresReplace would report
+	// that as a change, which Terraform then discards.
+	fnC := []planmodifier.String{stringplanmodifier.UseStateForUnknown(), stringplanmodifier.RequiresReplace()}
 	fn := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a block storage volume in PCD's Cinder service.",
@@ -74,7 +83,6 @@ func (r *volumeResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"name":              schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The name of the volume.", PlanModifiers: stable},
 			"size":              schema.Int64Attribute{Required: true, MarkdownDescription: "Size in GB. Increasing extends the volume in place; decreasing is not allowed."},
 			"description":       schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "A description of the volume.", PlanModifiers: stable},
-			"volume_type":       schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The volume type. Changing this forces a new resource.", PlanModifiers: fnC},
 			"availability_zone": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Availability zone. Changing this forces a new resource.", PlanModifiers: fnC},
 			"snapshot_id":       schema.StringAttribute{Optional: true, MarkdownDescription: "Create the volume from this snapshot. Changing this forces a new resource.", PlanModifiers: fn},
 			"source_vol_id":     schema.StringAttribute{Optional: true, MarkdownDescription: "Clone the volume from this source volume. Changing this forces a new resource.", PlanModifiers: fn},
@@ -84,6 +92,25 @@ func (r *volumeResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"encrypted":         schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether the volume is encrypted."},
 			"status":            schema.StringAttribute{Computed: true, MarkdownDescription: "The Cinder status (e.g. available)."},
 			"region":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
+			"volume_type": schema.StringAttribute{
+				Optional: true, Computed: true, PlanModifiers: stable,
+				Validators: []validator.String{stringvalidator.LengthAtLeast(1)},
+				MarkdownDescription: "The volume type, by name. Changing it retypes the volume in place (Cinder " +
+					"`os-retype`); `volume_retype_policy` decides whether Cinder may move the data to another storage " +
+					"backend to do so. Use the type's name, not its ID: Cinder reports the name, so an ID never matches " +
+					"what the provider reads back. Cinder refuses to retype a volume that has snapshots, that is " +
+					"attached and whose new type changes front-end QoS, or that is not `available` or `in-use`. " +
+					"Retyping an attached volume that has to move to another backend depends on the storage driver.",
+			},
+			"volume_retype_policy": schema.StringAttribute{
+				Optional: true, Computed: true,
+				Default:    stringdefault.StaticString("never"),
+				Validators: []validator.String{stringvalidator.OneOf("never", "on-demand")},
+				MarkdownDescription: "Whether Cinder may migrate the volume's data to another storage backend when " +
+					"`volume_type` changes: `never` (the default) or `on-demand`. With `never`, a retype to a type on " +
+					"another backend fails and the volume keeps its type; the PCD UI always sends `on-demand`. " +
+					"The value is used only for a retype: changing it alone never retypes the volume.",
+			},
 		},
 	}
 }
@@ -225,6 +252,35 @@ func (r *volumeResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
+	if newType, ok := retypeTarget(&plan, &state); ok {
+		policy := volumes.MigrationPolicy(plan.VolumeRetypePolicy.ValueString())
+		vol, err := retypeVolume(ctx, client, plan.ID.ValueString(), newType, policy)
+		if err != nil {
+			detail := err.Error()
+			if gophercloud.ResponseCodeIs(err, http.StatusBadRequest) && strings.Contains(detail, "same volume type") {
+				detail += "\n\nThe volume already has this type. If volume_type is a volume type ID, set it to the " +
+					"type's name: Cinder reports types by name, so an ID never matches."
+			}
+			resp.Diagnostics.AddError("blockstorage: retyping volume", detail)
+			return
+		}
+		if vol.VolumeType != newType {
+			// Cinder accepted the retype and then kept the old type. Record the
+			// volume as it is, so state does not claim a type it does not have.
+			resp.Diagnostics.Append(r.flatten(ctx, vol, &plan)...)
+			resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+			resp.Diagnostics.AddError("blockstorage: retype did not take effect", fmt.Sprintf(
+				"Cinder accepted the retype of volume %s to %q, but the volume still has type %q (status %q). "+
+					"Cinder keeps the old type when the scheduler or the storage driver cannot complete a retype, "+
+					"or when the retype needs a data migration that volume_retype_policy = \"never\" forbids. "+
+					"If the new type is on another storage backend, set volume_retype_policy = \"on-demand\". "+
+					"Cinder's user messages for the volume may give the reason. If volume_type is a type ID "+
+					"rather than a name, set it to the type's name: Cinder reports types by name.",
+				plan.ID.ValueString(), newType, vol.VolumeType, vol.Status))
+			return
+		}
+	}
+
 	vol, err := volumes.Get(ctx, client, plan.ID.ValueString()).Extract()
 	if err != nil {
 		resp.Diagnostics.AddError("blockstorage: reading volume after update", err.Error())
@@ -307,6 +363,11 @@ func (r *volumeResource) flatten(ctx context.Context, vol *volumes.Volume, m *vo
 	if m.Region.IsNull() || m.Region.IsUnknown() {
 		m.Region = types.StringValue(r.config.Region)
 	}
+	// Cinder does not store the retype policy; keep the configured value and
+	// fill in the default for state written by an import or an older provider.
+	if m.VolumeRetypePolicy.IsNull() || m.VolumeRetypePolicy.IsUnknown() {
+		m.VolumeRetypePolicy = types.StringValue("never")
+	}
 	return diags
 }
 
@@ -341,6 +402,93 @@ func waitForVolumeStatus(ctx context.Context, client *gophercloud.ServiceClient,
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
+// volumeRetypePollInterval is a var so unit tests can shorten it.
+var volumeRetypePollInterval = 3 * time.Second
+
+// volumeRetypeTimeout bounds the wait for a retype. A retype that migrates the
+// volume to another backend copies all of its data, so it gets far longer than
+// a create.
+const volumeRetypeTimeout = 60 * time.Minute
+
+// retypeTarget returns the type Update has to retype the volume to, and
+// whether a retype is planned at all. Only a volume_type that differs from
+// state asks for one: a change to volume_retype_policy alone asks for none.
+func retypeTarget(plan, state *volumeModel) (string, bool) {
+	if plan.VolumeType.IsNull() || plan.VolumeType.IsUnknown() || plan.VolumeType.Equal(state.VolumeType) {
+		return "", false
+	}
+	return plan.VolumeType.ValueString(), true
+}
+
+// retypeVolume changes a volume's type with Cinder's os-retype action and waits
+// for the retype to end. It sends nothing when the volume already has the
+// type: Cinder refuses a retype to the volume's own type, and that is the
+// situation after the referenced volume type is renamed (Terraform renames the
+// type first, and Cinder reports types by name) or after the same retype was
+// done outside Terraform. It returns the volume as Cinder reports it at the
+// end; the caller checks the type, because Cinder keeps the old one when a
+// retype it accepted fails later.
+func retypeVolume(ctx context.Context, client *gophercloud.ServiceClient, id, newType string, policy volumes.MigrationPolicy) (*volumes.Volume, error) {
+	vol, err := clients.RequireObject(volumes.Get(ctx, client, id).Extract())
+	// volumes.Get decodes a 200 without the volume to an empty volume, not to
+	// nil, so RequireObject passes it; its empty type would send a retype.
+	if err == nil && vol.ID == "" {
+		err = clients.ErrNoObject
+	}
+	if err != nil {
+		return nil, err
+	}
+	if vol.VolumeType == newType {
+		return vol, nil
+	}
+	opts := volumes.ChangeTypeOpts{NewType: newType, MigrationPolicy: policy}
+	if err := volumes.ChangeType(ctx, client, id, opts).ExtractErr(); err != nil {
+		return nil, err
+	}
+	return waitForVolumeRetype(ctx, client, id, volumeRetypeTimeout)
+}
+
+// waitForVolumeRetype polls a volume until Cinder ends a retype. Cinder sets
+// "retyping" before it answers the request and restores the volume's earlier
+// status, "available" or "in-use", when the retype ends, whether it worked or
+// not. "error" and "error_deleting" fail the wait.
+func waitForVolumeRetype(ctx context.Context, client *gophercloud.ServiceClient, id string, timeout time.Duration) (*volumes.Volume, error) {
+	// The timeout is on the context, so it also ends a GET that Cinder never
+	// answers: the HTTP client has no timeout of its own.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	last := ""
+	timedOut := func() error {
+		return fmt.Errorf("timed out after %s waiting for volume %s to finish the retype (last status %q): %w", timeout, id, last, ctx.Err())
+	}
+	for {
+		vol, err := clients.RequireObject(volumes.Get(ctx, client, id).Extract())
+		// An empty volume (a 200 without the volume) has an empty status,
+		// which would keep the wait polling until it times out.
+		if err == nil && vol.ID == "" {
+			err = clients.ErrNoObject
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, timedOut()
+			}
+			return nil, err
+		}
+		last = vol.Status
+		switch vol.Status {
+		case "available", "in-use":
+			return vol, nil
+		case "error", "error_deleting":
+			return nil, fmt.Errorf("volume %s entered %q state during the retype", id, vol.Status)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, timedOut()
+		case <-time.After(volumeRetypePollInterval):
 		}
 	}
 }
