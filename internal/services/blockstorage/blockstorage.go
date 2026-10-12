@@ -8,6 +8,7 @@ package blockstorage
 import (
 	"fmt"
 
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
@@ -27,4 +28,17 @@ func configureClient(providerData any, diags *diag.Diagnostics) *clients.Config 
 		return nil
 	}
 	return config
+}
+
+// blockstorageMicroversionTransferResponse is the volume API version the
+// transfer resource speaks: from 3.57 a transfer reports source_project_id,
+// the project the volume belonged to when it was offered.
+const blockstorageMicroversionTransferResponse = "3.57"
+
+// withMicroversion returns a shallow copy of client pinned to mv, so one call
+// speaks a newer volume API version without raising it for the whole client.
+func withMicroversion(client *gophercloud.ServiceClient, mv string) *gophercloud.ServiceClient {
+	c := *client
+	c.Microversion = mv
+	return &c
 }
