@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`pcd_compute_aggregate`**, a resource and a data source for Nova host aggregates, which the PCD UI
+  manages on its Host Aggregates page; it ports `openstack_compute_aggregate_v2`. `hosts` takes resmgr host
+  UUIDs (`data.pcd_host.<name>.id`), because PCD names each compute host after that UUID, and `hosts` and
+  `metadata` are authoritative: hosts and keys added outside Terraform are removed on the next apply. `zone`
+  changes in place, but removing it replaces the aggregate, because Nova cannot clear an availability zone
+  once set; in PCD it should be the hosts' cluster name. Adding a host waits up to five minutes for Nova to
+  know it, which happens once the host's hypervisor role has converged; when the role is assigned in the same
+  configuration, set `wait_until_converged = true` on it. The aggregates PCD keeps for its clusters, and the
+  one named `compute`, cannot be managed or imported; to give a cluster's hosts scheduler metadata, create a
+  separate aggregate in the cluster's zone. Aggregate names are unique in a region and cannot be a cluster's
+  name. When importing an aggregate that has a zone, set `zone` to it first, or the plan replaces the
+  aggregate. Managing aggregates needs an admin token.
+
 ## [0.1.19] - 2026-10-12
 
 ### Added
