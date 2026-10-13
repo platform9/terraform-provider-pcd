@@ -35,6 +35,8 @@ All notable changes to this project are documented here. The format is based on
   `pf9_fd_label`, and the `pf9_failure_domain` metadata key that keeps an instance in one domain with the
   other as its fallback. It lists the checks the UI makes that Terraform does not, how hosts join a domain,
   and the order to remove domains in, with a runnable example under `examples/complete/failure-domains`.
+- `pcd_cluster`: the `vm_high_availability` description now says that only `enabled` is sent and that other
+  keys, such as `cooldown`, are not managed.
 
 ## [0.1.19] - 2026-10-12
 
