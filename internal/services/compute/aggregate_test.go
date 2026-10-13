@@ -214,3 +214,76 @@ func testAccCheckAggregateDestroy(t *testing.T) resource.TestCheckFunc {
 		return nil
 	}
 }
+
+// TestAccComputeAggregate_failureDomainPair builds the pair of aggregates the
+// PCD UI calls a stretched cluster (the Failure domains guide's recipe): both
+// in the host's cluster zone, tagged pf9_failure_domain with labels A and B,
+// the host in A and B empty (with one hypervisor there is nothing for B; the UI
+// itself wants a host in each). Destroy must leave the host in its cluster's
+// own aggregate. Opt-in like TestAccComputeAggregate_hosts, and never next to
+// it; run it only on a cluster without a failure-domain pair of its own.
+func TestAccComputeAggregate_failureDomainPair(t *testing.T) {
+	hostID, cluster := testAccAdminComputeHost(t)
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		CheckDestroy: resource.ComposeAggregateTestCheckFunc(
+			testAccCheckAggregateDestroy(t),
+			testAccCheckHostInClusterAggregate(t, cluster, hostID),
+		),
+		Steps: []resource.TestStep{{
+			Config: testAccFailureDomainPairConfig(cluster, hostID),
+			Check: resource.ComposeAggregateTestCheckFunc(
+				testAccCheckAggregateRemote(t, "pcd_compute_aggregate.fd_a", "tf-acc-fd-a", cluster, []string{hostID},
+					map[string]string{"pf9_failure_domain": "true", "pf9_fd_label": "A"}),
+				testAccCheckAggregateRemote(t, "pcd_compute_aggregate.fd_b", "tf-acc-fd-b", cluster, []string{},
+					map[string]string{"pf9_failure_domain": "true", "pf9_fd_label": "B"}),
+			),
+		}},
+	})
+}
+
+func testAccFailureDomainPairConfig(cluster, hostID string) string {
+	return fmt.Sprintf(`
+resource "pcd_compute_aggregate" "fd_a" {
+  name     = "tf-acc-fd-a"
+  zone     = %[1]q
+  hosts    = [%[2]q]
+  metadata = { pf9_failure_domain = "true", pf9_fd_label = "A" }
+}
+
+resource "pcd_compute_aggregate" "fd_b" {
+  name     = "tf-acc-fd-b"
+  zone     = %[1]q
+  metadata = { pf9_failure_domain = "true", pf9_fd_label = "B" }
+}
+`, cluster, hostID)
+}
+
+// testAccCheckHostInClusterAggregate confirms the host is still in the
+// aggregate PCD keeps for its cluster, which is named after the cluster.
+func testAccCheckHostInClusterAggregate(t *testing.T, cluster, hostID string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		client, err := acctest.LabConfig(t).ComputeV2Client()
+		if err != nil {
+			return err
+		}
+		pages, err := aggregates.List(client).AllPages(context.Background())
+		if err != nil {
+			return err
+		}
+		all, err := aggregates.ExtractAggregates(pages)
+		if err != nil {
+			return err
+		}
+		for _, a := range all {
+			if a.Name == cluster {
+				if slices.Contains(a.Hosts, hostID) {
+					return nil
+				}
+				return fmt.Errorf("host %s left cluster aggregate %s (hosts %v)", hostID, cluster, a.Hosts)
+			}
+		}
+		return fmt.Errorf("no aggregate named %s", cluster)
+	}
+}

@@ -28,6 +28,14 @@ All notable changes to this project are documented here. The format is based on
   "Value Conversion Error". Validation still refuses the reserved `migration-priority` key and a `null` value;
   it no longer needs a value to be known.
 
+### Documentation
+
+- A **Failure domains guide** shows how to build what the PCD UI calls a stretched cluster: two
+  `pcd_compute_aggregate` resources in a cluster's availability zone tagged `pf9_failure_domain` and
+  `pf9_fd_label`, and the `pf9_failure_domain` metadata key that keeps an instance in one domain with the
+  other as its fallback. It lists the checks the UI makes that Terraform does not, how hosts join a domain,
+  and the order to remove domains in, with a runnable example under `examples/complete/failure-domains`.
+
 ## [0.1.19] - 2026-10-12
 
 ### Added
