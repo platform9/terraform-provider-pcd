@@ -11,6 +11,7 @@ package compute
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"slices"
@@ -450,12 +451,21 @@ func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.Vali
 				fmt.Sprintf("%q is not valid; use normal, low, high, or never (or \"\" to clear).", p))
 		}
 	}
+	// A value can be unknown until apply (for example one that names a
+	// resource created in the same apply), so read the elements without
+	// converting them to strings: unknown values are allowed. A null value is
+	// refused, because Create and Update cannot send it.
 	if !cfg.Metadata.IsNull() && !cfg.Metadata.IsUnknown() {
-		var meta map[string]string
-		resp.Diagnostics.Append(cfg.Metadata.ElementsAs(ctx, &meta, false)...)
-		if _, reserved := meta[migrationPriorityKey]; reserved {
+		elems := cfg.Metadata.Elements()
+		if _, reserved := elems[migrationPriorityKey]; reserved {
 			resp.Diagnostics.AddAttributeError(path.Root("metadata"), "Reserved metadata key",
 				fmt.Sprintf("%q is managed by the migration_priority attribute; set it there instead.", migrationPriorityKey))
+		}
+		for _, k := range slices.Sorted(maps.Keys(elems)) {
+			if elems[k].IsNull() {
+				resp.Diagnostics.AddAttributeError(path.Root("metadata").AtMapKey(k), "Null metadata value",
+					fmt.Sprintf("metadata[%q] is null; remove the key or give it a string value.", k))
+			}
 		}
 	}
 	if !cfg.SchedulerHints.IsNull() && !cfg.SchedulerHints.IsUnknown() && len(cfg.SchedulerHints.Elements()) > 1 {

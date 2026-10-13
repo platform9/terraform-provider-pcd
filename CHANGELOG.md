@@ -21,6 +21,13 @@ All notable changes to this project are documented here. The format is based on
   name. When importing an aggregate that has a zone, set `zone` to it first, or the plan replaces the
   aggregate. Managing aggregates needs an admin token.
 
+### Fixed
+
+- `pcd_compute_instance`: a `metadata` value that is not known until apply, such as one that names a
+  resource created in the same apply, no longer fails `terraform validate` and `terraform plan` with
+  "Value Conversion Error". Validation still refuses the reserved `migration-priority` key and a `null` value;
+  it no longer needs a value to be known.
+
 ## [0.1.19] - 2026-10-12
 
 ### Added
