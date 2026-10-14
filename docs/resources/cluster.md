@@ -49,7 +49,7 @@ resource "pcd_host_cluster_role" "hypervisor" {
 - `auto_resource_rebalancing` (Attributes) Automatic workload-rebalancing settings. (see [below for nested schema](#nestedatt--auto_resource_rebalancing))
 - `cpu` (Attributes) Cluster CPU-model settings. Omit for PCD's default. (see [below for nested schema](#nestedatt--cpu))
 - `gpu` (Attributes) GPU passthrough/virtualization settings. (see [below for nested schema](#nestedatt--gpu))
-- `vm_high_availability` (Attributes) VM high-availability settings. (see [below for nested schema](#nestedatt--vm_high_availability))
+- `vm_high_availability` (Attributes) VM high-availability settings. Only `enabled` is sent; other keys, such as `cooldown`, are not managed here and keep the value the server has. (see [below for nested schema](#nestedatt--vm_high_availability))
 
 <a id="nestedatt--auto_resource_rebalancing"></a>
 ### Nested Schema for `auto_resource_rebalancing`

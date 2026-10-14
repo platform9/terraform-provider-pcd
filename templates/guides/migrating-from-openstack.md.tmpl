@@ -76,6 +76,7 @@ So `openstack_networking_network_v2` becomes `pcd_networking_network`.
 | `openstack_compute_servergroup_v2` | `pcd_compute_servergroup` |
 | `openstack_compute_interface_attach_v2` | `pcd_compute_interface_attach` |
 | `openstack_compute_volume_attach_v2` | `pcd_compute_volume_attach` |
+| `openstack_compute_aggregate_v2` (resource and data source) | `pcd_compute_aggregate` |
 | `openstack_blockstorage_volume_v3` | `pcd_blockstorage_volume` |
 | `openstack_blockstorage_volume_type_access_v3` | `pcd_blockstorage_volume_type_access` |
 
@@ -137,6 +138,10 @@ A few resources differ slightly from their upstream counterparts:
   instance in place. In addition, a new `uuid` on the root `block_device` (`boot_index = 0`,
   `source_type = "image"`, `destination_type = "volume"`) also rebuilds it in place, reimaging
   the root volume through Cinder, where upstream replaces the instance.
+- **`pcd_compute_aggregate`** — `hosts` are resmgr host UUIDs (`data.pcd_host.<name>.id`),
+  not hostnames. Removing `zone` replaces the aggregate, because Nova cannot clear an
+  availability zone (upstream shows a diff that never goes away). The aggregates PCD keeps
+  for its clusters cannot be managed or imported.
 
 ## Moving existing infrastructure
 
