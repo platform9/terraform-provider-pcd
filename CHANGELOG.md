@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`user_id` on `pcd_compute_quotaset`**, for the per-user compute quotas the PCD UI sets from the Users page: with
+  it, the resource manages one user's quotas within `project_id`. The ID and import ID gain the user as a third part,
+  `<project_id>/<region>/<user_id>`; project quota sets keep their two-part IDs, and existing configurations plan no
+  change. Destroying a user quota set removes the user's overrides, so the user falls back to the project's quotas;
+  Nova removes all of that user's overrides in the project, including fields the resource does not set. Destroying a
+  project quota set still leaves its quotas as they are. A user's quotas must fit within what the project has left,
+  and a project's quotas cannot go below the sum of its users', so raise the project first (`depends_on`) and lower
+  the users first. In a user quota set, the fields you do not set show the project's values, or the user's
+  existing override, and appear as "(known after apply)" whenever the user quota set changes.
+
 ## [0.1.20] - 2026-10-14
 
 ### Added
