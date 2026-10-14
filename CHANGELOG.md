@@ -39,6 +39,14 @@ All notable changes to this project are documented here. The format is based on
   `condition = pcd_compute_service.<name>.status == "maintenance"`, so that only an entry into maintenance
   drains the host. Needs an admin token. Resources and data sources are expected to keep working on older
   Terraform versions.
+- The **`pcd_compute_instance_migrate` action** (Terraform 1.14 or later) moves an instance to another
+  hypervisor, the PCD UI's Migrate: live for active and paused instances and cold for shut-off and suspended
+  ones (or as `mode` says), to a `host` you name or one the scheduler picks, and to another cluster with
+  `availability_zone` (a shut-off or suspended instance, on a PCD whose compute API offers microversion
+  2.101). It confirms a cold migration unless `confirm = false`, waits, and fails when the instance did not
+  move, with Nova's reason, because Nova reports a failed migration only after accepting it. After a move to
+  another cluster, set the instance's `availability_zone` to the new cluster, or the next plan replaces it.
+  Needs an admin token. Resources and data sources are expected to keep working on older Terraform versions.
 
 ### Fixed
 
