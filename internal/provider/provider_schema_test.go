@@ -49,4 +49,10 @@ func TestProviderSchemaIsValid(t *testing.T) {
 	if _, ok := resp.ResourceSchemas["pcd_compute_instance_rescue"]; !ok {
 		t.Error("resource pcd_compute_instance_rescue is not served")
 	}
+	if _, ok := resp.ActionSchemas["pcd_compute_host_drain"]; !ok {
+		t.Error("action pcd_compute_host_drain is not served")
+	}
+	if _, ok := resp.ActionSchemas["pcd_compute_instance_migrate"]; !ok {
+		t.Error("action pcd_compute_instance_migrate is not served")
+	}
 }
