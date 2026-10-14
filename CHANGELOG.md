@@ -17,6 +17,13 @@ All notable changes to this project are documented here. The format is based on
   time, to disable or destroy Keystone's `default` domain or the domain that the user or project it
   authenticates as belongs to, since that would revoke its own token. The data source looks a domain up by ID or
   exact name; `pcd_identity_project` cannot find domains, because Keystone leaves them out of the project list.
+- **`email` and `display_name` on `pcd_identity_user`**, and as computed attributes of the matching data source,
+  stored as the Keystone extra attributes `email` and `displayname` that the PCD UI reads: the Users list shows the
+  display name, and VM owner search shows the email, falling back to the user ID when there is none, as for every
+  user Terraform has created so far. The PCD UI's own "Email" field is the user's `name`; the UI expects the two to
+  match and copies `name` into `email` whenever someone edits the user there, so set `email` to the same address
+  as `name` to avoid drift. Leaving either attribute unset leaves the server's value alone, so existing
+  configurations plan no change; set `""` to clear one.
 
 ## [0.1.20] - 2026-10-14
 

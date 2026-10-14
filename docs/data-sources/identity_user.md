@@ -33,5 +33,7 @@ data "pcd_identity_user" "example" {
 
 - `default_project_id` (String) The user's default project ID.
 - `description` (String) The user description.
+- `display_name` (String) The user's display name (Keystone extra attribute `displayname`); null when the user has none.
+- `email` (String) The user's email address (Keystone extra attribute `email`); null when the user has none.
 - `enabled` (Boolean) Whether the user is enabled.
 - `id` (String) The user ID.

@@ -41,6 +41,8 @@ type userDataSourceModel struct {
 	DomainID         types.String `tfsdk:"domain_id"`
 	DefaultProjectID types.String `tfsdk:"default_project_id"`
 	Enabled          types.Bool   `tfsdk:"enabled"`
+	Email            types.String `tfsdk:"email"`
+	DisplayName      types.String `tfsdk:"display_name"`
 	Region           types.String `tfsdk:"region"`
 }
 
@@ -59,6 +61,8 @@ func (d *userDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 			"description":        schema.StringAttribute{Computed: true, MarkdownDescription: "The user description."},
 			"default_project_id": schema.StringAttribute{Computed: true, MarkdownDescription: "The user's default project ID."},
 			"enabled":            schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether the user is enabled."},
+			"email":              schema.StringAttribute{Computed: true, MarkdownDescription: "The user's email address (Keystone extra attribute `email`); null when the user has none."},
+			"display_name":       schema.StringAttribute{Computed: true, MarkdownDescription: "The user's display name (Keystone extra attribute `displayname`); null when the user has none."},
 			"region":             schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region."},
 		},
 	}
@@ -122,6 +126,8 @@ func (d *userDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	data.DomainID = types.StringValue(user.DomainID)
 	data.DefaultProjectID = types.StringValue(user.DefaultProjectID)
 	data.Enabled = types.BoolValue(user.Enabled)
+	data.Email = userExtraString(user, userExtraEmail)
+	data.DisplayName = userExtraString(user, userExtraDisplayName)
 	if data.Region.IsNull() || data.Region.IsUnknown() {
 		data.Region = types.StringValue(d.config.Region)
 	}
