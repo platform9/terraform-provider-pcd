@@ -27,6 +27,18 @@ All notable changes to this project are documented here. The format is based on
   the host in maintenance, and keeps a reason the UI already wrote. It moves no instances; the
   `pcd_compute_host_drain` action does. Destroying the resource enables scheduling again. On a cluster with one
   hypervisor, disabling it also stops most other VM operations there until it is enabled. Needs an admin token.
+- The **`pcd_compute_host_drain` action** (Terraform 1.14 or later) moves every instance off a hypervisor in
+  maintenance, the second half of the PCD UI's Enable Maintenance Mode: live migration for active and paused
+  instances, cold migration (confirmed) for shut-off and suspended ones, to hosts the scheduler picks;
+  `skip_powered_off` leaves shut-off instances where they are. It moves one instance at a time, checks that
+  each one left, and fails naming those that did not, with Nova's reason; running it again moves what is left.
+  It tags each instance with the maintenance ID first, so the UI's maintenance progress view tracks the move.
+  An instance can land in another cluster; one managed by Terraform with `availability_zone` set then plans a
+  replacement, so check the plan after a drain. On a host that still takes new instances it moves nothing and
+  warns. It can be triggered from `pcd_compute_service.disabled_reason` with
+  `condition = pcd_compute_service.<name>.status == "maintenance"`, so that only an entry into maintenance
+  drains the host. Needs an admin token. Resources and data sources are expected to keep working on older
+  Terraform versions.
 
 ### Fixed
 
