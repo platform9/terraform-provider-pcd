@@ -20,6 +20,13 @@ All notable changes to this project are documented here. The format is based on
   separate aggregate in the cluster's zone. Aggregate names are unique in a region and cannot be a cluster's
   name. When importing an aggregate that has a zone, set `zone` to it first, or the plan replaces the
   aggregate. Managing aggregates needs an admin token.
+- **`pcd_compute_service`** turns scheduling onto a hypervisor on and off, the PCD UI's Enable and Disable
+  Scheduling, and puts a hypervisor in maintenance, the first half of the UI's Enable Maintenance Mode. It
+  manages the host's existing `nova-compute` service, keyed by the host's resmgr UUID, and reads back changes
+  made in the UI. `status = "maintenance"` disables the service with the reason the UI writes, so the UI shows
+  the host in maintenance, and keeps a reason the UI already wrote. It moves no instances; the
+  `pcd_compute_host_drain` action does. Destroying the resource enables scheduling again. On a cluster with one
+  hypervisor, disabling it also stops most other VM operations there until it is enabled. Needs an admin token.
 
 ### Fixed
 
