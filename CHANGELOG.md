@@ -17,6 +17,21 @@ All notable changes to this project are documented here. The format is based on
   time, to disable or destroy Keystone's `default` domain or the domain that the user or project it
   authenticates as belongs to, since that would revoke its own token. The data source looks a domain up by ID or
   exact name; `pcd_identity_project` cannot find domains, because Keystone leaves them out of the project list.
+- **`pcd_identity_inherit_role_assignment`**, an inherited role grant (Keystone's OS-INHERIT `inherited_to_projects`):
+  the role applies to every current and future project in a domain, or to every project below a project, but not
+  to the domain or project itself. This is the grant the PCD UI's "Domain-Level Access" makes for users and for SSO
+  groups. It takes the same attributes and five-part import ID as `pcd_identity_role_assignment`, and is the port
+  of terraform-provider-openstack's `openstack_identity_inherit_role_assignment_v3`.
+
+### Changed
+
+- `pcd_identity_role_assignment` now looks only for a direct grant when it refreshes or imports, as
+  terraform-provider-openstack does. It used to search all role assignments, which also matched an inherited grant
+  on the same domain or project: importing a domain role made in the PCD UI appeared to work, but the resource then
+  managed a grant it could not remove, and destroy reported success while the grant stayed. **Upgrade note:** a
+  `pcd_identity_role_assignment` imported from such a UI grant drops out of state at the next refresh, with a
+  "Role assignment not found" warning, and the next plan proposes to create a direct grant next to it. Before
+  applying, change that block's type to `pcd_identity_inherit_role_assignment` and import it with the same ID.
 
 ## [0.1.20] - 2026-10-14
 
