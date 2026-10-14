@@ -186,6 +186,7 @@ type instanceModel struct {
 	Status            types.String `tfsdk:"status"`
 	PowerState        types.String `tfsdk:"power_state"`
 	Region            types.String `tfsdk:"region"`
+	UserID            types.String `tfsdk:"user_id"`
 }
 
 type instanceNetworkModel struct {
@@ -343,6 +344,18 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"access_ip_v4":      schema.StringAttribute{Computed: true, MarkdownDescription: "The first IPv4 address of the instance.", PlanModifiers: stable},
 			"status":            schema.StringAttribute{Computed: true, MarkdownDescription: "The Nova status (e.g. ACTIVE)."},
 			"region":            schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "The region. Defaults to the provider's region. Changing this forces a new resource.", PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()}},
+			"user_id": schema.StringAttribute{Optional: true, Computed: true,
+				MarkdownDescription: "The ID of the user who owns the instance, within its project. Nova makes the user that " +
+					"creates the instance its owner; set this to give it to another user, at create or later, in place, " +
+					"through PCD's change-owner action (the PCD UI's Change Ownership). Changing the owner needs an admin " +
+					"token, and the new owner must be allowed to create instances in the instance's project, as a user with " +
+					"the `member` or `admin` role normally is (Nova does not check this for federated users), and have " +
+					"instance quota left. Omitting it leaves the owner alone and " +
+					"reads back whoever owns the instance; setting it makes Terraform restore that owner after a change made elsewhere.",
+				// No UseStateForUnknown: the owner can change outside
+				// Terraform, and a planned value carried over from state would make
+				// the apply fail as an inconsistent result after such a change.
+				Validators: []validator.String{stringvalidator.LengthAtLeast(1)}},
 			// No plan modifier, on purpose: with UseStateForUnknown an unset
 			// power_state would carry a stale state value into Update, which
 			// would then either undo a power change made outside Terraform or
@@ -666,6 +679,32 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
+	// user_id: Nova boots the instance as the calling user. Hand it to the
+	// configured owner only when that is someone else (Nova re-checks quota
+	// even for the current owner). State first records the instance as it is,
+	// on a copy so the planned values later steps read stay intact, so a
+	// failure leaves state naming the real owner.
+	if want := plan.UserID; !want.IsNull() && !want.IsUnknown() && want.ValueString() != server.UserID {
+		booted := plan
+		resp.Diagnostics.Append(r.flatten(ctx, server, &booted)...)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &booted)...)
+		resp.Diagnostics.Append(tfstate.NullUnknowns(&resp.State)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if err := changeInstanceOwner(ctx, client, server.ID, want.ValueString()); err != nil {
+			resp.Diagnostics.AddError("compute: changing instance owner", err.Error())
+			return
+		}
+		if server, err = clients.RequireObject(servers.Get(ctx, client, server.ID).Extract()); err == nil && server.ID == "" {
+			err = clients.ErrNoObject
+		}
+		if err != nil {
+			resp.Diagnostics.AddError("compute: reading instance after changing its owner", err.Error())
+			return
+		}
+	}
+
 	// An empty list is not sent, and Nova then boots the instance with the
 	// project's default group; remove what it added so the instance has none.
 	if !plan.SecurityGroups.IsNull() && !plan.SecurityGroups.IsUnknown() && len(sgs) == 0 {
@@ -754,6 +793,19 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 	if err != nil {
 		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
 		return
+	}
+
+	// user_id first: changeOwner touches nothing else, so it runs before the
+	// other changes. It is sent whatever the instance's status; if Nova refuses
+	// it, the update stops here and state keeps its prior values. An omitted
+	// user_id is unknown in the plan and is left alone. A configured one is
+	// compared with the live owner, not with state, which a saved plan or
+	// -refresh=false can leave stale.
+	if !plan.UserID.IsNull() && !plan.UserID.IsUnknown() {
+		if err := changeInstanceOwner(ctx, client, plan.ID.ValueString(), plan.UserID.ValueString()); err != nil {
+			resp.Diagnostics.AddError("compute: changing instance owner", err.Error())
+			return
+		}
 	}
 	id := plan.ID.ValueString()
 
@@ -1073,6 +1125,7 @@ func (r *instanceResource) flatten(ctx context.Context, server *servers.Server, 
 	m.ID = types.StringValue(server.ID)
 	m.Name = types.StringValue(server.Name)
 	m.Status = types.StringValue(server.Status)
+	m.UserID = types.StringValue(server.UserID)
 
 	// image_id follows the image the server runs, so a rebuild done outside
 	// Terraform shows as drift and an import records the image. A server that
