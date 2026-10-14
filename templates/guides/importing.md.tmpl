@@ -141,6 +141,7 @@ ID alone.
 | `pcd_compute_volume_attach` | `<instance_id>/<attachment_id>` | `pcdctl server list`; the attachment ID is the attached volume's ID from `pcdctl volume list` |
 | `pcd_compute_quotaset` | `<project_id>/<region>` | `pcdctl project list`; `pcdctl region list` |
 | `pcd_compute_aggregate` | `<id>` (an integer) | `pcdctl aggregate list`; the aggregates PCD keeps for its clusters cannot be imported. For an aggregate with a zone, set `zone` to it in the configuration first, or the plan after the import replaces the aggregate |
+| `pcd_compute_service` | `<host_id>` (the hypervisor's resmgr UUID) | `pcdctl compute service list --service nova-compute -c Host` |
 
 ### Networking
 

@@ -43,6 +43,9 @@ func TestProviderSchemaIsValid(t *testing.T) {
 	if _, ok := resp.DataSourceSchemas["pcd_compute_aggregate"]; !ok {
 		t.Error("data source pcd_compute_aggregate is not served")
 	}
+	if _, ok := resp.ResourceSchemas["pcd_compute_service"]; !ok {
+		t.Error("resource pcd_compute_service is not served")
+	}
 	if _, ok := resp.ResourceSchemas["pcd_compute_instance_rescue"]; !ok {
 		t.Error("resource pcd_compute_instance_rescue is not served")
 	}
