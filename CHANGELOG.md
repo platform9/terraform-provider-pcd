@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`pcd_identity_domain` resource and data source**, so Keystone domains — the containers the PCD UI lists
+  under Domains — can be created, renamed, described, enabled and disabled in place, and destroyed. Keystone
+  refuses to delete an enabled domain, so destroy disables the domain and then deletes it; if the delete itself
+  is refused, the error says the domain was left disabled. Destroying a domain deletes everything in it:
+  Keystone removes every project, user and group in the domain and every identity provider registered to it, and
+  the servers, volumes and networks of those projects are left without an owner. The provider refuses, at plan
+  time, to disable or destroy Keystone's `default` domain or the domain that the user or project it
+  authenticates as belongs to, since that would revoke its own token. The data source looks a domain up by ID or
+  exact name; `pcd_identity_project` cannot find domains, because Keystone leaves them out of the project list.
+
 ## [0.1.20] - 2026-10-14
 
 ### Added

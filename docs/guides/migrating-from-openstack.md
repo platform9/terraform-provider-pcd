@@ -100,6 +100,11 @@ service. There is nothing to migrate *from*; these are net-new capability:
 
 A few resources differ slightly from their upstream counterparts:
 
+- **`pcd_identity_domain`** — upstream has no domain resource, so upstream configurations
+  manage a domain as an `openstack_identity_project_v3` with `is_domain = true`.
+  `pcd_identity_project` still accepts that, but `pcd_identity_domain` manages domains
+  through the same Keystone API as the PCD UI, and refuses to disable or destroy the
+  domain the provider authenticates into.
 - **`pcd_compute_instance` data source** — looks up by `instance_id` or exact `name`
   (upstream's takes `id` only), fills `network.*.uuid` and `.port` (upstream leaves them empty),
   and has no `power_state`: use `status` or `vm_state`, which also cover the statuses upstream
