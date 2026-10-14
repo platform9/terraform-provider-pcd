@@ -182,6 +182,7 @@ ID alone.
 | `pcd_identity_group` | `<group_id>` | `pcdctl group list` |
 | `pcd_identity_group_membership` | `<group_id>/<user_id>` | `pcdctl group list`; `pcdctl user list --group <group_id>` |
 | `pcd_identity_role_assignment` | `<domain_id>/<project_id>/<group_id>/<user_id>/<role_id>` | `pcdctl role assignment list --names`, then resolve each name with the list commands above; leave the parts the assignment does not use empty |
+| `pcd_identity_user_mfa` | `<user_id>` | `pcdctl user list` |
 | `pcd_identity_application_credential` | `<id>` | `pcdctl application credential list` |
 
 ### Load balancer
