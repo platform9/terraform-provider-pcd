@@ -18,6 +18,20 @@ All notable changes to this project are documented here. The format is based on
   authenticates as belongs to, since that would revoke its own token. The data source looks a domain up by ID or
   exact name; `pcd_identity_project` cannot find domains, because Keystone leaves them out of the project list.
 
+### Fixed
+
+- `pcd_identity_project`: destroying a project with `is_domain = true` while it is enabled now succeeds. Keystone
+  deletes such a project through its domain-delete path, which refuses an enabled domain with
+  `403 Cannot delete a domain that is enabled, please disable it first`, so destroy now disables the project first,
+  as terraform-provider-openstack does; before, the only way out was to apply `enabled = false` and then destroy.
+  If the delete itself is refused after the disable, the error says the domain was left disabled. The destroy
+  deletes everything in the domain — its projects, users, groups and identity providers — so, like
+  `pcd_identity_domain`, the provider refuses to destroy or disable Keystone's `default` domain or the domain it
+  authenticates into through this resource. `pcd_identity_domain` is now the preferred way to manage a domain.
+  **Upgrade note:** before this release, destroying or replacing an enabled `is_domain` project failed and left the
+  domain intact. It now deletes the domain and everything in it. Review any plan that destroys or replaces a
+  `pcd_identity_project` with `is_domain = true` before applying it.
+
 ## [0.1.20] - 2026-10-14
 
 ### Added

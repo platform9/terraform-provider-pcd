@@ -94,10 +94,17 @@ func (r *projectResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				MarkdownDescription: "Whether the project is enabled. Defaults to true.",
 			},
 			"is_domain": schema.BoolAttribute{
-				Optional:            true,
-				Computed:            true,
-				Default:             booldefault.StaticBool(false),
-				MarkdownDescription: "Whether this project behaves as a domain. Changing this forces a new resource.",
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+				MarkdownDescription: "Whether this project acts as a domain. Changing this forces a new resource. " +
+					"Prefer `pcd_identity_domain`, which manages domains through the same API as the PCD UI. " +
+					"**Destroying a project with `is_domain = true` deletes the domain and everything in it:** " +
+					"Keystone deletes every project, user and group in the domain and every identity provider " +
+					"registered to it. Destroy disables the domain first, because Keystone refuses to delete an " +
+					"enabled one. The provider refuses to destroy or disable Keystone's `default` domain, the " +
+					"domain that the user or project it authenticates as belongs to, or the domain its token is " +
+					"scoped to; to stop managing such a project, remove it from state instead.",
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.RequiresReplace(),
 					boolplanmodifier.UseStateForUnknown(),
@@ -220,8 +227,9 @@ func (r *projectResource) Read(ctx context.Context, req resource.ReadRequest, re
 }
 
 func (r *projectResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan projectModel
+	var plan, state projectModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -230,6 +238,26 @@ func (r *projectResource) Update(ctx context.Context, req resource.UpdateRequest
 	if err != nil {
 		resp.Diagnostics.AddError("identity: building v3 client", err.Error())
 		return
+	}
+
+	// Disabling a project that acts as a domain disables the domain, which
+	// revokes the provider's own token when it authenticates into that domain,
+	// so that is refused as Delete refuses a destroy, before anything is sent.
+	if state.IsDomain.ValueBool() && state.Enabled.ValueBool() &&
+		!plan.Enabled.IsNull() && !plan.Enabled.IsUnknown() && !plan.Enabled.ValueBool() {
+		reason, err := domainProtection(ctx, client, state.ID.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("identity: checking which domain the provider authenticates into", err.Error())
+			return
+		}
+		if reason != "" {
+			resp.Diagnostics.AddError("Refusing to disable a protected domain",
+				fmt.Sprintf("The provider will not disable project %s, which acts as a domain: %s. To stop managing "+
+					"it, remove it from state (a `removed` block with `destroy = false`, or `terraform state rm`). "+
+					"To keep managing it, leave `enabled` unset or `true`.",
+					state.ID.ValueString(), reason))
+			return
+		}
 	}
 
 	enabled := plan.Enabled.ValueBool()
@@ -273,11 +301,46 @@ func (r *projectResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
+	// Keystone deletes a project acting as a domain through its domain-delete
+	// path, which refuses an enabled domain (403), so disable it first, as
+	// terraform-provider-openstack does. 404 means it is already gone. The
+	// disable would otherwise let a destroy delete the domain the provider
+	// authenticates into, so that is refused first, as pcd_identity_domain does.
+	if state.IsDomain.ValueBool() {
+		reason, err := domainProtection(ctx, client, state.ID.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("identity: checking which domain the provider authenticates into", err.Error())
+			return
+		}
+		if reason != "" {
+			resp.Diagnostics.AddError("Refusing to destroy a protected domain",
+				fmt.Sprintf("The provider will not delete project %s, which acts as a domain: %s. To stop managing "+
+					"it, remove it from state (a `removed` block with `destroy = false`, or `terraform state rm`).",
+					state.ID.ValueString(), reason))
+			return
+		}
+		disabled := false
+		if _, err := projects.Update(ctx, client, state.ID.ValueString(), projects.UpdateOpts{Enabled: &disabled}).Extract(); err != nil {
+			if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+				return
+			}
+			resp.Diagnostics.AddError("identity: disabling project acting as a domain before deleting it", err.Error())
+			return
+		}
+	}
+
 	if err := projects.Delete(ctx, client, state.ID.ValueString()).ExtractErr(); err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			return
 		}
-		resp.Diagnostics.AddError("identity: deleting project", err.Error())
+		detail := err.Error()
+		if state.IsDomain.ValueBool() {
+			detail = fmt.Sprintf("Project %s, which acts as a domain, was disabled but could not be deleted, so it "+
+				"stays disabled until a retried destroy deletes it; to re-enable it instead, apply with the "+
+				"resource in the configuration and enabled = true (or unset): %s",
+				state.ID.ValueString(), err)
+		}
+		resp.Diagnostics.AddError("identity: deleting project", detail)
 	}
 }
 
