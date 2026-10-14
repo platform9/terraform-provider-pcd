@@ -194,3 +194,24 @@ resource "pcd_compute_instance" "web" {
     group = pcd_compute_servergroup.web.id
   }
 }
+
+# --- Ownership ---------------------------------------------------------------
+# Give the instance to another user in its project, in place: the PCD UI's
+# Change Ownership. Needs an admin token, and the user must be allowed to
+# create instances in the instance's project (the member role normally is).
+data "pcd_identity_user" "owner" {
+  name = "app-owner"
+}
+
+resource "pcd_compute_instance" "owned" {
+  name        = "tf-example-owned"
+  image_name  = "Ubuntu-22.04"
+  flavor_name = "m1.small"
+  user_id     = data.pcd_identity_user.owner.id
+
+  network {
+    uuid = pcd_networking_network.example.id
+  }
+
+  depends_on = [pcd_networking_subnet.example]
+}

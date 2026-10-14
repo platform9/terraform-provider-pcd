@@ -47,6 +47,13 @@ All notable changes to this project are documented here. The format is based on
   move, with Nova's reason, because Nova reports a failed migration only after accepting it. After a move to
   another cluster, set the instance's `availability_zone` to the new cluster, or the next plan replaces it.
   Needs an admin token. Resources and data sources are expected to keep working on older Terraform versions.
+- **`user_id` on `pcd_compute_instance`**: the user who owns the instance in its project. Setting it gives the
+  instance to that user in place, at create or later, through PCD's change-owner action, the PCD UI's Change
+  Ownership; that needs an admin token, and the user must be allowed to create instances in the project (a
+  user with the `member` or `admin` role normally is) and have instance quota left. Omitting it changes
+  nothing: existing configurations plan no change, and the attribute reads back the current owner (in the plan
+  of another change to the instance it shows as `(known after apply)`). If the owner change fails at create,
+  the instance stays in state with its real owner and is marked tainted.
 
 ### Fixed
 
