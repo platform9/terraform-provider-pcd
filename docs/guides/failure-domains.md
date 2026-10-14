@@ -97,7 +97,7 @@ terraform {
   required_providers {
     pcd = {
       source  = "platform9/pcd"
-      version = "~> 0.1"
+      version = "~> 0.1.20"
     }
   }
 }
