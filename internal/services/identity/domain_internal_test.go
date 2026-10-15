@@ -162,6 +162,30 @@ func TestDomainProtectionReadsTheToken(t *testing.T) {
 	}
 }
 
+// A token whose project or domain section does not decode is an error, not a
+// token without that scope: otherwise the domain it names would silently lose
+// its protection.
+func TestCurrentTokenScopeRefusesAMalformedToken(t *testing.T) {
+	const user = `"user": {"id": "u-provider", "name": "admin", "domain": {"id": "dom-user", "name": "users"}}`
+	for _, tc := range []struct{ name, id, body string }{
+		{name: "project", id: "dom-project",
+			body: `{"token": {"methods": ["password"], ` + user + `, "project": {"id": "p-1", "domain": "dom-project"}}}`},
+		{name: "domain", id: "dom-scope",
+			body: `{"token": {"methods": ["password"], ` + user + `, "domain": "dom-scope"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newKeystoneFake(t, map[string]func() (int, string){"GET /auth/tokens": keystoneReply(200, tc.body)})
+			ctx := context.Background()
+			if s, err := currentTokenScope(ctx, f.bareClient()); err == nil {
+				t.Fatalf("currentTokenScope = %+v; want an error", s)
+			}
+			if reason, err := domainProtection(ctx, f.bareClient(), tc.id); err == nil {
+				t.Fatalf("domainProtection(%s) = %q with no error; want an error", tc.id, reason)
+			}
+		})
+	}
+}
+
 // domainPlanFixture builds a state (and optionally a plan) for the domain
 // resource's schema.
 func domainPlanFixture(t *testing.T, r *domainResource, state *domainModel, plan *domainModel) (tfsdk.State, tfsdk.Plan) {
@@ -183,25 +207,57 @@ func domainPlanFixture(t *testing.T, r *domainResource, state *domainModel, plan
 	return st, pl
 }
 
-// A plan that destroys or disables the domain the provider authenticates into
-// must fail at plan time, before anything is sent; other plans pass.
+// providerUserInDefault is tokenBody with the provider's user in Keystone's
+// default domain.
+var providerUserInDefault = strings.Replace(tokenBody,
+	`"domain": {"id": "dom-user", "name": "users"}`, `"domain": {"id": "default", "name": "Default"}`, 1)
+
+// A plan that destroys, replaces or disables the domain the provider
+// authenticates into must fail at plan time, before anything is sent; other
+// plans pass. A changed region replaces the domain, so it is refused as a destroy.
 func TestDomainModifyPlanRefusesProtectedDomains(t *testing.T) {
 	ctx := context.Background()
+	inRegionTwo := func() *domainModel {
+		m := domainModelFor("a", "first", true)
+		m.Region = types.StringValue("region-two")
+		return m
+	}
+	unknownRegion := func() *domainModel {
+		m := domainModelFor("a", "first", true)
+		m.Region = types.StringUnknown()
+		return m
+	}
 	for _, tc := range []struct {
-		name      string
-		id        string
-		plan      *domainModel // nil means destroy
-		wantError string
+		name       string
+		id         string
+		plan       *domainModel // nil means destroy
+		token      string       // the provider's token; tokenBody when empty
+		wantError  string
+		wantDetail string
 	}{
-		{name: "destroy the user's domain", id: "dom-user", wantError: "Refusing to destroy a protected domain"},
-		{name: "destroy default", id: "default", wantError: "Refusing to destroy a protected domain"},
+		{name: "destroy the user's domain", id: "dom-user", wantError: "Refusing to destroy a protected domain",
+			wantDetail: "so the change would cut off the provider's own access"},
+		{name: "destroy default", id: "default", wantError: "Refusing to destroy a protected domain",
+			wantDetail: "which holds the PCD administrator, so the change would lock out the PCD administrator"},
+		{name: "destroy default, the provider user's domain", id: "default", token: providerUserInDefault,
+			wantError:  "Refusing to destroy a protected domain",
+			wantDetail: "domain default: the user the provider authenticates as belongs to it, so the change would cut off the provider's own access"},
 		{name: "disable the project's domain", id: "dom-project",
 			plan: domainModelFor("a", "first", false), wantError: "Refusing to disable a protected domain"},
 		{name: "destroy another domain", id: "dom-other"},
 		{name: "rename the user's domain", id: "dom-user", plan: domainModelFor("b", "first", true)},
+		{name: "move the user's domain to another region", id: "dom-user", plan: inRegionTwo(),
+			wantError:  "Refusing to destroy a protected domain",
+			wantDetail: "Changing `region` replaces the domain; set `region` back to \"region-one\" to keep managing it."},
+		{name: "protected domain with a region unknown at plan time", id: "dom-user", plan: unknownRegion()},
+		{name: "move another domain to another region", id: "dom-other", plan: inRegionTwo()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newKeystoneFake(t, map[string]func() (int, string){"GET /v3/auth/tokens": keystoneReply(200, tokenBody)})
+			token := tokenBody
+			if tc.token != "" {
+				token = tc.token
+			}
+			f := newKeystoneFake(t, map[string]func() (int, string){"GET /v3/auth/tokens": keystoneReply(200, token)})
 			r := &domainResource{config: fakeConfig(f.srv.URL)}
 			state := domainModelFor("a", "first", true)
 			state.ID = types.StringValue(tc.id)
@@ -215,11 +271,14 @@ func TestDomainModifyPlanRefusesProtectedDomains(t *testing.T) {
 			for _, d := range resp.Diagnostics.Errors() {
 				summaries = append(summaries, d.Summary())
 			}
-			if tc.wantError == "" && len(summaries) != 0 {
-				t.Fatalf("errors = %v, want none", summaries)
+			if tc.wantError == "" && len(resp.Diagnostics) != 0 {
+				t.Fatalf("diagnostics = %v, want none", resp.Diagnostics)
 			}
 			if tc.wantError != "" && (len(summaries) != 1 || summaries[0] != tc.wantError) {
 				t.Fatalf("errors = %v, want [%s]", summaries, tc.wantError)
+			}
+			if tc.wantDetail != "" && !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), tc.wantDetail) {
+				t.Fatalf("detail = %q, want it to contain %q", resp.Diagnostics.Errors()[0].Detail(), tc.wantDetail)
 			}
 		})
 	}
@@ -228,19 +287,30 @@ func TestDomainModifyPlanRefusesProtectedDomains(t *testing.T) {
 // Update and Delete check the guard again at apply time, for plans made while
 // the provider was not configured and for the destroy half of a replacement (a
 // changed region): a protected domain is refused before any PATCH or DELETE.
+// Reading the token only words the refusal of default, so a failed read still
+// refuses it, with the administrator's reason.
 func TestDomainApplyRefusesProtectedDomains(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name, id, wantError string
 		plan                *domainModel // nil means Delete
+		tokenStatus         int          // the token GET's status; 200 when zero
+		wantDetail          string
 	}{
 		{name: "destroy the user's domain", id: "dom-user", wantError: "Refusing to destroy a protected domain"},
 		{name: "destroy default", id: "default", wantError: "Refusing to destroy a protected domain"},
+		{name: "destroy default when the token read fails", id: "default", tokenStatus: 500,
+			wantError:  "Refusing to destroy a protected domain",
+			wantDetail: "which holds the PCD administrator, so the change would lock out the PCD administrator"},
 		{name: "disable the project's domain", id: "dom-project", plan: domainModelFor("b", "first", false),
 			wantError: "Refusing to disable a protected domain"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newKeystoneFake(t, map[string]func() (int, string){"GET /v3/auth/tokens": keystoneReply(200, tokenBody)})
+			status, body := 200, tokenBody
+			if tc.tokenStatus != 0 {
+				status, body = tc.tokenStatus, `{"error": {"code": 500, "message": "boom"}}`
+			}
+			f := newKeystoneFake(t, map[string]func() (int, string){"GET /v3/auth/tokens": keystoneReply(status, body)})
 			r := &domainResource{config: fakeConfig(f.srv.URL)}
 			state := domainModelFor("a", "first", true)
 			state.ID = types.StringValue(tc.id)
@@ -264,6 +334,9 @@ func TestDomainApplyRefusesProtectedDomains(t *testing.T) {
 			}
 			if len(summaries) != 1 || summaries[0] != tc.wantError {
 				t.Fatalf("errors = %v, want [%s]", summaries, tc.wantError)
+			}
+			if tc.wantDetail != "" && !strings.Contains(diags.Errors()[0].Detail(), tc.wantDetail) {
+				t.Fatalf("detail = %q, want it to contain %q", diags.Errors()[0].Detail(), tc.wantDetail)
 			}
 			for _, p := range f.paths() {
 				if p != "GET /v3/auth/tokens" {
