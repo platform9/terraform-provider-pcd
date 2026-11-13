@@ -58,6 +58,7 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		identity.NewGroupMembershipResource,
 		identity.NewDomainResource,
 		identity.NewInheritRoleAssignmentResource,
+		identity.NewUserMFAResource,
 		images.NewImageResource,
 		images.NewImageAccessResource,
 		images.NewImageAccessAcceptResource,

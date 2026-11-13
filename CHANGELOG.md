@@ -30,6 +30,20 @@ All notable changes to this project are documented here. The format is based on
   match and copies `name` into `email` whenever someone edits the user there, so set `email` to the same address
   as `name` to avoid drift. Leaving either attribute unset leaves the server's value alone, so existing
   configurations plan no change; set `""` to clear one.
+- **`pcd_identity_user_mfa`**, multi-factor authentication for a user, as the PCD UI's self-service "Multifactor
+  Authentication" setting does it, but for any user an administrator manages: it enrolls a TOTP secret as a Keystone
+  credential and sets the user's `multi_factor_auth_rules` so every login needs the password and a passcode. The
+  secret is generated when not given and kept in state, marked sensitive. A refresh reports rules changed outside
+  Terraform through `enforced`, and the next apply restores them. Destroy deletes the credential and, when the user
+  has no other TOTP credential, removes the user's MFA rules, so the user can log in by any enabled method
+  again; the PCD UI's own "disable" instead leaves a password-only rule, which also locks the user out of application
+  credentials and single sign-on. While another TOTP credential remains (the new one during a create-before-destroy
+  replacement, or a secret the user enrolled themselves), destroy keeps the rules and warns that the MFA rules were
+  left in place. While MFA is on, Keystone checks the rules for every login, so the user cannot use application
+  credentials or single sign-on. The provider refuses to turn MFA on for the user it authenticates as. To manage MFA
+  a user set up in the PCD UI, import it instead of creating it. If the TOTP credential is deleted outside
+  Terraform, the next apply enrolls a new secret unless `totp_secret` is set, and the user must add it to their
+  authenticator app.
 
 ### Changed
 
