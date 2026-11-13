@@ -33,7 +33,7 @@ resource "pcd_identity_project" "example" {
 - `description` (String) A description of the project.
 - `domain_id` (String) The domain the project belongs to. Changing this forces a new resource.
 - `enabled` (Boolean) Whether the project is enabled. Defaults to true.
-- `is_domain` (Boolean) Whether this project behaves as a domain. Changing this forces a new resource.
+- `is_domain` (Boolean) Whether this project acts as a domain. Changing this forces a new resource. Prefer `pcd_identity_domain`, which manages domains through the same API as the PCD UI. **Destroying a project with `is_domain = true` deletes the domain and everything in it:** Keystone deletes every project, user and group in the domain and every identity provider registered to it. Destroy disables the domain first, because Keystone refuses to delete an enabled one. The provider refuses to destroy or disable Keystone's `default` domain, the domain that the user or project it authenticates as belongs to, or the domain its token is scoped to; to stop managing such a project, remove it from state instead.
 - `parent_id` (String) The parent project ID. Changing this forces a new resource.
 - `region` (String) The region in which to manage the project. Defaults to the provider's region. Changing this forces a new resource.
 - `tags` (Set of String) A set of string tags applied to the project.

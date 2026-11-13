@@ -6,6 +6,7 @@ package identity_test
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -113,25 +114,34 @@ func testAccCheckRoleAssignmentDestroy(t *testing.T) resource.TestCheckFunc {
 }
 
 // roleAssignmentPresent parses a composite id (domain/project/group/user/role)
-// and reports whether that assignment currently exists.
+// and reports whether that direct assignment currently exists. Like the
+// resource, it lists the roles on the domain or project itself, which leaves
+// out inherited grants.
 func roleAssignmentPresent(client *gophercloud.ServiceClient, id string) (bool, error) {
 	parts := strings.SplitN(id, "/", 5)
 	if len(parts) != 5 {
 		return false, fmt.Errorf("bad role assignment id: %q", id)
 	}
-	pages, err := roles.ListAssignments(client, roles.ListAssignmentsOpts{
-		ScopeDomainID:  parts[0],
-		ScopeProjectID: parts[1],
-		GroupID:        parts[2],
-		UserID:         parts[3],
-		RoleID:         parts[4],
+	pages, err := roles.ListAssignmentsOnResource(client, roles.ListAssignmentsOnResourceOpts{
+		DomainID:  parts[0],
+		ProjectID: parts[1],
+		GroupID:   parts[2],
+		UserID:    parts[3],
 	}).AllPages(context.Background())
 	if err != nil {
+		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+			return false, nil
+		}
 		return false, err
 	}
-	all, err := roles.ExtractRoleAssignments(pages)
+	all, err := roles.ExtractRoles(pages)
 	if err != nil {
 		return false, err
 	}
-	return len(all) > 0, nil
+	for _, role := range all {
+		if role.ID == parts[4] {
+			return true, nil
+		}
+	}
+	return false, nil
 }
