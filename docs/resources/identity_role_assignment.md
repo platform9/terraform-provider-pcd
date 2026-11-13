@@ -4,11 +4,14 @@ page_title: "pcd_identity_role_assignment Resource - PCD"
 subcategory: "Identity"
 description: |-
   Assigns a role to a user or group on a project or domain. Assignments are immutable: any change forces a new resource. Exactly one of user_id/group_id and exactly one of project_id/domain_id must be set.
+  With domain_id this is a direct domain grant: the role applies to tokens scoped to the domain, not to the projects in it. The PCD UI's "Domain-Level Access" is a different, inherited grant; manage it with pcd_identity_inherit_role_assignment. The PCD UI lists a direct domain grant under Domain-Level Access too, but cannot revoke it.
 ---
 
 # pcd_identity_role_assignment (Resource)
 
 Assigns a role to a user or group on a project or domain. Assignments are immutable: any change forces a new resource. Exactly one of `user_id`/`group_id` and exactly one of `project_id`/`domain_id` must be set.
+
+With `domain_id` this is a *direct* domain grant: the role applies to tokens scoped to the domain, not to the projects in it. The PCD UI's "Domain-Level Access" is a different, inherited grant; manage it with `pcd_identity_inherit_role_assignment`. The PCD UI lists a direct domain grant under Domain-Level Access too, but cannot revoke it.
 
 ## Example Usage
 

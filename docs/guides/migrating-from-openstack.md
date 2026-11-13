@@ -53,6 +53,7 @@ So `openstack_networking_network_v2` becomes `pcd_networking_network`.
 | `openstack_identity_user_v3` | `pcd_identity_user` |
 | `openstack_identity_role_v3` | `pcd_identity_role` |
 | `openstack_identity_role_assignment_v3` | `pcd_identity_role_assignment` |
+| `openstack_identity_inherit_role_assignment_v3` | `pcd_identity_inherit_role_assignment` |
 | `openstack_identity_application_credential_v3` | `pcd_identity_application_credential` |
 | `openstack_images_image_v2` | `pcd_images_image` |
 | `openstack_images_image_access_v2` | `pcd_images_image_access` |
