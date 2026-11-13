@@ -175,6 +175,7 @@ ID alone.
 
 | Resource | Import ID | Where to find it |
 |---|---|---|
+| `pcd_identity_domain` | `<domain_id>` | `pcdctl domain list` |
 | `pcd_identity_project` | `<id>` | `pcdctl project list` |
 | `pcd_identity_user` | `<id>` | `pcdctl user list` |
 | `pcd_identity_role` | `<id>` | `pcdctl role list` |
