@@ -27,7 +27,9 @@ type tokenScope struct {
 }
 
 // currentTokenScope reads the provider's own token back from Keystone, the
-// same call the pcd_identity_auth_scope data source makes.
+// same call the pcd_identity_auth_scope data source makes. A part of the
+// token that does not decode is an error, never an absent scope, so the
+// guards that use it fail closed.
 func currentTokenScope(ctx context.Context, client *gophercloud.ServiceClient) (tokenScope, error) {
 	result := tokens.Get(ctx, client, client.Token())
 	if result.Err != nil {
@@ -40,10 +42,18 @@ func currentTokenScope(ctx context.Context, client *gophercloud.ServiceClient) (
 	}
 	s.UserID = user.ID
 	s.UserDomainID = user.Domain.ID
-	if project, err := result.ExtractProject(); err == nil && project != nil {
+	project, err := result.ExtractProject()
+	if err != nil {
+		return tokenScope{}, fmt.Errorf("reading the provider's token: %w", err)
+	}
+	if project != nil {
 		s.ProjectDomainID = project.Domain.ID
 	}
-	if domain, err := result.ExtractDomain(); err == nil && domain != nil {
+	domain, err := result.ExtractDomain()
+	if err != nil {
+		return tokenScope{}, fmt.Errorf("reading the provider's token: %w", err)
+	}
+	if domain != nil {
 		s.DomainID = domain.ID
 	}
 	return s, nil
@@ -57,9 +67,20 @@ func (s tokenScope) protectedDomainReason(id string) string {
 	if id == "" {
 		return ""
 	}
-	switch id {
-	case keystoneDefaultDomainID:
+	if id == keystoneDefaultDomainID {
 		return "it is Keystone's default domain, which holds the PCD administrator"
+	}
+	return s.ownDomainReason(id)
+}
+
+// ownDomainReason says why the provider's own token depends on the domain with
+// this ID, or returns "" when it does not. Unlike protectedDomainReason it does
+// not treat Keystone's default domain specially.
+func (s tokenScope) ownDomainReason(id string) string {
+	if id == "" {
+		return ""
+	}
+	switch id {
 	case s.UserDomainID:
 		return "the user the provider authenticates as belongs to it"
 	case s.ProjectDomainID:
