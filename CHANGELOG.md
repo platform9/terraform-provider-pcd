@@ -14,9 +14,10 @@ All notable changes to this project are documented here. The format is based on
   is refused, the error says the domain was left disabled. Destroying a domain deletes everything in it:
   Keystone removes every project, user and group in the domain and every identity provider registered to it, and
   the servers, volumes and networks of those projects are left without an owner. The provider refuses, at plan
-  time, to disable or destroy Keystone's `default` domain or the domain that the user or project it
-  authenticates as belongs to, since that would revoke its own token. The data source looks a domain up by ID or
-  exact name; `pcd_identity_project` cannot find domains, because Keystone leaves them out of the project list.
+  time, to disable or destroy Keystone's `default` domain, because it holds the PCD administrator, and the domain
+  that the user or project it authenticates as belongs to or that its token is scoped to, because the change
+  would cut off the provider's own access. The data source looks a domain up by ID or exact name;
+  `pcd_identity_project` cannot find domains, because Keystone leaves them out of the project list.
 - **`pcd_identity_inherit_role_assignment`**, an inherited role grant (Keystone's OS-INHERIT `inherited_to_projects`):
   the role applies to every current and future project in a domain, or to every project below a project, but not
   to the domain or project itself. This is the grant the PCD UI's "Domain-Level Access" makes for users and for SSO
