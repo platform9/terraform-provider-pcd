@@ -3,12 +3,18 @@
 page_title: "pcd_compute_quotaset Resource - PCD"
 subcategory: "Compute"
 description: |-
-  Manages the Nova (compute) quotas for a project. Only the quota fields you set are managed; fields you omit keep their server value. Destroying this resource stops managing the quotas but does not reset them to their defaults.
+  Manages the Nova (compute) quotas for a project, or with user_id for one user in a project (the PCD UI's per-user quotas on the Users page). Only the quota fields you set are managed; fields you omit keep their server value.
+  Destroying a project quota set stops managing the quotas but does not reset them to their defaults. Destroying a user quota set removes that user's overrides in the project, so the user falls back to the project's quotas: Nova removes all of the user's overrides there, including fields this resource does not set and overrides made in the PCD UI. Replacing a user quota set create-before-destroy without changing project_id, region or user_id (for example terraform apply -replace under that lifecycle setting) leaves the user without overrides: the old object's destroy removes all of them, including the ones the new object just set, and the next apply sets again those that differ from the project's quotas.
+  A user's quota must lie between what the user already uses and what the project has left, and a project's quota cannot drop below the sum of its users' quotas. So when one configuration raises both, make the user quota set depends_on the project one; when it lowers both, lower the user quota first, in its own apply. Nova accepts any user_id without checking that the user exists or belongs to the project, and leaves a deleted user's overrides behind. In user mode, fields you omit read back the project's values unless the user already has an override for them (set in the PCD UI, or by an earlier configuration), so only the fields without an override follow later project changes. Every field you omit shows as "(known after apply)" whenever the user quota set changes. A region whose Nova uses unified limits ignores per-user quotas: the values you set then read back as the project's, and the apply fails with an inconsistent-result error. A project deleted outside Terraform makes Nova answer 400, not 404, so refresh reports an error instead of dropping the resource; remove it from state.
 ---
 
 # pcd_compute_quotaset (Resource)
 
-Manages the Nova (compute) quotas for a project. Only the quota fields you set are managed; fields you omit keep their server value. Destroying this resource stops managing the quotas but does not reset them to their defaults.
+Manages the Nova (compute) quotas for a project, or with `user_id` for one user in a project (the PCD UI's per-user quotas on the Users page). Only the quota fields you set are managed; fields you omit keep their server value.
+
+Destroying a project quota set stops managing the quotas but does not reset them to their defaults. Destroying a user quota set removes that user's overrides in the project, so the user falls back to the project's quotas: Nova removes **all** of the user's overrides there, including fields this resource does not set and overrides made in the PCD UI. Replacing a user quota set create-before-destroy without changing `project_id`, `region` or `user_id` (for example `terraform apply -replace` under that lifecycle setting) leaves the user without overrides: the old object's destroy removes all of them, including the ones the new object just set, and the next apply sets again those that differ from the project's quotas.
+
+A user's quota must lie between what the user already uses and what the project has left, and a project's quota cannot drop below the sum of its users' quotas. So when one configuration raises both, make the user quota set `depends_on` the project one; when it lowers both, lower the user quota first, in its own apply. Nova accepts any `user_id` without checking that the user exists or belongs to the project, and leaves a deleted user's overrides behind. In user mode, fields you omit read back the project's values unless the user already has an override for them (set in the PCD UI, or by an earlier configuration), so only the fields without an override follow later project changes. Every field you omit shows as "(known after apply)" whenever the user quota set changes. A region whose Nova uses unified limits ignores per-user quotas: the values you set then read back as the project's, and the apply fails with an inconsistent-result error. A project deleted outside Terraform makes Nova answer 400, not 404, so refresh reports an error instead of dropping the resource; remove it from state.
 
 ## Example Usage
 
@@ -23,6 +29,24 @@ resource "pcd_compute_quotaset" "example" {
   ram        = 65536
   instances  = 20
   key_pairs  = 10
+}
+
+# One user's quotas within the project, as on the PCD UI's Users page. A user's
+# quotas must fit within what the project has left, so this one waits for the
+# project's quotas above. Destroying it removes all of alice's overrides in the
+# project.
+data "pcd_identity_user" "alice" {
+  name = "alice@example.com"
+}
+
+resource "pcd_compute_quotaset" "alice" {
+  project_id = data.pcd_identity_project.demo.id
+  user_id    = data.pcd_identity_user.alice.id
+  cores      = 8
+  ram        = 16384
+  instances  = 4
+
+  depends_on = [pcd_compute_quotaset.example]
 }
 ```
 
@@ -50,10 +74,11 @@ resource "pcd_compute_quotaset" "example" {
 - `security_groups` (Number) Quota for security groups (legacy nova-network).
 - `server_group_members` (Number) Quota for the number of members per server group.
 - `server_groups` (Number) Quota for the number of server groups.
+- `user_id` (String) Manage the quotas of this user within `project_id` instead of the project's own. Changing this forces a new resource. The PCD UI does not offer per-user quotas for a user with a system or domain role, or with only the `reader` role in the project; Nova itself does not check.
 
 ### Read-Only
 
-- `id` (String) The composite `<project_id>/<region>` ID.
+- `id` (String) The composite ID: `<project_id>/<region>`, or `<project_id>/<region>/<user_id>` with `user_id`.
 
 ## Import
 
@@ -64,4 +89,7 @@ explains how to look them up.
 ```shell
 # project_id: pcdctl project list. region: pcdctl region list (or the provider's region).
 terraform import pcd_compute_quotaset.example <project_id>/<region>
+
+# A user's quotas within the project: append the user ID (pcdctl user list).
+terraform import pcd_compute_quotaset.alice <project_id>/<region>/<user_id>
 ```

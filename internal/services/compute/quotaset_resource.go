@@ -11,10 +11,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/quotasets"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -22,6 +24,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/platform9/terraform-provider-pcd/internal/clients"
@@ -31,6 +34,7 @@ var (
 	_ resource.Resource                = (*quotasetResource)(nil)
 	_ resource.ResourceWithConfigure   = (*quotasetResource)(nil)
 	_ resource.ResourceWithImportState = (*quotasetResource)(nil)
+	_ resource.ResourceWithModifyPlan  = (*quotasetResource)(nil)
 )
 
 // NewQuotasetResource is the factory registered with the provider.
@@ -45,6 +49,7 @@ type quotasetResource struct {
 type quotasetModel struct {
 	ID                       types.String `tfsdk:"id"`
 	ProjectID                types.String `tfsdk:"project_id"`
+	UserID                   types.String `tfsdk:"user_id"`
 	Region                   types.String `tfsdk:"region"`
 	FixedIPs                 types.Int64  `tfsdk:"fixed_ips"`
 	FloatingIPs              types.Int64  `tfsdk:"floating_ips"`
@@ -80,15 +85,44 @@ func quotaIntAttr(desc string) schema.Int64Attribute {
 
 func (r *quotasetResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages the Nova (compute) quotas for a project. Only the quota fields you set are " +
-			"managed; fields you omit keep their server value. Destroying this resource stops managing the quotas " +
-			"but does not reset them to their defaults.",
+		MarkdownDescription: "Manages the Nova (compute) quotas for a project, or with `user_id` for one user in " +
+			"a project (the PCD UI's per-user quotas on the Users page). Only the quota fields you set are " +
+			"managed; fields you omit keep their server value.\n\n" +
+			"Destroying a project quota set stops managing the quotas but does not reset them to their " +
+			"defaults. Destroying a user quota set removes that user's overrides in the project, so the user " +
+			"falls back to the project's quotas: Nova removes **all** of the user's overrides there, including " +
+			"fields this resource does not set and overrides made in the PCD UI. Replacing a user quota set " +
+			"create-before-destroy without changing `project_id`, `region` or `user_id` (for example " +
+			"`terraform apply -replace` under that lifecycle setting) leaves the user without overrides: the " +
+			"old object's destroy removes all of them, including the ones the new object just set, and the next " +
+			"apply sets again those that differ from the project's quotas.\n\n" +
+			"A user's quota must lie between what the user already uses and what the project has left, and a " +
+			"project's quota cannot drop below the sum of its users' quotas. So when one configuration raises " +
+			"both, make the user quota set `depends_on` the project one; when it lowers both, lower the user " +
+			"quota first, in its own apply. Nova accepts any `user_id` without checking that the user exists " +
+			"or belongs to the project, and leaves a deleted user's overrides behind. In user mode, fields you " +
+			"omit read back the project's values unless the user already has an override for them (set in the " +
+			"PCD UI, or by an earlier configuration), so only the fields without an override follow later " +
+			"project changes. Every field you omit shows as \"(known after apply)\" whenever the user quota set changes. " +
+			"A region whose Nova " +
+			"uses unified limits ignores per-user quotas: the values you set then read back as the project's, " +
+			"and the apply fails with an inconsistent-result error. A project deleted outside Terraform makes " +
+			"Nova answer 400, not 404, so refresh reports an error instead of dropping the resource; remove it " +
+			"from state.",
 		Attributes: map[string]schema.Attribute{
-			"id": schema.StringAttribute{Computed: true, MarkdownDescription: "The composite `<project_id>/<region>` ID.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"id": schema.StringAttribute{Computed: true, MarkdownDescription: "The composite ID: `<project_id>/<region>`, or `<project_id>/<region>/<user_id>` with `user_id`.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
 			"project_id": schema.StringAttribute{
 				Required:            true,
 				MarkdownDescription: "The project (tenant) the quotas apply to. Changing this forces a new resource.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+			},
+			"user_id": schema.StringAttribute{
+				Optional: true,
+				MarkdownDescription: "Manage the quotas of this user within `project_id` instead of the project's own. " +
+					"Changing this forces a new resource. The PCD UI does not offer per-user quotas for a user with a " +
+					"system or domain role, or with only the `reader` role in the project; Nova itself does not check.",
+				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				Validators:    []validator.String{stringvalidator.LengthAtLeast(1)},
 			},
 			"region": schema.StringAttribute{
 				Optional:            true,
@@ -157,6 +191,7 @@ func (r *quotasetResource) Create(ctx context.Context, req resource.CreateReques
 		region = r.config.Region
 	}
 	projectID := plan.ProjectID.ValueString()
+	userID := plan.UserID.ValueString()
 
 	opts := quotasets.UpdateOpts{
 		FixedIPs:                 quotaPtrIfSet(plan.FixedIPs),
@@ -175,7 +210,7 @@ func (r *quotasetResource) Create(ctx context.Context, req resource.CreateReques
 		ServerGroupMembers:       quotaPtrIfSet(plan.ServerGroupMembers),
 	}
 
-	if _, err := quotasets.Update(ctx, client, projectID, opts).Extract(); err != nil {
+	if err := updateQuotaSet(ctx, client, projectID, userID, opts); err != nil {
 		resp.Diagnostics.AddError("compute: setting quotas", err.Error())
 		return
 	}
@@ -204,7 +239,7 @@ func (r *quotasetResource) Read(ctx context.Context, req resource.ReadRequest, r
 	if state.Region.IsNull() || state.Region.IsUnknown() {
 		region = r.config.Region
 	}
-	qs, err := quotasets.Get(ctx, client, state.ProjectID.ValueString()).Extract()
+	qs, err := getQuotaSet(ctx, client, state.ProjectID.ValueString(), state.UserID.ValueString())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			resp.State.RemoveResource(ctx)
@@ -244,6 +279,7 @@ func (r *quotasetResource) Update(ctx context.Context, req resource.UpdateReques
 		region = r.config.Region
 	}
 	projectID := state.ProjectID.ValueString()
+	userID := state.UserID.ValueString()
 
 	opts := quotasets.UpdateOpts{
 		FixedIPs:                 quotaPtrIfChanged(plan.FixedIPs, state.FixedIPs),
@@ -262,7 +298,7 @@ func (r *quotasetResource) Update(ctx context.Context, req resource.UpdateReques
 		ServerGroupMembers:       quotaPtrIfChanged(plan.ServerGroupMembers, state.ServerGroupMembers),
 	}
 
-	if _, err := quotasets.Update(ctx, client, projectID, opts).Extract(); err != nil {
+	if err := updateQuotaSet(ctx, client, projectID, userID, opts); err != nil {
 		resp.Diagnostics.AddError("compute: updating quotas", err.Error())
 		return
 	}
@@ -274,29 +310,87 @@ func (r *quotasetResource) Update(ctx context.Context, req resource.UpdateReques
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-// Delete intentionally makes no API call. Following the upstream provider, the
-// resource is removed from state without resetting the project's quotas to
-// their default values.
-func (r *quotasetResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
+// Delete of a project quota set intentionally makes no API call. Following the
+// upstream provider, the resource is removed from state without resetting the
+// project's quotas to their default values. A user quota set is different: its
+// overrides exist only because this resource created them, and left behind
+// they keep capping the user and stop the project's quota from going below
+// their sum, so Delete removes them (DELETE ?user_id=, which removes every
+// override the user has in the project).
+func (r *quotasetResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state quotasetModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() || state.UserID.ValueString() == "" {
+		return
+	}
+
+	client, err := r.config.ForRegion(state.Region.ValueString()).ComputeV2Client()
+	if err != nil {
+		resp.Diagnostics.AddError("compute: building v2 client", err.Error())
+		return
+	}
+	if err := deleteUserQuotaSet(ctx, client, state.ProjectID.ValueString(), state.UserID.ValueString()); err != nil {
+		resp.Diagnostics.AddError("compute: removing the user's quotas", err.Error())
+	}
+}
+
+// ModifyPlan plans the quota fields a user quota set does not configure as
+// unknown whenever the resource changes. Nova reports the project's value for
+// every field the user has no override for, so such a field can change with
+// the project's quota set in the same apply; kept at its prior value by
+// UseStateForUnknown, it would make the apply fail with an inconsistent
+// result. Update sends only known values, so nothing extra is written.
+func (r *quotasetResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() || req.Plan.Raw.Equal(req.State.Raw) {
+		return
+	}
+	var userID types.String
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("user_id"), &userID)...)
+	if resp.Diagnostics.HasError() || userID.ValueString() == "" {
+		return
+	}
+	for name, attr := range req.Plan.Schema.GetAttributes() {
+		if _, ok := attr.(schema.Int64Attribute); !ok {
+			continue // every Int64 attribute is a quota field
+		}
+		var configured types.Int64
+		resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root(name), &configured)...)
+		if configured.IsNull() {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root(name), types.Int64Unknown())...)
+		}
+	}
 }
 
 func (r *quotasetResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	projectID, region := splitQuotaImportID(req.ID)
+	projectID, region, userID := splitQuotaImportID(req.ID)
 	// An empty project ID names no project: the refresh after the import would
 	// read .../os-quota-sets/ instead.
 	if projectID == "" {
-		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("expected <project_id>/<region>, got %q", req.ID))
+		resp.Diagnostics.AddError("Invalid import ID",
+			fmt.Sprintf("expected <project_id>/<region> or <project_id>/<region>/<user_id>, got %q", req.ID))
+		return
+	}
+	// A third part that is empty or holds another slash names no user: the
+	// refresh would read the project's quotas, or a user Nova does not check.
+	if strings.Count(req.ID, "/") >= 2 && (userID == "" || strings.Contains(userID, "/")) {
+		resp.Diagnostics.AddError("Invalid import ID",
+			fmt.Sprintf("expected <project_id>/<region> or <project_id>/<region>/<user_id>, got %q", req.ID))
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project_id"), projectID)...)
 	if region != "" {
 		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("region"), region)...)
 	}
+	if userID != "" {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("user_id"), userID)...)
+	}
 }
 
+// readInto reads the project's quotas into m, or, when m has a user_id, that
+// user's quotas within the project.
 func (r *quotasetResource) readInto(ctx context.Context, client *gophercloud.ServiceClient, projectID, region string, m *quotasetModel) diag.Diagnostics {
 	var diags diag.Diagnostics
-	qs, err := quotasets.Get(ctx, client, projectID).Extract()
+	qs, err := getQuotaSet(ctx, client, projectID, m.UserID.ValueString())
 	if err != nil {
 		diags.AddError("compute: reading quotas", err.Error())
 		return diags
@@ -311,8 +405,62 @@ func (r *quotasetResource) readInto(ctx context.Context, client *gophercloud.Ser
 	return diags
 }
 
+// quotaSetURL is /os-quota-sets/<project_id>, plus ?user_id=<user_id> for a
+// user's quotas. gophercloud's quotasets package has no user variant, so the
+// requests below reuse its types and build the URL here; for a project the URL
+// is the one gophercloud builds.
+func quotaSetURL(client *gophercloud.ServiceClient, projectID, userID string) string {
+	u := client.ServiceURL("os-quota-sets", projectID)
+	if userID != "" {
+		u += "?user_id=" + url.QueryEscape(userID)
+	}
+	return u
+}
+
+// getQuotaSet reads a project's quotas, or a user's within it. Nova answers a
+// user's GET with the project's value for every field the user has no
+// override for.
+func getQuotaSet(ctx context.Context, client *gophercloud.ServiceClient, projectID, userID string) (*quotasets.QuotaSet, error) {
+	var r quotasets.GetResult
+	resp, err := client.Get(ctx, quotaSetURL(client, projectID, userID), &r.Body, nil)
+	_, r.Header, r.Err = gophercloud.ParseResponse(resp, err)
+	return r.Extract()
+}
+
+// updateQuotaSet sends the fields opts sets to a project's or a user's quotas.
+func updateQuotaSet(ctx context.Context, client *gophercloud.ServiceClient, projectID, userID string, opts quotasets.UpdateOpts) error {
+	body, err := opts.ToComputeQuotaUpdateMap()
+	if err != nil {
+		return err
+	}
+	var r quotasets.UpdateResult
+	resp, err := client.Put(ctx, quotaSetURL(client, projectID, userID), body, &r.Body, &gophercloud.RequestOpts{OkCodes: []int{200}})
+	_, r.Header, r.Err = gophercloud.ParseResponse(resp, err)
+	return r.Err
+}
+
+// deleteUserQuotaSet removes every override the user has in the project. A
+// 404 means there is nothing left to remove.
+func deleteUserQuotaSet(ctx context.Context, client *gophercloud.ServiceClient, projectID, userID string) error {
+	resp, err := client.Delete(ctx, quotaSetURL(client, projectID, userID), nil)
+	_, _, err = gophercloud.ParseResponse(resp, err)
+	if err != nil && !gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+		return err
+	}
+	return nil
+}
+
+// quotaSetID is <project_id>/<region>, with /<user_id> appended for a user's
+// quotas, so the IDs of existing project quota sets do not change.
+func quotaSetID(projectID, region, userID string) string {
+	if userID == "" {
+		return fmt.Sprintf("%s/%s", projectID, region)
+	}
+	return fmt.Sprintf("%s/%s/%s", projectID, region, userID)
+}
+
 func setQuotaState(m *quotasetModel, region string, qs *quotasets.QuotaSet) {
-	m.ID = types.StringValue(fmt.Sprintf("%s/%s", m.ProjectID.ValueString(), region))
+	m.ID = types.StringValue(quotaSetID(m.ProjectID.ValueString(), region, m.UserID.ValueString()))
 	m.Region = types.StringValue(region)
 	m.FixedIPs = types.Int64Value(int64(qs.FixedIPs))
 	m.FloatingIPs = types.Int64Value(int64(qs.FloatingIPs))
@@ -330,12 +478,17 @@ func setQuotaState(m *quotasetModel, region string, qs *quotasets.QuotaSet) {
 	m.ServerGroupMembers = types.Int64Value(int64(qs.ServerGroupMembers))
 }
 
-// splitQuotaImportID parses "<project_id>/<region>" import IDs, tolerating the
-// legacy bare "<project_id>" form (region returned empty).
-func splitQuotaImportID(id string) (projectID, region string) {
-	parts := strings.SplitN(id, "/", 2)
-	if len(parts) == 2 && parts[1] != "" {
-		return parts[0], parts[1]
+// splitQuotaImportID parses "<project_id>/<region>/<user_id>" and
+// "<project_id>/<region>" import IDs, tolerating the legacy bare
+// "<project_id>" form; the parts not given are returned empty.
+func splitQuotaImportID(id string) (projectID, region, userID string) {
+	parts := strings.SplitN(id, "/", 3)
+	projectID = parts[0]
+	if len(parts) > 1 {
+		region = parts[1]
 	}
-	return parts[0], ""
+	if len(parts) > 2 {
+		userID = parts[2]
+	}
+	return projectID, region, userID
 }
