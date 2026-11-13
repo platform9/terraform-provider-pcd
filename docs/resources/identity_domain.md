@@ -5,7 +5,7 @@ subcategory: "Identity"
 description: |-
   Manages a domain in PCD's Keystone identity service: the container the PCD UI lists under Domains, which holds its own projects, users and groups.
   Destroying a domain deletes everything in it. Keystone deletes every project, user and group in the domain and every identity provider registered to it; servers, volumes and networks in those projects are left behind without an owner. Keystone refuses to delete an enabled domain, so destroy disables the domain first and then deletes it.
-  The provider refuses to disable or destroy Keystone's default domain, or the domain that the user or project it authenticates as belongs to, because that would revoke its own token. To stop managing such a domain, remove it from state instead (a removed block with destroy = false, or terraform state rm). Do not manage PCD's own service domains, such as heat, where a deployment has them: PCD's services use them, and the PCD UI does not let you edit them.
+  The provider refuses to disable or destroy Keystone's default domain, which holds the PCD administrator. It also refuses the domain that the user or project it authenticates as belongs to, or that its token is scoped to, because the change would cut off the provider's own access. To stop managing such a domain, remove it from state instead (a removed block with destroy = false, or terraform state rm). Do not manage PCD's own service domains, such as heat, where a deployment has them: PCD's services use them, and the PCD UI does not let you edit them.
   To grant a role on every project in a domain, the way the PCD UI's domain user assignment does, use pcd_identity_inherit_role_assignment.
 ---
 
@@ -15,7 +15,7 @@ Manages a domain in PCD's Keystone identity service: the container the PCD UI li
 
 **Destroying a domain deletes everything in it.** Keystone deletes every project, user and group in the domain and every identity provider registered to it; servers, volumes and networks in those projects are left behind without an owner. Keystone refuses to delete an enabled domain, so destroy disables the domain first and then deletes it.
 
-The provider refuses to disable or destroy Keystone's `default` domain, or the domain that the user or project it authenticates as belongs to, because that would revoke its own token. To stop managing such a domain, remove it from state instead (a `removed` block with `destroy = false`, or `terraform state rm`). Do not manage PCD's own service domains, such as `heat`, where a deployment has them: PCD's services use them, and the PCD UI does not let you edit them.
+The provider refuses to disable or destroy Keystone's `default` domain, which holds the PCD administrator. It also refuses the domain that the user or project it authenticates as belongs to, or that its token is scoped to, because the change would cut off the provider's own access. To stop managing such a domain, remove it from state instead (a `removed` block with `destroy = false`, or `terraform state rm`). Do not manage PCD's own service domains, such as `heat`, where a deployment has them: PCD's services use them, and the PCD UI does not let you edit them.
 
 To grant a role on every project in a domain, the way the PCD UI's domain user assignment does, use `pcd_identity_inherit_role_assignment`.
 
@@ -41,7 +41,7 @@ resource "pcd_identity_project" "example" {
 
 ### Required
 
-- `name` (String) The name of the domain, unique in Keystone. Renaming updates the domain in place. The PCD UI derives the name of a domain's SAML identity provider from the domain name, so renaming a domain that has single sign-on configured breaks its sign-on until the identity provider is renamed too.
+- `name` (String) The name of the domain, unique in Keystone. Renaming updates the domain in place. The PCD UI derives the name of a domain's SAML identity provider from the domain name, so renaming a domain that has single sign-on configured breaks its sign-on until the identity provider is renamed too. Renaming a domain also breaks every authentication that names it, such as `user_domain_name` or `project_domain_name` in clouds.yaml or in this provider's configuration, until that setting uses the new name.
 
 ### Optional
 

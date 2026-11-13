@@ -65,8 +65,9 @@ func (r *domainResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"in the domain and every identity provider registered to it; servers, volumes and networks in " +
 			"those projects are left behind without an owner. Keystone refuses to delete an enabled domain, so " +
 			"destroy disables the domain first and then deletes it.\n\n" +
-			"The provider refuses to disable or destroy Keystone's `default` domain, or the domain that the " +
-			"user or project it authenticates as belongs to, because that would revoke its own token. To stop " +
+			"The provider refuses to disable or destroy Keystone's `default` domain, which holds the PCD " +
+			"administrator. It also refuses the domain that the user or project it authenticates as belongs to, or " +
+			"that its token is scoped to, because the change would cut off the provider's own access. To stop " +
 			"managing such a domain, remove it from state instead (a `removed` block with `destroy = false`, or " +
 			"`terraform state rm`). Do not manage PCD's own service domains, such as `heat`, where a deployment " +
 			"has them: PCD's services use them, and the PCD UI does not let you edit them.\n\n" +
@@ -79,7 +80,9 @@ func (r *domainResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				MarkdownDescription: "The name of the domain, unique in Keystone. Renaming updates the domain in place. " +
 					"The PCD UI derives the name of a domain's SAML identity provider from the domain name, so " +
 					"renaming a domain that has single sign-on configured breaks its sign-on until the identity " +
-					"provider is renamed too.",
+					"provider is renamed too. Renaming a domain also breaks every authentication that names it, such as " +
+					"`user_domain_name` or `project_domain_name` in clouds.yaml or in this provider's configuration, " +
+					"until that setting uses the new name.",
 				Validators: []validator.String{stringvalidator.LengthBetween(1, 64)},
 			},
 			"description": schema.StringAttribute{
@@ -111,10 +114,10 @@ func (r *domainResource) Configure(_ context.Context, req resource.ConfigureRequ
 	r.config = configureClient(req.ProviderData, &resp.Diagnostics)
 }
 
-// ModifyPlan refuses, at plan time, to destroy or disable a domain the
+// ModifyPlan refuses, at plan time, to destroy, replace or disable a domain the
 // provider itself depends on. Update and Delete check again at apply time, for
 // plans made while the provider was not yet configured and for the destroy
-// half of a replacement.
+// half of a replacement whose region was not known at plan time.
 func (r *domainResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.State.Raw.IsNull() || r.config == nil || r.config.Provider == nil {
 		return
@@ -124,7 +127,7 @@ func (r *domainResource) ModifyPlan(ctx context.Context, req resource.ModifyPlan
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	action := ""
+	action, hint := "", ""
 	if req.Plan.Raw.IsNull() {
 		action = "destroy"
 	} else {
@@ -133,14 +136,23 @@ func (r *domainResource) ModifyPlan(ctx context.Context, req resource.ModifyPlan
 		if resp.Diagnostics.HasError() {
 			return
 		}
-		if disablesDomain(&plan, &state) {
+		switch {
+		case !plan.Region.IsUnknown() && !plan.Region.Equal(state.Region):
+			// A changed region replaces the domain, and the destroy half of a
+			// replacement never reaches ModifyPlan with a null plan, so it is
+			// refused here as a destroy. resp.RequiresReplace is still empty at
+			// this point, so the values are compared directly.
+			action = "destroy"
+			hint = fmt.Sprintf(" Changing `region` replaces the domain; set `region` back to %q to keep managing it.",
+				state.Region.ValueString())
+		case disablesDomain(&plan, &state):
 			action = "disable"
 		}
 	}
 	if action == "" {
 		return
 	}
-	resp.Diagnostics.Append(r.refuseProtectedDomain(ctx, state.Region.ValueString(), state.ID.ValueString(), action)...)
+	resp.Diagnostics.Append(r.refuseProtectedDomain(ctx, state.Region.ValueString(), state.ID.ValueString(), action, hint)...)
 }
 
 func (r *domainResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -229,7 +241,7 @@ func (r *domainResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 	if disablesDomain(&plan, &state) {
-		resp.Diagnostics.Append(r.refuseProtectedDomain(ctx, state.Region.ValueString(), state.ID.ValueString(), "disable")...)
+		resp.Diagnostics.Append(r.refuseProtectedDomain(ctx, state.Region.ValueString(), state.ID.ValueString(), "disable", "")...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
@@ -263,7 +275,7 @@ func (r *domainResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		return
 	}
 
-	resp.Diagnostics.Append(r.refuseProtectedDomain(ctx, state.Region.ValueString(), state.ID.ValueString(), "destroy")...)
+	resp.Diagnostics.Append(r.refuseProtectedDomain(ctx, state.Region.ValueString(), state.ID.ValueString(), "destroy", "")...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -300,7 +312,8 @@ func (r *domainResource) setState(m *domainModel, d *domains.Domain) {
 
 // refuseProtectedDomain returns an error diagnostic when id names a domain the
 // provider must not disable or destroy (see tokenScope.protectedDomainReason).
-func (r *domainResource) refuseProtectedDomain(ctx context.Context, region, id, action string) diag.Diagnostics {
+// hint, when not empty, is appended to the detail.
+func (r *domainResource) refuseProtectedDomain(ctx context.Context, region, id, action, hint string) diag.Diagnostics {
 	var diags diag.Diagnostics
 	client, err := r.config.ForRegion(region).IdentityV3Client()
 	if err != nil {
@@ -315,13 +328,29 @@ func (r *domainResource) refuseProtectedDomain(ctx context.Context, region, id, 
 	if reason == "" {
 		return diags
 	}
-	diags.AddError(
-		fmt.Sprintf("Refusing to %s a protected domain", action),
-		fmt.Sprintf("The provider will not %s domain %s: %s, so the change would cut off the provider's own "+
-			"access. To stop managing the domain without changing it, remove it from state (a `removed` block "+
-			"with `destroy = false`, or `terraform state rm`). To keep managing it, leave `enabled` unset or `true`.",
-			action, id, reason),
-	)
+	// Keystone's default domain is protected for the PCD administrator it
+	// holds, whether or not the provider authenticates through it. When the
+	// provider's own user, project or token scope is in it too, that reason
+	// comes first. The token is read only to word the refusal: if the read
+	// fails, the refusal stands with the administrator's reason.
+	consequence := "cut off the provider's own access"
+	if id == keystoneDefaultDomainID {
+		consequence = "lock out the PCD administrator"
+		if scope, err := currentTokenScope(ctx, client); err == nil {
+			if own := scope.ownDomainReason(id); own != "" {
+				reason, consequence = own, "cut off the provider's own access"
+			}
+		}
+	}
+	detail := fmt.Sprintf("The provider will not %s domain %s: %s, so the change would %s", action, id, reason, consequence)
+	if action == "disable" {
+		detail += ". To stop managing the domain without changing it, remove it from state (a `removed` block " +
+			"with `destroy = false`, or `terraform state rm`). To keep managing it, leave `enabled` unset or `true`."
+	} else {
+		detail += ", and it never destroys a protected domain. If you must stop managing the domain, remove it " +
+			"from state without changing it (a `removed` block with `destroy = false`, or `terraform state rm`)."
+	}
+	diags.AddError(fmt.Sprintf("Refusing to %s a protected domain", action), detail+hint)
 	return diags
 }
 
@@ -382,8 +411,9 @@ func deleteDomain(ctx context.Context, client *gophercloud.ServiceClient, id str
 		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 			return nil
 		}
-		return fmt.Errorf("domain %s was disabled but could not be deleted, so it stays disabled "+
-			"(the next apply re-enables it if the configuration keeps enabled = true): %w", id, err)
+		return fmt.Errorf("domain %s was disabled but could not be deleted, so it stays disabled until a "+
+			"retried destroy deletes it; to re-enable it instead, apply with the resource in the configuration, "+
+			"its original region, and enabled = true (or unset): %w", id, err)
 	}
 	return nil
 }

@@ -14,9 +14,10 @@ All notable changes to this project are documented here. The format is based on
   is refused, the error says the domain was left disabled. Destroying a domain deletes everything in it:
   Keystone removes every project, user and group in the domain and every identity provider registered to it, and
   the servers, volumes and networks of those projects are left without an owner. The provider refuses, at plan
-  time, to disable or destroy Keystone's `default` domain or the domain that the user or project it
-  authenticates as belongs to, since that would revoke its own token. The data source looks a domain up by ID or
-  exact name; `pcd_identity_project` cannot find domains, because Keystone leaves them out of the project list.
+  time, to disable or destroy Keystone's `default` domain, because it holds the PCD administrator, and the domain
+  that the user or project it authenticates as belongs to or that its token is scoped to, because the change
+  would cut off the provider's own access. The data source looks a domain up by ID or exact name;
+  `pcd_identity_project` cannot find domains, because Keystone leaves them out of the project list.
 - **`email` and `display_name` on `pcd_identity_user`**, and as computed attributes of the matching data source,
   stored as the Keystone extra attributes `email` and `displayname` that the PCD UI reads: the Users list shows the
   display name, and VM owner search shows the email, falling back to the user ID when there is none, as for every
