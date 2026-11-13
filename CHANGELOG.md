@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`pcd_compute_lease_policy`**, a project's VM lease policy in mors, PCD's VM lease service, as the PCD UI's
+  Manage Lease Policy sets it: how long a VM in the project may live, in minutes from its creation, and whether
+  mors then powers it off (`power off`, the default) or deletes it (`delete`). mors checks leases about once a
+  minute, so creating a policy, or shortening one, acts within a minute on the project's VMs that are already
+  older than the new duration, and a VM powered off because its lease ran out is powered off again on every
+  pass. Destroying the policy also removes every per-VM lease in the project. mors itself accepts any duration
+  and any action, so the provider checks both at plan time. A policy applies in the provider's region. Import
+  with the project ID.
+
 ## [0.1.21] - 2026-11-13
 
 ### Added

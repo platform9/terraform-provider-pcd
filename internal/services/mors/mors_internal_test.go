@@ -68,6 +68,7 @@ func (f *fakeMors) serve(w http.ResponseWriter, r *http.Request) {
 	queue, ok := f.routes[key]
 	if !ok || len(queue) == 0 {
 		f.t.Errorf("unexpected request %s", key)
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotImplemented)
 		return
 	}
