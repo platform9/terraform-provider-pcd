@@ -23,6 +23,13 @@ All notable changes to this project are documented here. The format is based on
   to the domain or project itself. This is the grant the PCD UI's "Domain-Level Access" makes for users and for SSO
   groups. It takes the same attributes and five-part import ID as `pcd_identity_role_assignment`, and is the port
   of terraform-provider-openstack's `openstack_identity_inherit_role_assignment_v3`.
+- **`email` and `display_name` on `pcd_identity_user`**, and as computed attributes of the matching data source,
+  stored as the Keystone extra attributes `email` and `displayname` that the PCD UI reads: the Users list shows the
+  display name, and VM owner search shows the email, falling back to the user ID when there is none, as for every
+  user Terraform has created so far. The PCD UI's own "Email" field is the user's `name`; the UI expects the two to
+  match and copies `name` into `email` whenever someone edits the user there, so set `email` to the same address
+  as `name` to avoid drift. Leaving either attribute unset leaves the server's value alone, so existing
+  configurations plan no change; set `""` to clear one.
 
 ### Changed
 
