@@ -3,21 +3,25 @@
 page_title: "pcd_identity_user Resource - PCD"
 subcategory: "Identity"
 description: |-
-  Manages a user in PCD's Keystone identity service.
+  Manages a user in PCD's Keystone identity service. Saving the user in the PCD UI's edit form also sets enabled = true and rewrites email to the user name, so a user that Terraform disabled, or whose email differs from name, shows drift after an edit there.
 ---
 
 # pcd_identity_user (Resource)
 
-Manages a user in PCD's Keystone identity service.
+Manages a user in PCD's Keystone identity service. Saving the user in the PCD UI's edit form also sets `enabled = true` and rewrites `email` to the user name, so a user that Terraform disabled, or whose `email` differs from `name`, shows drift after an edit there.
 
 ## Example Usage
 
 ```terraform
+# The PCD UI uses a user's email address as the user name and expects email to
+# match it; display_name fills the Users list's Display Name column.
 resource "pcd_identity_user" "example" {
-  name        = "tf-example-user"
-  description = "Example user managed by Terraform"
-  enabled     = true
-  password    = "ChangeMe-123!"
+  name         = "alice@example.com"
+  email        = "alice@example.com"
+  display_name = "Alice Example"
+  description  = "Example user managed by Terraform"
+  enabled      = true
+  password     = "ChangeMe-123!"
 }
 ```
 
@@ -32,7 +36,9 @@ resource "pcd_identity_user" "example" {
 
 - `default_project_id` (String) The default project the user is scoped to.
 - `description` (String) A description of the user.
+- `display_name` (String) The user's display name, stored in Keystone as the extra attribute `displayname`; the PCD UI's Users list shows it in the Display Name column. Unset, Terraform leaves the server's value alone; set `""` to clear it.
 - `domain_id` (String) The domain the user belongs to. Changing this forces a new resource.
+- `email` (String) The user's email address, stored in Keystone as the extra attribute `email`. The PCD UI shows it as the user's owner name in VM search and the app catalog. The PCD UI's own "Email" field is the user's `name`: the UI expects `name` to be the email address and copies it into this attribute whenever someone edits the user there, so a value that differs from `name` shows as drift after a UI edit. The PCD UI's Users list hides a user whose email is the name of one of PCD's service users, such as `mors` or `octavia`. Unset, Terraform leaves the server's value alone; set `""` to clear it.
 - `enabled` (Boolean) Whether the user is enabled. Defaults to true.
 - `password` (String, Sensitive) The user's password. Write-only: it is never read back from the API.
 - `region` (String) The region in which to manage the user. Defaults to the provider's region. Changing this forces a new resource.

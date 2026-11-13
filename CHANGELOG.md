@@ -18,6 +18,18 @@ All notable changes to this project are documented here. The format is based on
   that the user or project it authenticates as belongs to or that its token is scoped to, because the change
   would cut off the provider's own access. The data source looks a domain up by ID or exact name;
   `pcd_identity_project` cannot find domains, because Keystone leaves them out of the project list.
+- **`pcd_identity_inherit_role_assignment`**, an inherited role grant (Keystone's OS-INHERIT `inherited_to_projects`):
+  the role applies to every current and future project in a domain, or to every project below a project, but not
+  to the domain or project itself. This is the grant the PCD UI's "Domain-Level Access" makes for users and for SSO
+  groups. It takes the same attributes and five-part import ID as `pcd_identity_role_assignment`, and is the port
+  of terraform-provider-openstack's `openstack_identity_inherit_role_assignment_v3`.
+- **`email` and `display_name` on `pcd_identity_user`**, and as computed attributes of the matching data source,
+  stored as the Keystone extra attributes `email` and `displayname` that the PCD UI reads: the Users list shows the
+  display name, and VM owner search shows the email, falling back to the user ID when there is none, as for every
+  user Terraform has created so far. The PCD UI's own "Email" field is the user's `name`; the UI expects the two to
+  match and copies `name` into `email` whenever someone edits the user there, so set `email` to the same address
+  as `name` to avoid drift. Leaving either attribute unset leaves the server's value alone, so existing
+  configurations plan no change; set `""` to clear one.
 - **`pcd_identity_user_mfa`**, multi-factor authentication for a user, as the PCD UI's self-service "Multifactor
   Authentication" setting does it, but for any user an administrator manages: it enrolls a TOTP secret as a Keystone
   credential and sets the user's `multi_factor_auth_rules` so every login needs the password and a passcode. The
@@ -32,6 +44,30 @@ All notable changes to this project are documented here. The format is based on
   a user set up in the PCD UI, import it instead of creating it. If the TOTP credential is deleted outside
   Terraform, the next apply enrolls a new secret unless `totp_secret` is set, and the user must add it to their
   authenticator app.
+
+### Changed
+
+- `pcd_identity_role_assignment` now looks only for a direct grant when it refreshes or imports, as
+  terraform-provider-openstack does. It used to search all role assignments, which also matched an inherited grant
+  on the same domain or project: importing a domain role made in the PCD UI appeared to work, but the resource then
+  managed a grant it could not remove, and destroy reported success while the grant stayed. **Upgrade note:** a
+  `pcd_identity_role_assignment` imported from such a UI grant drops out of state at the next refresh, with a
+  "Role assignment not found" warning, and the next plan proposes to create a direct grant next to it. Before
+  applying, change that block's type to `pcd_identity_inherit_role_assignment` and import it with the same ID.
+
+### Fixed
+
+- `pcd_identity_project`: destroying a project with `is_domain = true` while it is enabled now succeeds. Keystone
+  deletes such a project through its domain-delete path, which refuses an enabled domain with
+  `403 Cannot delete a domain that is enabled, please disable it first`, so destroy now disables the project first,
+  as terraform-provider-openstack does; before, the only way out was to apply `enabled = false` and then destroy.
+  If the delete itself is refused after the disable, the error says the domain was left disabled. The destroy
+  deletes everything in the domain — its projects, users, groups and identity providers — so, like
+  `pcd_identity_domain`, the provider refuses to destroy or disable Keystone's `default` domain or the domain it
+  authenticates into through this resource. `pcd_identity_domain` is now the preferred way to manage a domain.
+  **Upgrade note:** before this release, destroying or replacing an enabled `is_domain` project failed and left the
+  domain intact. It now deletes the domain and everything in it. Review any plan that destroys or replaces a
+  `pcd_identity_project` with `is_domain = true` before applying it.
 
 ## [0.1.20] - 2026-10-14
 

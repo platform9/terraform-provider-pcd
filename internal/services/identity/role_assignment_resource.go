@@ -10,6 +10,7 @@ package identity
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -58,7 +59,11 @@ func (r *roleAssignmentResource) Schema(_ context.Context, _ resource.SchemaRequ
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Assigns a role to a user or group on a project or domain. Assignments are " +
 			"immutable: any change forces a new resource. Exactly one of `user_id`/`group_id` and exactly " +
-			"one of `project_id`/`domain_id` must be set.",
+			"one of `project_id`/`domain_id` must be set.\n\n" +
+			"With `domain_id` this is a *direct* domain grant: the role applies to tokens scoped to the domain, " +
+			"not to the projects in it. The PCD UI's \"Domain-Level Access\" is a different, inherited grant; " +
+			"manage it with `pcd_identity_inherit_role_assignment`. The PCD UI lists a direct domain grant " +
+			"under Domain-Level Access too, but cannot revoke it.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -240,22 +245,37 @@ func (r *roleAssignmentResource) ImportState(ctx context.Context, req resource.I
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
+// roleAssignmentExists reports whether the direct grant exists. It lists the
+// roles granted on the project or domain itself (GET /v3/{projects|domains}/
+// {id}/{users|groups}/{id}/roles), which Keystone answers with direct grants
+// only, as terraform-provider-openstack does. /v3/role_assignments would also
+// return an inherited grant on the same domain or project, so this resource
+// could import, and then fail to remove, a grant
+// pcd_identity_inherit_role_assignment owns.
+// A 404 means the project, domain, user or group is gone, and the grant with it.
 func roleAssignmentExists(ctx context.Context, client *gophercloud.ServiceClient, domainID, projectID, groupID, userID, roleID string) (bool, error) {
-	pages, err := roles.ListAssignments(client, roles.ListAssignmentsOpts{
-		RoleID:         roleID,
-		ScopeDomainID:  domainID,
-		ScopeProjectID: projectID,
-		UserID:         userID,
-		GroupID:        groupID,
+	pages, err := roles.ListAssignmentsOnResource(client, roles.ListAssignmentsOnResourceOpts{
+		UserID:    userID,
+		GroupID:   groupID,
+		ProjectID: projectID,
+		DomainID:  domainID,
 	}).AllPages(ctx)
 	if err != nil {
+		if gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
+			return false, nil
+		}
 		return false, err
 	}
-	all, err := roles.ExtractRoleAssignments(pages)
+	all, err := roles.ExtractRoles(pages)
 	if err != nil {
 		return false, err
 	}
-	return len(all) > 0, nil
+	for _, role := range all {
+		if role.ID == roleID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func buildRoleAssignmentID(domainID, projectID, groupID, userID, roleID string) string {
