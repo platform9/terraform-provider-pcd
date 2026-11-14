@@ -12,9 +12,9 @@ cluster blueprints and host configuration/roles via the Platform9 `resmgr` API**
 ## PCD-native resources
 
 These are the value-add over [`terraform-provider-openstack`](https://github.com/terraform-provider-openstack/terraform-provider-openstack):
-they manage Platform9's own control plane (the `resmgr` service), so you can declare a
-PCD region's cluster topology and host onboarding as code — something no OpenStack provider
-can do.
+they manage Platform9's own control plane (the `resmgr` service) and mors, PCD's VM lease
+service, so you can declare a PCD region's cluster topology, host onboarding and VM leases as
+code — something no OpenStack provider can do.
 
 | Resource | What it manages |
 |---|---|
@@ -25,6 +25,8 @@ can do.
 | `pcd_host` (data source) | Resolves a host's resource-manager UUID from the hostname it reports, so `host_id` never has to be copied from the UI. |
 | `pcd_host_cluster_role` | Onboards a host by assigning it a **cluster role** (`hypervisor`, `image-library`, `persistent-storage`, `dns`); PCD computes the granular role settings from the blueprint and host configuration. |
 | `pcd_host_role` | Assigns one granular **PCD role** (e.g. `pf9-ostackhost-neutron`) directly; the low-level API under `pcd_host_cluster_role`. |
+| `pcd_compute_lease_policy` | A project's **VM lease policy** in mors, PCD's VM lease service: how long the project's VMs live, and whether they are then powered off or deleted. |
+| `pcd_compute_instance_lease` | One VM's own **lease** in mors, in place of its project's policy (the PCD UI's Customize Lease). |
 
 Four guides on the registry tie these together: the
 [Community Edition guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/community-edition)

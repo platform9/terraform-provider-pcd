@@ -18,6 +18,7 @@ import (
 	"github.com/platform9/terraform-provider-pcd/internal/services/images"
 	"github.com/platform9/terraform-provider-pcd/internal/services/keymanager"
 	"github.com/platform9/terraform-provider-pcd/internal/services/loadbalancer"
+	"github.com/platform9/terraform-provider-pcd/internal/services/mors"
 	"github.com/platform9/terraform-provider-pcd/internal/services/networking"
 	"github.com/platform9/terraform-provider-pcd/internal/services/resmgr"
 )
@@ -89,6 +90,8 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		compute.NewInterfaceAttachResource,
 		compute.NewVolumeAttachResource,
 		compute.NewQuotasetResource,
+		mors.NewLeasePolicyResource,
+		mors.NewInstanceLeaseResource,
 		compute.NewAggregateResource,
 		compute.NewComputeServiceResource,
 		blockstorage.NewVolumeResource,
