@@ -187,6 +187,7 @@ ID alone.
 | `pcd_identity_application_credential` | `<id>` | `pcdctl application credential list` |
 | `pcd_identity_federation_mapping` | `<name>` | `pcdctl mapping list` |
 | `pcd_identity_federation_identity_provider` | `<name>` | `pcdctl identity provider list` |
+| `pcd_identity_federation_protocol` | `<identity_provider>/<name>` | `pcdctl federation protocol list --identity-provider <identity_provider>` |
 
 ### Load balancer
 

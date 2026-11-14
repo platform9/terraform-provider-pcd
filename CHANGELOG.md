@@ -17,6 +17,8 @@ All notable changes to this project are documented here. The format is based on
 - **`pcd_identity_federation_identity_provider`**, a Keystone identity provider: its domain, its remote IDs
   (the SAML entity IDs it is trusted for), `enabled` (default `true`; Keystone's own default is `false`) and a
   description. Destroying it also deletes its protocols. Import with the identity provider name.
+- **`pcd_identity_federation_protocol`**, the protocol that ties an identity provider to a mapping. PCD single
+  sign-on uses `saml2`. Import with `<identity_provider>/<name>`.
 
 ## [0.1.21] - 2026-11-13
 
