@@ -14,6 +14,9 @@ All notable changes to this project are documented here. The format is based on
   so a hand-formatted value does not show a change on every plan. The resource owns the whole rule list:
   editing SAML groups in the PCD UI rewrites the same mapping, and the next apply reverts it. Keystone's
   `schema_version` for the mapping is left at Keystone's default. Import with the mapping name.
+- **`pcd_identity_federation_identity_provider`**, a Keystone identity provider: its domain, its remote IDs
+  (the SAML entity IDs it is trusted for), `enabled` (default `true`; Keystone's own default is `false`) and a
+  description. Destroying it also deletes its protocols. Import with the identity provider name.
 
 ## [0.1.21] - 2026-11-13
 
