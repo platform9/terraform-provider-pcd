@@ -265,10 +265,16 @@ curl -sk -H "X-Auth-Token: $TOKEN" "$PCD/resmgr/v1/hosts"       | python3 -m jso
 |---|---|---|
 | `pcd_cluster_blueprint` | `<blueprint_name>` | `/resmgr/v2/blueprint` |
 | `pcd_cluster` | `<cluster_name>` | `/resmgr/v2/clusters`, or `pcdctl aggregate list` |
+| `pcd_cluster_vmha_config` | `<cluster_name>` | `/resmgr/v2/clusters` |
 | `pcd_host_config` | `<host_config_id>` | `/resmgr/v2/hostconfigs` |
 | `pcd_host_config_assignment` | `<host_id>/<host_config_id>` | the host UUID and `/resmgr/v2/hostconfigs` |
 | `pcd_host_cluster_role` | `<host_id>/<role>` | the host UUID; the role is `hypervisor`, `image-library`, `persistent-storage`, or `dns` |
 | `pcd_host_role` | `<host_id>/<role_name>` | the host UUID; `roles` in `/resmgr/v1/hosts` lists the granular `pf9-*` names |
+
+`pcd_cluster_vmha_config` imports only a cluster whose VM high-availability
+configuration hamgr already holds. For a cluster with none, import fails with
+"Cannot import non-existent remote object": declare the resource and apply
+instead, and the first write creates the configuration.
 
 ## Worked example: the region's cluster blueprint
 

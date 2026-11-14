@@ -88,7 +88,8 @@ tracked on the project roadmap.
 
 The PCD provider also ships resources that have **no `openstack_*` equivalent** — they
 manage Platform9's own control plane (the `resmgr` service), mors, PCD's VM lease
-service, and hagrid, its single sign-on service, rather than an OpenStack service.
+service, hagrid, its single sign-on service, and hamgr, its VM high-availability service,
+rather than an OpenStack service.
 There is nothing to migrate *from*; these are net-new capability:
 
 - **`pcd_cluster_blueprint`** — the region's cluster blueprint (networking type, virtual-
@@ -103,6 +104,8 @@ There is nothing to migrate *from*; these are net-new capability:
   `pcd_identity_federation_identity_provider`, `pcd_identity_federation_mapping` and
   `pcd_identity_federation_protocol` for its Keystone side (the OpenStack provider has none
   of the four). The single sign-on guide puts them together.
+- **`pcd_cluster_vmha_config`** — a cluster's VM high-availability evacuation speed and NFS
+  heartbeat path, kept by PCD's `hamgr` service.
 
 ## Behavioral notes
 
