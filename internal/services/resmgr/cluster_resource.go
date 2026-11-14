@@ -117,7 +117,7 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"name": schema.StringAttribute{Required: true, MarkdownDescription: "The cluster name. Changing this forces a new resource.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
 			"vm_high_availability": schema.SingleNestedAttribute{
-				Optional: true, Computed: true, MarkdownDescription: "VM high-availability settings. Only `enabled` is sent; other keys, such as `cooldown`, are not managed here and keep the value the server has.",
+				Optional: true, Computed: true, MarkdownDescription: "VM high-availability settings. Only `enabled` is sent; other keys, such as `cooldown`, are not managed here and keep the value the server has. The evacuation speed and NFS heartbeat path are set with `pcd_cluster_vmha_config`.",
 				PlanModifiers: objUseState,
 				Attributes: map[string]schema.Attribute{
 					"enabled": schema.BoolAttribute{Optional: true, Computed: true, MarkdownDescription: "Auto-detect host failure and recover VMs."},

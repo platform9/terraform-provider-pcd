@@ -30,6 +30,8 @@ All notable changes to this project are documented here. The format is based on
 
 - The importing guide's new section "Moving an instance to another project" hands a moved instance from one
   configuration to another with `removed` and `import`, and lists the checks Nova makes before a move.
+- `pcd_cluster`: the `vm_high_availability` description now also says that the evacuation speed and NFS heartbeat
+  path are set with `pcd_cluster_vmha_config`.
 
 ## [0.1.22] - 2026-11-13
 
