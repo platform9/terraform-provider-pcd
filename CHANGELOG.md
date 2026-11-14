@@ -16,6 +16,14 @@ All notable changes to this project are documented here. The format is based on
   pass. Destroying the policy also removes every per-VM lease in the project. mors itself accepts any duration
   and any action, so the provider checks both at plan time. A policy applies in the provider's region. Import
   with the project ID.
+- **`pcd_compute_instance_lease`**, one VM's own lease in mors, in place of its project's policy, as the PCD
+  UI's Customize Lease sets it. `expiry` is a UTC time written like `2026-12-31T23:59:59Z`, the only form mors
+  accepts, and may be at most one policy period from the apply: mors takes a later one when the lease is
+  created but then refuses every change to it. Before writing, the provider checks with Nova that the VM
+  belongs to the project, which mors does not, and refuses a project without a lease policy, where mors would
+  never act on the lease. Destroying the lease returns the VM to the project's policy, counted from the VM's
+  creation, so a VM older than the policy is then powered off or deleted within about a minute. Import with
+  `<project_id>/<instance_id>`.
 
 ## [0.1.21] - 2026-11-13
 

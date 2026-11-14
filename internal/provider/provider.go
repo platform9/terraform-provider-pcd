@@ -91,6 +91,7 @@ func (p *pcdProvider) Resources(_ context.Context) []func() resource.Resource {
 		compute.NewVolumeAttachResource,
 		compute.NewQuotasetResource,
 		mors.NewLeasePolicyResource,
+		mors.NewInstanceLeaseResource,
 		compute.NewAggregateResource,
 		compute.NewComputeServiceResource,
 		blockstorage.NewVolumeResource,

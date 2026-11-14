@@ -96,6 +96,8 @@ service. There is nothing to migrate *from*; these are net-new capability:
 - **`pcd_host_config`** — a host's traffic-type-to-interface mapping and network labels.
 - **`pcd_host_role`** — assign a PCD role (e.g. `pf9-ostackhost-neutron`) to a host.
 - **`pcd_host_config_assignment`** — attach a host configuration to a host.
+- **`pcd_compute_lease_policy`** and **`pcd_compute_instance_lease`** — VM leases in mors,
+  PCD's VM lease service: how long a project's VMs live, and one VM's own lease.
 
 ## Behavioral notes
 
