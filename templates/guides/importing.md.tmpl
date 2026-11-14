@@ -2,7 +2,7 @@
 page_title: "Importing existing resources - PCD Provider"
 subcategory: ""
 description: |-
-  How to bring resources that already exist in PCD under Terraform management, and where to find the IDs that import needs.
+  How to bring resources that already exist in PCD under Terraform management, where to find the IDs that import needs, and how to hand an instance moved to another project to that project's configuration.
 ---
 
 # Importing existing resources
@@ -14,7 +14,8 @@ into Terraform state; from then on Terraform manages it in place.
 
 The IDs import needs are assigned by PCD, so they are never something you typed
 into a configuration. This guide covers the two ways to import and, for every
-resource, where its ID comes from.
+resource, where its ID comes from, and how to hand an instance that was moved
+to another project over to that project's configuration.
 
 ## Set up the CLI
 
@@ -319,3 +320,164 @@ clusters and host roles built on it, must go before the blueprint does.
 
 For a region built from nothing, see the
 [Community Edition guide](community-edition.md).
+
+## Moving an instance to another project
+
+The `pcd_compute_instance_change_tenant` action moves an instance, with its
+ports and attached volumes, to another project: the PCD UI's **Change Tenant**.
+The instance keeps its ID and addresses. A configuration describes the objects
+of the project it runs in, so an instance that one configuration manages is
+handed over to the target project's configuration in three steps.
+
+1. Move it, with an admin token and Terraform 1.14 or later. Declare the action
+   in the source configuration and run it once:
+
+   ```terraform
+   terraform {
+     required_version = ">= 1.14"
+   }
+
+   action "pcd_compute_instance_change_tenant" "web" {
+     config {
+       instance_id = pcd_compute_instance.web.id
+       project_id  = "<target project ID>"
+     }
+   }
+   ```
+
+   ```shell
+   terraform apply -invoke=action.pcd_compute_instance_change_tenant.web
+   ```
+
+2. In the source configuration, replace the resource blocks of what moved with
+   `removed` blocks, so Terraform forgets them without destroying them: the
+   instance, its ports, its attached volumes, and any
+   `pcd_compute_volume_attach` or `pcd_compute_interface_attach`. Resources that
+   refer to the instance but stay in the source project (a load balancer member,
+   a DNS record, an instance snapshot, a `pcd_compute_instance_lease`, a
+   floating IP) keep their blocks: replace each reference to a removed resource
+   with a literal value, or with a `pcd_compute_instance` data source read under
+   an admin token. Delete the step 1 `action` block, and any other block that
+   still refers to the removed ones (an output, for example): Terraform refuses
+   a reference to a resource the configuration no longer declares. Then apply:
+
+   ```terraform
+   removed {
+     from = pcd_compute_instance.web
+
+     lifecycle {
+       destroy = false
+     }
+   }
+   ```
+
+3. In the target project's configuration, import what moved by ID, generate its
+   configuration, and apply. The tables under [Finding IDs](#finding-ids) give
+   each resource's import ID:
+
+   ```terraform
+   import {
+     to = pcd_compute_instance.web
+     id = "<instance ID>"
+   }
+   ```
+
+   ```shell
+   terraform plan -generate-config-out=generated.tf
+   ```
+
+Nova checks everything before it moves anything, and the action fails with
+"Instance not moved" and Nova's message when a check does not pass. The
+instance must be active, shut off, paused or suspended, with no task in
+progress, and not locked. Then:
+
+- The target project exists.
+- The instance's owner may create instances in the target project; a user
+  with the `member` or `admin` role there normally may.
+- The instance is in no server group and has no floating IP. Disassociate the
+  floating IP first; floating IPs do not move.
+- Every security group on the instance's ports belongs to the target project.
+  Security groups do not move: create matching groups in the target project and
+  put them on the ports before the move. That needs an admin token, because
+  Neutron accepts another project's security group on a port only from an
+  admin, or when the group is shared with the port's project.
+- The target project can use the instance's image (public, community, its own,
+  or shared with it and accepted) and flavor (public, or private with access
+  for the target project). An instance that boots from a volume skips the image
+  check.
+- Every network the instance is on is shared, the target project's own, or
+  shared with it through an RBAC policy.
+- No attached volume has snapshots, is encrypted, or is migrating, every one is
+  `available` or `in-use`, and the target project can use each volume's type.
+- The target project has instance quota left for the instance's owner.
+
+When the instance is already in the target project, the action warns, names
+the instance's status, and sends nothing.
+
+Prepare for what does not move or changes with the move:
+
+- Key pairs belong to the user, not the project, and do not move; the imported
+  instance reads `key_pair` as null.
+- A volume that is also attached to another instance moves with this one, and
+  the other instance's project can then no longer manage it. Detach it from the
+  other instance first.
+- The lease service applies the target project's lease policy to the instance,
+  counted from the instance's creation: an instance older than the policy's
+  duration is deleted or powered off on the service's next pass, within about a
+  minute of the move. Check the target project's `pcd_compute_lease_policy`
+  before the move, and lengthen it first if the instance must not be acted on.
+- The instance's own lease (`pcd_compute_instance_lease`) stays with the source
+  project: it does not exempt the instance from the target project's policy,
+  and when it runs out the lease service still powers off or deletes the
+  instance. Its resource stays in the source configuration, because its ID
+  names the source project. The lease service keeps one lease per instance, so
+  destroy that lease before you give the instance a lease in the target
+  project's configuration.
+
+Nova moves the ports and volumes before it answers. If a step fails, it moves
+them back, sets the instance's project back to the source project, and answers
+with an error; when it cannot move every volume and port back, it also sets
+the instance to `ERROR`. So after a refusal the action reads the instance once
+more, and reports "Instance not moved" only when it still reports the source
+project and is not in `ERROR`, or was already in `ERROR` before the action
+(Nova refuses to move an instance in `ERROR` before it touches anything).
+
+Otherwise, and when the request fails in any other way than one of those
+refusals (a dropped connection, a gateway error such as a 502 or 504, or a
+server error), the action fails with "Move outcome unknown": Nova may have
+moved the instance, or part of it. If the request timed out, Nova may still be
+working on the move, so wait a few minutes. Then read the instance's project
+and status under an admin token, for example with the `pcd_compute_instance`
+data source:
+
+- In the target project, the move finished: go on with the handoff above.
+- In the source project and not in `ERROR`, nothing moved: run the action
+  again.
+- In `ERROR`, Nova could not move every volume and port back, and it refuses
+  another move while the instance is in `ERROR`: an administrator has to put
+  each attached volume and port back in the instance's project and reset the
+  instance's state before the action can run again.
+
+When Nova accepts the move but the instance does not report the target project
+within two minutes, reports `ERROR` before it does, or cannot be read, the
+action fails with "Move not confirmed". Nova accepts the move only after it has
+moved the instance: read the instance's project and status under an admin
+token, and when it reports the target project, go on with the handoff. When it
+reports another project or is in `ERROR`, something changed it after Nova
+accepted this move, and the steps under "Move outcome unknown" above apply.
+
+After the move, a configuration whose credentials are scoped to the source
+project can no longer read the instance unless they carry the `admin` role:
+its next refresh would find the instance gone and plan a new one, which is why
+the source configuration forgets it with `removed`. A configuration that keeps
+managing a moved instance with an admin token sees no change on the instance
+itself, but a `pcd_networking_port` that sets `tenant_id` plans a replacement,
+because Neutron now reports the new project. Later changes to the instance
+count against the target project's quota, and a resize to a private flavor
+needs flavor access for the target project.
+
+To change the owner as well, mind the order: Nova checks the current owner in
+the target project when it moves an instance, and the new owner in the
+instance's project when it changes the owner. Change the owner first when the
+new owner may create instances in the source project; move first when the
+current owner may create instances in the target project.
