@@ -14,6 +14,17 @@ All notable changes to this project are documented here. The format is based on
   a volume with snapshots, and others) the action fails with Nova's message. After Nova answers, the action reads
   the instance until it reports the new project; it moves nothing and warns when the instance is already there.
   Needs an admin token.
+- **`pcd_cluster_vmha_config`**: a cluster's VM high-availability settings, the evacuation speed (`conservative`,
+  `balanced` or `aggressive`; how long PCD waits before it restarts a failed host's VMs elsewhere) and the NFS
+  heartbeat path, which PCD's `hamgr` service keeps and the PCD UI's cluster dialogs set in releases whose UI has
+  them. A setting left out of the configuration keeps the cluster's value; `nfs_heartbeat_path = ""` turns the
+  storage heartbeat off. hamgr's other tuning settings, its integer `cooldown` among them, are not attributes of
+  this resource, and setting the evacuation speed resets two of them, `cooldown` and `host_config.post_delay`, to
+  that speed's fixed values. PCD cannot delete these settings, so destroying the resource leaves them in place,
+  also for a later cluster of the same name, and warns. A write for a cluster created moments ago waits, up to six
+  minutes, until hamgr learns of a cluster the resource manager already has. Import with the cluster name works for
+  a cluster whose configuration hamgr already holds; for one with none, declare the resource and apply, and the
+  first write creates it.
 
 ### Documentation
 

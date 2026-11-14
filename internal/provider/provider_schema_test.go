@@ -58,4 +58,7 @@ func TestProviderSchemaIsValid(t *testing.T) {
 	if _, ok := resp.ActionSchemas["pcd_compute_instance_change_tenant"]; !ok {
 		t.Error("action pcd_compute_instance_change_tenant is not served")
 	}
+	if _, ok := resp.ResourceSchemas["pcd_cluster_vmha_config"]; !ok {
+		t.Error("resource pcd_cluster_vmha_config is not served")
+	}
 }

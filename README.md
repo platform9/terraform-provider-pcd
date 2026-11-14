@@ -12,14 +12,16 @@ cluster blueprints and host configuration/roles via the Platform9 `resmgr` API**
 ## PCD-native resources
 
 These are the value-add over [`terraform-provider-openstack`](https://github.com/terraform-provider-openstack/terraform-provider-openstack):
-they manage Platform9's own services (the `resmgr` control plane, mors for VM leases and hagrid for
-single sign-on), so you can declare a PCD region's cluster topology, host onboarding, VM leases and
-single sign-on as code — something no OpenStack provider can do.
+they manage Platform9's own services (the `resmgr` control plane, mors for VM leases, hagrid for single
+sign-on and hamgr for VM high availability), so you can declare a PCD region's cluster topology, host
+onboarding, VM leases, single sign-on and VM high-availability settings as code — something no OpenStack
+provider can do.
 
 | Resource | What it manages |
 |---|---|
 | `pcd_cluster_blueprint` | The region's **cluster blueprint** — the shared config every virtualized cluster inherits: virtual-network segmentation range, DNS domain, image-library and VM storage, and the Cinder storage backends. PCD keeps one per region, so the usual flow is `terraform import` then manage in place. Also available read-only as the `pcd_cluster_blueprint` data source. |
 | `pcd_cluster` | A **cluster** (host cluster) — the unit hypervisors join, carrying VM high availability, auto-rebalancing, GPU, and CPU-model settings. |
+| `pcd_cluster_vmha_config` | A cluster's **VM high-availability settings** in PCD's `hamgr` service: the evacuation speed and the NFS storage-heartbeat path. |
 | `pcd_host_config` | A **host configuration** — the mapping of each traffic type (management, VM console, tunneling, image library, live migration) to a network interface, plus physical-network labels. |
 | `pcd_host_config_assignment` | Attaches a host configuration to a host. |
 | `pcd_host` (data source) | Resolves a host's resource-manager UUID from the hostname it reports, so `host_id` never has to be copied from the UI. |
