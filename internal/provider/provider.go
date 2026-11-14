@@ -168,5 +168,6 @@ func (p *pcdProvider) Actions(_ context.Context) []func() action.Action {
 		compute.NewInstanceRebuildAction,
 		compute.NewHostDrainAction,
 		compute.NewInstanceMigrateAction,
+		compute.NewInstanceChangeTenantAction,
 	}
 }

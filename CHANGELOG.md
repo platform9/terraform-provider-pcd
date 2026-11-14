@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- The **`pcd_compute_instance_change_tenant` action** (Terraform 1.14 or later) moves an instance, with its ports
+  and attached volumes, to another project: the PCD UI's Change Tenant. Nova checks everything before it moves
+  anything; when a check fails (a floating IP, a server group, a security group the target project does not own,
+  a volume with snapshots, and others) the action fails with Nova's message. After Nova answers, the action reads
+  the instance until it reports the new project; it moves nothing and warns when the instance is already there.
+  Needs an admin token.
+
+### Documentation
+
+- The importing guide's new section "Moving an instance to another project" hands a moved instance from one
+  configuration to another with `removed` and `import`, and lists the checks Nova makes before a move.
+
 ## [0.1.22] - 2026-11-13
 
 ### Added
