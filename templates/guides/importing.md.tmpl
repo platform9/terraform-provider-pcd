@@ -188,6 +188,7 @@ ID alone.
 | `pcd_identity_federation_mapping` | `<name>` | `pcdctl mapping list` |
 | `pcd_identity_federation_identity_provider` | `<name>` | `pcdctl identity provider list` |
 | `pcd_identity_federation_protocol` | `<identity_provider>/<name>` | `pcdctl federation protocol list --identity-provider <identity_provider>` |
+| `pcd_identity_sso_configuration` | `<identity_provider>` | the identity provider's name: `IDP1` for the default domain; `pcdctl identity provider list` |
 
 ### Load balancer
 
