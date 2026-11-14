@@ -87,8 +87,9 @@ tracked on the project roadmap.
 ## Beyond OpenStack: PCD-native resources
 
 The PCD provider also ships resources that have **no `openstack_*` equivalent** — they
-manage Platform9's own control plane (the `resmgr` service) rather than an OpenStack
-service. There is nothing to migrate *from*; these are net-new capability:
+manage Platform9's own control plane (the `resmgr` service) and mors, PCD's VM lease
+service, rather than an OpenStack service. There is nothing to migrate *from*; these are
+net-new capability:
 
 - **`pcd_cluster_blueprint`** — the region's cluster blueprint (networking type, virtual-
   network segmentation, image-library and VM storage, Cinder backends, VM HA, auto-

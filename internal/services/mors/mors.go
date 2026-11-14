@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -37,6 +38,27 @@ func configureClient(providerData any, diags *diag.Diagnostics) *clients.Config 
 		return nil
 	}
 	return config
+}
+
+// idShape is what a project or instance ID may hold. IDs go into the URL path
+// unescaped, so an empty ID, or one holding '/', '?' or '#', would address
+// another route or another object.
+var idShape = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// idShapeMessage describes idShape for the schema validators.
+const idShapeMessage = "must be an ID made of letters, digits, '-' and '_' only"
+
+// checkID refuses an ID that does not match idShape before any request,
+// naming the attribute it came from.
+func checkID(name, value string) error {
+	if value == "" {
+		return fmt.Errorf("mors: %s is empty", name)
+	}
+	if !idShape.MatchString(value) {
+		return fmt.Errorf("mors: %s %q %s: it goes into the request's URL path, where it would address "+
+			"another object", name, value, idShapeMessage)
+	}
+	return nil
 }
 
 // getJSON issues an authenticated GET and decodes the 200 response into out.

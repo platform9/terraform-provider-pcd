@@ -4,17 +4,17 @@ page_title: "pcd_compute_lease_policy Resource - PCD"
 subcategory: "Compute"
 description: |-
   Manages a project's VM lease policy in mors, PCD's VM lease service: how long a VM in the project may live, counted from when it was created, and what happens when that time is up. This is the PCD UI's Manage Lease Policy on the Tenants page.
-  ~> mors checks leases about once a minute. Creating a policy, or shortening one, acts within a minute on every VM in the project that is already older than the new duration: it powers them off or deletes them. A VM that was powered off because its lease ran out is powered off again on every pass, so powering it back on does not stick until its lease is extended with pcd_compute_instance_lease.
-  Destroying the policy also deletes every per-VM lease in the project (pcd_compute_instance_lease resources then disappear on the next refresh). A policy applies in the region whose mors holds it, which is the provider's region; use a provider alias to manage another region's.
+  ~> mors checks leases about once a minute. Creating a policy, or shortening one, acts within a minute on every VM in the project that is already older than the new duration, except VMs that have their own lease (pcd_compute_instance_lease): it powers them off or deletes them. A VM that was powered off because its lease ran out is powered off again on every pass, so powering it back on does not stick until its lease is extended with pcd_compute_instance_lease. Changing action from power off to delete deletes those VMs within a minute, including the ones mors had already powered off.
+  Destroying the policy also deletes every per-VM lease in the project (pcd_compute_instance_lease resources then disappear on the next refresh), and so does replacing it (for example with -replace, or by renaming the resource without a moved block): the VMs fall back to the policy until the next apply writes their leases again. Leases set outside this configuration, with the PCD UI's Customize Lease for example, are not written again. Use a moved block to rename it. A policy applies in the region whose mors holds it, which is the provider's region; use a provider alias to manage another region's.
 ---
 
 # pcd_compute_lease_policy (Resource)
 
 Manages a project's VM lease policy in mors, PCD's VM lease service: how long a VM in the project may live, counted from when it was created, and what happens when that time is up. This is the PCD UI's **Manage Lease Policy** on the Tenants page.
 
-~> mors checks leases about once a minute. Creating a policy, or shortening one, acts within a minute on every VM in the project that is already older than the new duration: it powers them off or deletes them. A VM that was powered off because its lease ran out is powered off again on every pass, so powering it back on does not stick until its lease is extended with `pcd_compute_instance_lease`.
+~> mors checks leases about once a minute. Creating a policy, or shortening one, acts within a minute on every VM in the project that is already older than the new duration, except VMs that have their own lease (`pcd_compute_instance_lease`): it powers them off or deletes them. A VM that was powered off because its lease ran out is powered off again on every pass, so powering it back on does not stick until its lease is extended with `pcd_compute_instance_lease`. Changing `action` from `power off` to `delete` deletes those VMs within a minute, including the ones mors had already powered off.
 
-Destroying the policy also deletes every per-VM lease in the project (`pcd_compute_instance_lease` resources then disappear on the next refresh). A policy applies in the region whose mors holds it, which is the provider's region; use a provider alias to manage another region's.
+Destroying the policy also deletes every per-VM lease in the project (`pcd_compute_instance_lease` resources then disappear on the next refresh), and so does replacing it (for example with `-replace`, or by renaming the resource without a `moved` block): the VMs fall back to the policy until the next apply writes their leases again. Leases set outside this configuration, with the PCD UI's Customize Lease for example, are not written again. Use a `moved` block to rename it. A policy applies in the region whose mors holds it, which is the provider's region; use a provider alias to manage another region's.
 
 ## Example Usage
 
@@ -42,7 +42,7 @@ resource "pcd_compute_lease_policy" "dev" {
 
 ### Optional
 
-- `action` (String) What mors does to a VM whose lease has run out: `power off` (the default) or `delete`.
+- `action` (String) What mors does to a VM whose lease has run out: `power off` (the default) or `delete`. Changing it from `power off` to `delete` deletes, within a minute, every VM in the project that is already older than the duration and has no lease of its own, including the ones mors had already powered off.
 
 ### Read-Only
 

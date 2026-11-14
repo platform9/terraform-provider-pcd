@@ -4,17 +4,17 @@ page_title: "pcd_compute_instance_lease Resource - PCD"
 subcategory: "Compute"
 description: |-
   Manages a VM's own lease in mors, PCD's VM lease service: a fixed time at which mors powers the VM off or deletes it, in place of the project's pcd_compute_lease_policy. This is the PCD UI's Customize Lease on a VM.
-  The VM's project must have a lease policy; create the policy in the same configuration and reference it through project_id so it is created first and destroyed last. expiry may be at most one policy period from the time of the apply, as in the PCD UI. Write it as a fixed time, or with the hashicorp/time provider's time_offset; timeadd(timestamp(), ...) changes on every plan.
-  ~> mors checks leases about once a minute. Destroying this resource removes the VM's own lease, and the VM falls back to the project's policy, counted from its creation: a VM older than the policy is powered off or deleted within a minute. After a power off lease runs out, mors powers the VM off again on every pass: a pcd_compute_instance with power_state = "active" then starts it on every apply and mors stops it again, until the lease is extended. A delete lease deletes the VM, and its pcd_compute_instance then plans a new one. Deleting the project's policy also deletes this lease.
+  The VM's project must have a lease policy; create the policy in the same configuration and reference it through project_id so it is created first and destroyed last. The policy therefore exists before the lease does, so a VM already older than the policy has no lease for a moment and mors may act on it first: to protect such a VM, apply the policy with a duration longer than the VM's age, add the lease, and shorten the policy in a later apply. expiry may be at most one policy period from the time of the apply, as in the PCD UI. Write it as a fixed time, or with the hashicorp/time provider's time_offset; timeadd(timestamp(), ...) changes on every plan.
+  ~> mors checks leases about once a minute. Destroying this resource removes the VM's own lease, and the VM falls back to the project's policy, counted from its creation: a VM older than the policy is powered off or deleted within a minute. After a power off lease runs out, mors powers the VM off again on every pass: a pcd_compute_instance with power_state = "active" then starts it on every apply and mors stops it again, until the lease is extended. A delete lease deletes the VM, and its pcd_compute_instance then plans a new one. Deleting the project's policy also deletes this lease, and so does replacing the policy (for example with -replace on pcd_compute_lease_policy, or by renaming the policy's resource without a moved block): the VM falls back to the policy until the next apply writes the lease again.
 ---
 
 # pcd_compute_instance_lease (Resource)
 
 Manages a VM's own lease in mors, PCD's VM lease service: a fixed time at which mors powers the VM off or deletes it, in place of the project's `pcd_compute_lease_policy`. This is the PCD UI's **Customize Lease** on a VM.
 
-The VM's project must have a lease policy; create the policy in the same configuration and reference it through `project_id` so it is created first and destroyed last. `expiry` may be at most one policy period from the time of the apply, as in the PCD UI. Write it as a fixed time, or with the `hashicorp/time` provider's `time_offset`; `timeadd(timestamp(), ...)` changes on every plan.
+The VM's project must have a lease policy; create the policy in the same configuration and reference it through `project_id` so it is created first and destroyed last. The policy therefore exists before the lease does, so a VM already older than the policy has no lease for a moment and mors may act on it first: to protect such a VM, apply the policy with a duration longer than the VM's age, add the lease, and shorten the policy in a later apply. `expiry` may be at most one policy period from the time of the apply, as in the PCD UI. Write it as a fixed time, or with the `hashicorp/time` provider's `time_offset`; `timeadd(timestamp(), ...)` changes on every plan.
 
-~> mors checks leases about once a minute. Destroying this resource removes the VM's own lease, and the VM falls back to the project's policy, counted from its creation: a VM older than the policy is powered off or deleted within a minute. After a `power off` lease runs out, mors powers the VM off again on every pass: a `pcd_compute_instance` with `power_state = "active"` then starts it on every apply and mors stops it again, until the lease is extended. A `delete` lease deletes the VM, and its `pcd_compute_instance` then plans a new one. Deleting the project's policy also deletes this lease.
+~> mors checks leases about once a minute. Destroying this resource removes the VM's own lease, and the VM falls back to the project's policy, counted from its creation: a VM older than the policy is powered off or deleted within a minute. After a `power off` lease runs out, mors powers the VM off again on every pass: a `pcd_compute_instance` with `power_state = "active"` then starts it on every apply and mors stops it again, until the lease is extended. A `delete` lease deletes the VM, and its `pcd_compute_instance` then plans a new one. Deleting the project's policy also deletes this lease, and so does replacing the policy (for example with `-replace` on `pcd_compute_lease_policy`, or by renaming the policy's resource without a `moved` block): the VM falls back to the policy until the next apply writes the lease again.
 
 ## Example Usage
 
@@ -70,7 +70,11 @@ resource "pcd_compute_instance_lease" "build_agent" {
 }
 
 # For a VM this configuration does not manage (created in the PCD UI, say),
-# look it up by name with the pcd_compute_instance data source:
+# look it up by name with the pcd_compute_instance data source. The policy
+# exists before the lease does, so if that VM is already older than the
+# policy, mors may act on it first: to protect it, apply the policy with a
+# duration longer than the VM's age, add the lease, and shorten the policy in
+# a later apply.
 #
 # data "pcd_compute_instance" "legacy" {
 #   name = "legacy-build-agent"
@@ -94,7 +98,7 @@ resource "pcd_compute_instance_lease" "build_agent" {
 ### Optional
 
 - `action` (String) What mors does when the lease runs out: `power off` (the default) or `delete`. Updated in place, which mors refuses once `expiry` has passed.
-- `project_id` (String) The VM's project. Read from the VM when omitted; when set, it must be the VM's project, which the provider checks before writing the lease, because mors does not. Setting it to `pcd_compute_lease_policy.<name>.project_id` orders the lease after the policy. Changing this forces a new resource.
+- `project_id` (String) The VM's project. Read from the VM when omitted; when set, it must be the VM's project, which the provider checks before creating the lease, because mors does not. Setting it to `pcd_compute_lease_policy.<name>.project_id` orders the lease after the policy. Changing this forces a new resource.
 
 ### Read-Only
 

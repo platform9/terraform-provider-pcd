@@ -329,3 +329,135 @@ func TestLeasePolicyImportState(t *testing.T) {
 		t.Fatalf("empty import ID: diags %v, state null %v; want an error and no state", empty.Diagnostics, empty.State.Raw.IsNull())
 	}
 }
+
+// A policy changed in the PCD UI must show as drift: Read stores what mors
+// holds, not the prior state, or the plan reports no change while mors acts
+// on the project's VMs under another duration and action.
+func TestLeasePolicyReadReportsDrift(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeMors(t, map[string][]fakeReply{
+		"GET /v1/tenant/proj-1": {{http.StatusOK, `{"vm_lease_policy": {"tenant_uuid": "proj-1", "expiry_mins": 60, "action": "delete"}}`}},
+	})
+	r := &leasePolicyResource{config: f.config()}
+	s := leasePolicySchema(t)
+	prior := leasePolicyModel{ID: types.StringValue("proj-1"), ProjectID: types.StringValue("proj-1"),
+		ExpiryMinutes: types.Int64Value(4320), Action: types.StringValue("power off")}
+	resp := resource.ReadResponse{State: stateOf(ctx, t, s, &prior)}
+	r.Read(ctx, resource.ReadRequest{State: stateOf(ctx, t, s, &prior)}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("read: %v", resp.Diagnostics)
+	}
+	var got leasePolicyModel
+	resp.State.Get(ctx, &got)
+	if got.ExpiryMinutes.ValueInt64() != 60 || got.Action.ValueString() != "delete" {
+		t.Fatalf("read expiry_minutes=%d action=%s, want mors's 60 and delete", got.ExpiryMinutes.ValueInt64(), got.Action.ValueString())
+	}
+}
+
+// mors answers DELETE with 200, but a 404 from anything in between also means
+// there is nothing left to delete: destroy must succeed.
+func TestLeasePolicyDeleteOfAPolicyAlreadyGone(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeMors(t, map[string][]fakeReply{
+		"DELETE /v1/tenant/proj-1": {{http.StatusNotFound, `{"success": false}`}},
+	})
+	r := &leasePolicyResource{config: f.config()}
+	s := leasePolicySchema(t)
+	prior := leasePolicyModel{ID: types.StringValue("proj-1"), ProjectID: types.StringValue("proj-1"),
+		ExpiryMinutes: types.Int64Value(60), Action: types.StringValue("power off")}
+	resp := resource.DeleteResponse{State: stateOf(ctx, t, s, &prior)}
+	r.Delete(ctx, resource.DeleteRequest{State: stateOf(ctx, t, s, &prior)}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("delete of a policy already gone: %v", resp.Diagnostics)
+	}
+	if got := f.keys(); !reflect.DeepEqual(got, []string{"DELETE /v1/tenant/proj-1"}) {
+		t.Fatalf("requests = %v", got)
+	}
+}
+
+// Update's read-back is what proves a PUT landed. A 200 that holds no policy
+// proves nothing: it must fail the update and keep the prior state.
+func TestLeasePolicyUpdateReadBackWithoutAPolicy(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeMors(t, map[string][]fakeReply{
+		"PUT /v1/tenant/proj-1": {{http.StatusOK, `{"success": true}`}},
+		"GET /v1/tenant/proj-1": {{http.StatusOK, `{}`}},
+	})
+	r := &leasePolicyResource{config: f.config()}
+	s := leasePolicySchema(t)
+	prior := leasePolicyModel{ID: types.StringValue("proj-1"), ProjectID: types.StringValue("proj-1"),
+		ExpiryMinutes: types.Int64Value(60), Action: types.StringValue("power off")}
+	planned := prior
+	planned.ExpiryMinutes = types.Int64Value(120)
+	resp := resource.UpdateResponse{State: stateOf(ctx, t, s, &prior)}
+	r.Update(ctx, resource.UpdateRequest{Plan: planOf(ctx, t, s, &planned), State: stateOf(ctx, t, s, &prior)}, &resp)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("update accepted a read-back without a policy")
+	}
+	var kept leasePolicyModel
+	resp.State.Get(ctx, &kept)
+	if kept.ExpiryMinutes.ValueInt64() != 60 {
+		t.Fatalf("state expiry_minutes = %d; want the prior 60 kept", kept.ExpiryMinutes.ValueInt64())
+	}
+}
+
+// badIDs go into the URL path unescaped and would address another route or
+// another object; "" is mors's list route.
+var badIDs = []string{"", "a/b", "a?b", "a#b", "a b", "..", "a%2Fb"}
+
+// Every request is refused for a malformed project_id, and none reaches mors
+// (the fake fails the test on any). Delete has nothing it could delete.
+func TestLeasePolicyRefusesMalformedProjectIDs(t *testing.T) {
+	ctx := context.Background()
+	s := leasePolicySchema(t)
+	for _, id := range badIDs {
+		t.Run(id, func(t *testing.T) {
+			f := newFakeMors(t, map[string][]fakeReply{})
+			r := &leasePolicyResource{config: f.config()}
+			row := leasePolicyModel{ID: types.StringValue(id), ProjectID: types.StringValue(id),
+				ExpiryMinutes: types.Int64Value(60), Action: types.StringValue("power off")}
+
+			createResp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: nullValue(ctx, s)}}
+			r.Create(ctx, resource.CreateRequest{Plan: planOf(ctx, t, s, &row)}, &createResp)
+			if !createResp.Diagnostics.HasError() || !createResp.State.Raw.IsNull() {
+				t.Errorf("create: diags %v, state null %v; want an error and no state", createResp.Diagnostics, createResp.State.Raw.IsNull())
+			}
+			readResp := resource.ReadResponse{State: stateOf(ctx, t, s, &row)}
+			r.Read(ctx, resource.ReadRequest{State: stateOf(ctx, t, s, &row)}, &readResp)
+			if !readResp.Diagnostics.HasError() {
+				t.Error("read: no error")
+			}
+			updateResp := resource.UpdateResponse{State: stateOf(ctx, t, s, &row)}
+			r.Update(ctx, resource.UpdateRequest{Plan: planOf(ctx, t, s, &row), State: stateOf(ctx, t, s, &row)}, &updateResp)
+			if !updateResp.Diagnostics.HasError() {
+				t.Error("update: no error")
+			}
+			deleteResp := resource.DeleteResponse{State: stateOf(ctx, t, s, &row)}
+			r.Delete(ctx, resource.DeleteRequest{State: stateOf(ctx, t, s, &row)}, &deleteResp)
+			if deleteResp.Diagnostics.HasError() {
+				t.Errorf("delete: %v", deleteResp.Diagnostics)
+			}
+			if got := f.keys(); len(got) != 0 {
+				t.Errorf("requests = %v; project_id %q must not reach mors", got, id)
+			}
+			if id != "" && !stringValidatorErrors(ctx, s.Attributes["project_id"].(schema.StringAttribute), types.StringValue(id)) {
+				t.Errorf("project_id %q passed the schema's validators", id)
+			}
+		})
+	}
+	if stringValidatorErrors(ctx, s.Attributes["project_id"].(schema.StringAttribute), types.StringValue("0123abcdef_-XYZ")) {
+		t.Error("a well-formed project_id failed the schema's validators")
+	}
+}
+
+func TestLeasePolicyImportRefusesMalformedIDs(t *testing.T) {
+	ctx := context.Background()
+	s := leasePolicySchema(t)
+	for _, id := range append([]string{"proj/a/b", "proj-1/"}, badIDs...) {
+		resp := resource.ImportStateResponse{State: tfsdk.State{Schema: s, Raw: nullValue(ctx, s)}}
+		(&leasePolicyResource{}).ImportState(ctx, resource.ImportStateRequest{ID: id}, &resp)
+		if !resp.Diagnostics.HasError() || !resp.State.Raw.IsNull() {
+			t.Errorf("import id %q: diags %v, state null %v; want an error and no state", id, resp.Diagnostics, resp.State.Raw.IsNull())
+		}
+	}
+}

@@ -5,7 +5,6 @@ package mors
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -66,11 +65,6 @@ type leasePolicyEnvelope struct {
 	Policy leasePolicyAPI `json:"vm_lease_policy"`
 }
 
-// errEmptyProjectID refuses a request for no project: /v1/tenant/ is mors's
-// list route, not a policy. A project_id unknown at plan skips the schema's
-// length check, so "" can reach apply.
-var errEmptyProjectID = errors.New("mors: the project ID is empty")
-
 func leasePolicyURL(client *gophercloud.ServiceClient, projectID string) string {
 	return client.ServiceURL("tenant", projectID)
 }
@@ -89,9 +83,11 @@ func leasePolicyBody(projectID string, expiryMinutes int64, action string) lease
 
 // getLeasePolicy reads a project's policy. A 200 that holds no policy is
 // clients.ErrNoObject, not a policy of 0 minutes and no action.
+// A project_id unknown at plan skips the schema's validator, so checkID
+// guards every request: /v1/tenant/ is mors's list route, not a policy.
 func getLeasePolicy(ctx context.Context, client *gophercloud.ServiceClient, projectID string) (*leasePolicyAPI, error) {
-	if projectID == "" {
-		return nil, errEmptyProjectID
+	if err := checkID("project_id", projectID); err != nil {
+		return nil, err
 	}
 	var out leasePolicyEnvelope
 	if err := getJSON(ctx, client, leasePolicyURL(client, projectID), &out); err != nil {
@@ -104,8 +100,8 @@ func getLeasePolicy(ctx context.Context, client *gophercloud.ServiceClient, proj
 }
 
 func writeLeasePolicy(ctx context.Context, client *gophercloud.ServiceClient, method, projectID string, expiryMinutes int64, action string) error {
-	if projectID == "" {
-		return errEmptyProjectID
+	if err := checkID("project_id", projectID); err != nil {
+		return err
 	}
 	return writeJSON(ctx, client, method, leasePolicyURL(client, projectID), leasePolicyBody(projectID, expiryMinutes, action))
 }
@@ -120,11 +116,17 @@ func (r *leasePolicyResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"the project may live, counted from when it was created, and what happens when that time is up. This is " +
 			"the PCD UI's **Manage Lease Policy** on the Tenants page.\n\n" +
 			"~> mors checks leases about once a minute. Creating a policy, or shortening one, acts within a minute " +
-			"on every VM in the project that is already older than the new duration: it powers them off or deletes " +
-			"them. A VM that was powered off because its lease ran out is powered off again on every pass, so " +
-			"powering it back on does not stick until its lease is extended with `pcd_compute_instance_lease`.\n\n" +
+			"on every VM in the project that is already older than the new duration, except VMs that have their " +
+			"own lease (`pcd_compute_instance_lease`): it powers them off or deletes them. A VM that was powered " +
+			"off because its lease ran out is powered off again on every pass, so powering it back on does not " +
+			"stick until its lease is extended with `pcd_compute_instance_lease`. Changing `action` from " +
+			"`power off` to `delete` deletes those VMs within a minute, including the ones mors had already " +
+			"powered off.\n\n" +
 			"Destroying the policy also deletes every per-VM lease in the project (`pcd_compute_instance_lease` " +
-			"resources then disappear on the next refresh). A policy applies in the region whose mors holds it, " +
+			"resources then disappear on the next refresh), and so does replacing it (for example with " +
+			"`-replace`, or by renaming the resource without a `moved` block): the VMs fall back to the policy " +
+			"until the next apply writes their leases again. Leases set outside this configuration, with the PCD " +
+			"UI's Customize Lease for example, are not written again. Use a `moved` block to rename it. A policy applies in the region whose mors holds it, " +
 			"which is the provider's region; use a provider alias to manage another region's.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -136,7 +138,7 @@ func (r *leasePolicyResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Required:            true,
 				MarkdownDescription: "The project (tenant) the policy applies to. Changing this forces a new resource.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
-				Validators:          []validator.String{stringvalidator.LengthAtLeast(1)},
+				Validators:          []validator.String{stringvalidator.RegexMatches(idShape, idShapeMessage)},
 			},
 			"expiry_minutes": schema.Int64Attribute{
 				Required: true,
@@ -149,7 +151,9 @@ func (r *leasePolicyResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Computed: true,
 				Default:  stringdefault.StaticString(defaultLeaseAction),
 				MarkdownDescription: "What mors does to a VM whose lease has run out: `power off` (the default) " +
-					"or `delete`.",
+					"or `delete`. Changing it from `power off` to `delete` deletes, within a minute, every VM in the " +
+					"project that is already older than the duration and has no lease of its own, including the ones " +
+					"mors had already powered off.",
 				Validators: []validator.String{stringvalidator.OneOf(leaseActions...)},
 			},
 		},
@@ -178,7 +182,7 @@ func (r *leasePolicyResource) Create(ctx context.Context, req resource.CreateReq
 		if isConflict(err) {
 			resp.Diagnostics.AddError("mors: creating lease policy", fmt.Sprintf(
 				"Project %s already has a lease policy, set outside this configuration (in the PCD UI, for "+
-					"example). Import it to manage it here: terraform import <resource address> %s", projectID, projectID))
+					"example) or by an earlier apply whose answer was lost. Import it to manage it here: terraform import <resource address> %s", projectID, projectID))
 			return
 		}
 		resp.Diagnostics.AddError("mors: creating lease policy", err.Error())
@@ -258,9 +262,10 @@ func (r *leasePolicyResource) Delete(ctx context.Context, req resource.DeleteReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	// An empty project ID names no policy, and /v1/tenant/ is not one to delete.
+	// An empty or malformed project ID names no policy: /v1/tenant/ is not one
+	// to delete, and any other malformed ID would address another route.
 	projectID := state.ProjectID.ValueString()
-	if projectID == "" {
+	if checkID("project_id", projectID) != nil {
 		return
 	}
 
@@ -277,8 +282,8 @@ func (r *leasePolicyResource) Delete(ctx context.Context, req resource.DeleteReq
 
 // ImportState takes the project ID.
 func (r *leasePolicyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	if req.ID == "" {
-		resp.Diagnostics.AddError("Invalid import ID", "expected <project_id>, got an empty string")
+	if err := checkID("project_id", req.ID); err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("expected <project_id>: %v", err))
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)

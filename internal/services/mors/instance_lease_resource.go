@@ -5,7 +5,6 @@ package mors
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -78,9 +77,8 @@ func (leaseExpiryValidator) ValidateString(_ context.Context, req validator.Stri
 
 // leaseWithinPolicy returns an error when expiry is later than now plus the
 // project's policy duration. mors accepts such a lease when it is created but
-// refuses every later update of it, even one that changes only action, until
-// the expiry comes within one policy period of the time of the update. The
-// PCD UI caps a custom lease at one additional lease period for the same
+// then refuses every update that leaves the expiry beyond one policy period,
+// even one that changes only action. The PCD UI caps a custom lease at one additional lease period for the same
 // reason.
 func leaseWithinPolicy(expiry string, now time.Time, policyMinutes int64) error {
 	at, err := time.Parse(leaseExpiryLayout, expiry)
@@ -90,7 +88,7 @@ func leaseWithinPolicy(expiry string, now time.Time, policyMinutes int64) error 
 	limit := now.UTC().Truncate(time.Second).Add(time.Duration(policyMinutes) * time.Minute)
 	if at.After(limit) {
 		return fmt.Errorf("expiry %s is more than one lease period (%d minutes, the project's policy) from now. "+
-			"mors would accept it, but would then refuse every change to this lease until that period caught up. "+
+			"mors would accept it, but then refuses every update that leaves the expiry beyond one policy period. "+
 			"Choose an expiry no later than %s", expiry, policyMinutes, limit.Format(leaseExpiryLayout))
 	}
 	return nil
@@ -123,20 +121,15 @@ type instanceLeaseAPI struct {
 	Action       string `json:"action"`
 }
 
-// errEmptyInstanceID refuses a request for no VM. An instance_id unknown at
-// plan skips the schema's length check, so "" can reach apply.
-var errEmptyInstanceID = errors.New("mors: the instance ID is empty")
-
-// checkLeaseIDs refuses an empty project or instance ID before any request:
-// either would send the request to a route that is not this lease.
+// checkLeaseIDs refuses an empty or malformed project or instance ID before
+// any request: either would send the request to a route that is not this
+// lease. An ID unknown at plan skips the schema's validators, so "" can reach
+// apply.
 func checkLeaseIDs(projectID, instanceID string) error {
-	if projectID == "" {
-		return errEmptyProjectID
+	if err := checkID("project_id", projectID); err != nil {
+		return err
 	}
-	if instanceID == "" {
-		return errEmptyInstanceID
-	}
-	return nil
+	return checkID("instance_id", instanceID)
 }
 
 func instanceLeaseURL(client *gophercloud.ServiceClient, projectID, instanceID string) string {
@@ -187,7 +180,10 @@ func (r *instanceLeaseResource) Schema(_ context.Context, _ resource.SchemaReque
 			"powers the VM off or deletes it, in place of the project's `pcd_compute_lease_policy`. This is the PCD " +
 			"UI's **Customize Lease** on a VM.\n\n" +
 			"The VM's project must have a lease policy; create the policy in the same configuration and reference " +
-			"it through `project_id` so it is created first and destroyed last. `expiry` may be at most one policy " +
+			"it through `project_id` so it is created first and destroyed last. The policy therefore exists " +
+			"before the lease does, so a VM already older than the policy has no lease for a moment and mors may " +
+			"act on it first: to protect such a VM, apply the policy with a duration longer than the VM's age, " +
+			"add the lease, and shorten the policy in a later apply. `expiry` may be at most one policy " +
 			"period from the time of the apply, as in the PCD UI. Write it as a fixed time, or with the " +
 			"`hashicorp/time` provider's `time_offset`; `timeadd(timestamp(), ...)` changes on every plan.\n\n" +
 			"~> mors checks leases about once a minute. Destroying this resource removes the VM's own lease, and " +
@@ -196,7 +192,8 @@ func (r *instanceLeaseResource) Schema(_ context.Context, _ resource.SchemaReque
 			"again on every pass: a `pcd_compute_instance` with `power_state = \"active\"` then starts it on " +
 			"every apply and mors stops it again, until the lease is extended. A `delete` lease deletes the VM, " +
 			"and its `pcd_compute_instance` then plans a new one. Deleting the project's policy also deletes " +
-			"this lease.",
+			"this lease, and so does replacing the policy (for example with `-replace` on " +
+			"`pcd_compute_lease_policy`, or by renaming the policy's resource without a `moved` block): the VM falls back to the policy until the next apply writes the lease again.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -208,17 +205,17 @@ func (r *instanceLeaseResource) Schema(_ context.Context, _ resource.SchemaReque
 				MarkdownDescription: "The VM the lease is for. For a VM this configuration does not manage, look it " +
 					"up with the `pcd_compute_instance` data source. Changing this forces a new resource.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
-				Validators:    []validator.String{stringvalidator.LengthAtLeast(1)},
+				Validators:    []validator.String{stringvalidator.RegexMatches(idShape, idShapeMessage)},
 			},
 			"project_id": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
 				MarkdownDescription: "The VM's project. Read from the VM when omitted; when set, it must be the " +
-					"VM's project, which the provider checks before writing the lease, because mors does not. " +
+					"VM's project, which the provider checks before creating the lease, because mors does not. " +
 					"Setting it to `pcd_compute_lease_policy.<name>.project_id` orders the lease after the " +
 					"policy. Changing this forces a new resource.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown(), stringplanmodifier.RequiresReplace()},
-				Validators:    []validator.String{stringvalidator.LengthAtLeast(1)},
+				Validators:    []validator.String{stringvalidator.RegexMatches(idShape, idShapeMessage)},
 			},
 			"expiry": schema.StringAttribute{
 				Required: true,
@@ -250,11 +247,19 @@ func (r *instanceLeaseResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 	instanceID := plan.InstanceID.ValueString()
-	// /servers/ is Nova's list route, not a VM.
-	if instanceID == "" {
+	// /servers/ is Nova's list route, not a VM, and a malformed ID would
+	// address another route.
+	if err := checkID("instance_id", instanceID); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("instance_id"), "mors: creating instance lease",
-			"The instance ID is empty. Set instance_id to the ID of the VM the lease is for.")
+			fmt.Sprintf("%v. Set instance_id to the ID of the VM the lease is for.", err))
 		return
+	}
+	if !plan.ProjectID.IsNull() && !plan.ProjectID.IsUnknown() {
+		if err := checkID("project_id", plan.ProjectID.ValueString()); err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("project_id"), "mors: creating instance lease",
+				fmt.Sprintf("%v. Set project_id to the VM's project, or omit it.", err))
+			return
+		}
 	}
 
 	// mors never checks that the VM exists or belongs to the project in the
@@ -279,11 +284,18 @@ func (r *instanceLeaseResource) Create(ctx context.Context, req resource.CreateR
 		resp.Diagnostics.AddError("mors: reading the instance", err.Error())
 		return
 	}
+	if server.ID != instanceID {
+		resp.Diagnostics.AddAttributeError(path.Root("instance_id"), "mors: creating instance lease", fmt.Sprintf(
+			"mors: Nova answered the request for instance %s with server %s. Set instance_id to the VM's ID as "+
+				"Nova returns it (%s).", instanceID, server.ID, server.ID))
+		return
+	}
 	projectID := server.TenantID
 	if !plan.ProjectID.IsNull() && !plan.ProjectID.IsUnknown() && plan.ProjectID.ValueString() != projectID {
 		resp.Diagnostics.AddAttributeError(path.Root("project_id"), "mors: creating instance lease", fmt.Sprintf(
 			"Instance %s belongs to project %s, not %s. mors would file the lease under %s without checking, "+
-				"so the provider refuses it.", instanceID, projectID, plan.ProjectID.ValueString(), plan.ProjectID.ValueString()))
+				"so the provider refuses it. Set project_id to the VM's project, or omit it.",
+			instanceID, projectID, plan.ProjectID.ValueString(), plan.ProjectID.ValueString()))
 		return
 	}
 
@@ -314,7 +326,7 @@ func (r *instanceLeaseResource) Create(ctx context.Context, req resource.CreateR
 			id := instanceLeaseID(projectID, instanceID)
 			resp.Diagnostics.AddError("mors: creating instance lease", fmt.Sprintf(
 				"Instance %s already has its own lease, set outside this configuration (with the PCD UI's "+
-					"Customize Lease, for example). Import it to manage it here: terraform import <resource address> %s",
+					"Customize Lease, for example) or by an earlier apply whose answer was lost. Import it to manage it here: terraform import <resource address> %s",
 				instanceID, id))
 			return
 		}
@@ -406,8 +418,8 @@ func (r *instanceLeaseResource) Delete(ctx context.Context, req resource.DeleteR
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	// An empty project or instance ID names no lease, and the URL it would
-	// build is not one to delete.
+	// An empty or malformed project or instance ID names no lease, and the URL
+	// it would build is not one to delete.
 	projectID, instanceID := state.ProjectID.ValueString(), state.InstanceID.ValueString()
 	if checkLeaseIDs(projectID, instanceID) != nil {
 		return
@@ -429,8 +441,13 @@ func (r *instanceLeaseResource) Delete(ctx context.Context, req resource.DeleteR
 // mors, so import needs no Nova lookup.
 func (r *instanceLeaseResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	parts := strings.SplitN(req.ID, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	if len(parts) != 2 {
 		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("expected <project_id>/<instance_id>, got %q", req.ID))
+		return
+	}
+	// SplitN keeps any further '/' in the instance part, which checkID refuses.
+	if err := checkLeaseIDs(parts[0], parts[1]); err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("expected <project_id>/<instance_id>, got %q: %v", req.ID, err))
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)

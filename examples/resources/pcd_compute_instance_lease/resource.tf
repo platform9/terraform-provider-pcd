@@ -49,7 +49,11 @@ resource "pcd_compute_instance_lease" "build_agent" {
 }
 
 # For a VM this configuration does not manage (created in the PCD UI, say),
-# look it up by name with the pcd_compute_instance data source:
+# look it up by name with the pcd_compute_instance data source. The policy
+# exists before the lease does, so if that VM is already older than the
+# policy, mors may act on it first: to protect it, apply the policy with a
+# duration longer than the VM's age, add the lease, and shorten the policy in
+# a later apply.
 #
 # data "pcd_compute_instance" "legacy" {
 #   name = "legacy-build-agent"

@@ -12,18 +12,25 @@ All notable changes to this project are documented here. The format is based on
   Manage Lease Policy sets it: how long a VM in the project may live, in minutes from its creation, and whether
   mors then powers it off (`power off`, the default) or deletes it (`delete`). mors checks leases about once a
   minute, so creating a policy, or shortening one, acts within a minute on the project's VMs that are already
-  older than the new duration, and a VM powered off because its lease ran out is powered off again on every
-  pass. Destroying the policy also removes every per-VM lease in the project. mors itself accepts any duration
-  and any action, so the provider checks both at plan time. A policy applies in the provider's region. Import
-  with the project ID.
+  older than the new duration, except VMs that have their own lease, and a VM powered off because its lease ran
+  out is powered off again on every pass. Changing `action` from `power off` to `delete` deletes those VMs
+  within a minute, including the ones mors had already powered off. Destroying the policy also removes every
+  per-VM lease in the project, and so does replacing it (for example with `-replace`, or by renaming the
+  resource without a `moved` block): the VMs fall back to the policy until the next apply writes their leases
+  again. Leases set outside this configuration, with the PCD UI's Customize Lease for example, are not written
+  again. mors itself accepts any duration and any action, so the provider checks both at plan time. A policy
+  applies in the provider's region. Import with the project ID.
 - **`pcd_compute_instance_lease`**, one VM's own lease in mors, in place of its project's policy, as the PCD
   UI's Customize Lease sets it. `expiry` is a UTC time written like `2026-12-31T23:59:59Z`, the only form mors
   accepts, and may be at most one policy period from the apply: mors takes a later one when the lease is
-  created but then refuses every change to it. Before writing, the provider checks with Nova that the VM
-  belongs to the project, which mors does not, and refuses a project without a lease policy, where mors would
-  never act on the lease. Destroying the lease returns the VM to the project's policy, counted from the VM's
-  creation, so a VM older than the policy is then powered off or deleted within about a minute. Import with
-  `<project_id>/<instance_id>`.
+  created but then refuses every update that leaves the expiry beyond one policy period. Before creating the
+  lease, the provider checks with Nova that the VM belongs to the project, which mors does not, and refuses a
+  project without a lease policy, where mors would never act on the lease. The policy therefore exists before
+  the lease does, so a VM already older than the policy has no lease for a moment and mors may act on it first:
+  to protect such a VM, apply the policy with a duration longer than the VM's age, add the lease, and shorten
+  the policy in a later apply. Destroying the lease returns the VM to the project's policy, counted from the
+  VM's creation, so a VM older than the policy is then powered off or deleted within about a minute. Import
+  with `<project_id>/<instance_id>`.
 
 ## [0.1.21] - 2026-11-13
 

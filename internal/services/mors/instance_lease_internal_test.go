@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -189,8 +190,9 @@ func TestInstanceLeaseCreateRefusesAnotherProjectsVM(t *testing.T) {
 	planned := plannedLease(types.StringValue("proj-2"), expiryIn(time.Hour), "power off")
 	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: nullValue(ctx, s)}}
 	r.Create(ctx, resource.CreateRequest{Plan: planOf(ctx, t, s, &planned)}, &resp)
-	if !resp.Diagnostics.HasError() || !strings.Contains(resp.Diagnostics[0].Detail(), "belongs to project proj-1") {
-		t.Fatalf("diagnostics = %v, want the project mismatch refused", resp.Diagnostics)
+	if !resp.Diagnostics.HasError() || !strings.Contains(resp.Diagnostics[0].Detail(), "belongs to project proj-1, not proj-2") ||
+		!strings.HasSuffix(resp.Diagnostics[0].Detail(), "Set project_id to the VM's project, or omit it.") {
+		t.Fatalf("diagnostics = %v, want the project mismatch refused with what to do", resp.Diagnostics)
 	}
 	if got := f.keys(); !reflect.DeepEqual(got, []string{"GET /servers/vm-1"}) {
 		t.Fatalf("requests = %v; mors must not be called", got)
@@ -407,5 +409,218 @@ func TestInstanceLeaseSchemaValidators(t *testing.T) {
 	}
 	if !stringValidatorErrors(ctx, s.Attributes["action"].(schema.StringAttribute), types.StringValue("shutdown")) {
 		t.Error("action shutdown passed validation")
+	}
+}
+
+// A lease changed through the PCD UI's Customize Lease must show as drift:
+// Read stores what mors holds, not the prior state.
+func TestInstanceLeaseReadReportsDrift(t *testing.T) {
+	ctx := context.Background()
+	prior, changed := expiryIn(time.Hour), expiryIn(3*time.Hour)
+	f := newFakeMors(t, map[string][]fakeReply{
+		"GET /v1/tenant/proj-1/instance/vm-1": {{http.StatusOK, leaseBody("proj-1", changed, "delete")}},
+	})
+	r := &instanceLeaseResource{config: f.config()}
+	s := instanceLeaseSchema(t)
+	row := instanceLeaseModel{ID: types.StringValue("proj-1/vm-1"), InstanceID: types.StringValue("vm-1"),
+		ProjectID: types.StringValue("proj-1"), Expiry: types.StringValue(prior), Action: types.StringValue("power off")}
+	resp := resource.ReadResponse{State: stateOf(ctx, t, s, &row)}
+	r.Read(ctx, resource.ReadRequest{State: stateOf(ctx, t, s, &row)}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("read: %v", resp.Diagnostics)
+	}
+	var got instanceLeaseModel
+	resp.State.Get(ctx, &got)
+	if got.Expiry.ValueString() != changed || got.Action.ValueString() != "delete" {
+		t.Fatalf("read expiry=%s action=%s, want mors's %s and delete", got.Expiry, got.Action, changed)
+	}
+}
+
+// A 404 on DELETE means there is nothing left to delete: destroy must succeed.
+func TestInstanceLeaseDeleteOfALeaseAlreadyGone(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeMors(t, map[string][]fakeReply{
+		"DELETE /v1/tenant/proj-1/instance/vm-1": {{http.StatusNotFound, `{"error": "Not found"}`}},
+	})
+	r := &instanceLeaseResource{config: f.config()}
+	s := instanceLeaseSchema(t)
+	row := instanceLeaseModel{ID: types.StringValue("proj-1/vm-1"), InstanceID: types.StringValue("vm-1"),
+		ProjectID: types.StringValue("proj-1"), Expiry: types.StringValue(expiryIn(time.Hour)), Action: types.StringValue("power off")}
+	resp := resource.DeleteResponse{State: stateOf(ctx, t, s, &row)}
+	r.Delete(ctx, resource.DeleteRequest{State: stateOf(ctx, t, s, &row)}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("delete of a lease already gone: %v", resp.Diagnostics)
+	}
+	if got := f.keys(); !reflect.DeepEqual(got, []string{"DELETE /v1/tenant/proj-1/instance/vm-1"}) {
+		t.Fatalf("requests = %v", got)
+	}
+}
+
+// A VM that already has a lease (set in the PCD UI, or by an apply whose
+// answer was lost) makes mors answer 409. The user needs the import command.
+func TestInstanceLeaseCreateNamesTheImport(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeMors(t, map[string][]fakeReply{
+		"GET /servers/vm-1":                    {{http.StatusOK, novaServer("proj-1")}},
+		"GET /v1/tenant/proj-1":                {{http.StatusOK, policyOfMinutes(525600)}},
+		"POST /v1/tenant/proj-1/instance/vm-1": {{http.StatusConflict, `{"error": "Already exists"}`}},
+	})
+	r := &instanceLeaseResource{config: f.config()}
+	s := instanceLeaseSchema(t)
+	planned := plannedLease(types.StringValue("proj-1"), expiryIn(time.Hour), "power off")
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: nullValue(ctx, s)}}
+	r.Create(ctx, resource.CreateRequest{Plan: planOf(ctx, t, s, &planned)}, &resp)
+	if !resp.Diagnostics.HasError() || !strings.Contains(resp.Diagnostics[0].Detail(), "terraform import") ||
+		!strings.Contains(resp.Diagnostics[0].Detail(), "proj-1/vm-1") {
+		t.Fatalf("diagnostics = %v, want an error that says to import proj-1/vm-1", resp.Diagnostics)
+	}
+	if !resp.State.Raw.IsNull() {
+		t.Fatal("a refused create left state behind")
+	}
+}
+
+// diagPath returns the attribute path of d, or "" when it has none.
+func diagPath(d diag.Diagnostic) string {
+	if wp, ok := d.(diag.DiagnosticWithPath); ok {
+		return wp.Path().String()
+	}
+	return ""
+}
+
+// Nova's 404 means the VM does not exist or is not visible: the error belongs
+// on instance_id, where the user fixes it.
+func TestInstanceLeaseCreateOfAnInstanceNovaDoesNotHave(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeMors(t, map[string][]fakeReply{
+		"GET /servers/vm-1": {{http.StatusNotFound, `{"itemNotFound": {"code": 404, "message": "Instance vm-1 could not be found."}}`}},
+	})
+	r := &instanceLeaseResource{config: f.config()}
+	s := instanceLeaseSchema(t)
+	planned := plannedLease(types.StringUnknown(), expiryIn(time.Hour), "power off")
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: nullValue(ctx, s)}}
+	r.Create(ctx, resource.CreateRequest{Plan: planOf(ctx, t, s, &planned)}, &resp)
+	if !resp.Diagnostics.HasError() || diagPath(resp.Diagnostics[0]) != "instance_id" {
+		t.Fatalf("diagnostics = %v, want an error on instance_id", resp.Diagnostics)
+	}
+	if got := f.keys(); !reflect.DeepEqual(got, []string{"GET /servers/vm-1"}) {
+		t.Fatalf("requests = %v; mors must not be called", got)
+	}
+}
+
+// A Nova answer for another server proves nothing about instance_id's owner.
+func TestInstanceLeaseCreateRefusesAnAnswerForAnotherServer(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeMors(t, map[string][]fakeReply{
+		"GET /servers/vm-1": {{http.StatusOK, `{"server": {"id": "vm-2", "status": "ACTIVE", "tenant_id": "proj-1"}}`}},
+	})
+	r := &instanceLeaseResource{config: f.config()}
+	s := instanceLeaseSchema(t)
+	planned := plannedLease(types.StringUnknown(), expiryIn(time.Hour), "power off")
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: nullValue(ctx, s)}}
+	r.Create(ctx, resource.CreateRequest{Plan: planOf(ctx, t, s, &planned)}, &resp)
+	if !resp.Diagnostics.HasError() || !resp.State.Raw.IsNull() || diagPath(resp.Diagnostics[0]) != "instance_id" ||
+		!strings.HasSuffix(resp.Diagnostics[0].Detail(), "Set instance_id to the VM's ID as Nova returns it (vm-2).") {
+		t.Fatalf("create: diags %v, state null %v; want an error on instance_id naming Nova's ID, and no state",
+			resp.Diagnostics, resp.State.Raw.IsNull())
+	}
+	if got := f.keys(); !reflect.DeepEqual(got, []string{"GET /servers/vm-1"}) {
+		t.Fatalf("requests = %v; mors must not be called", got)
+	}
+}
+
+// Update's read-back is what proves a PUT landed. A 200 that holds no lease
+// proves nothing: it must fail the update and keep the prior state.
+func TestInstanceLeaseUpdateReadBackWithoutALease(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeMors(t, map[string][]fakeReply{
+		"PUT /v1/tenant/proj-1/instance/vm-1": {{http.StatusOK, `{"success": true}`}},
+		"GET /v1/tenant/proj-1/instance/vm-1": {{http.StatusOK, `{}`}},
+	})
+	r := &instanceLeaseResource{config: f.config()}
+	s := instanceLeaseSchema(t)
+	first := expiryIn(time.Hour)
+	prior := instanceLeaseModel{ID: types.StringValue("proj-1/vm-1"), InstanceID: types.StringValue("vm-1"),
+		ProjectID: types.StringValue("proj-1"), Expiry: types.StringValue(first), Action: types.StringValue("power off")}
+	planned := prior
+	planned.Expiry = types.StringValue(expiryIn(2 * time.Hour))
+	resp := resource.UpdateResponse{State: stateOf(ctx, t, s, &prior)}
+	r.Update(ctx, resource.UpdateRequest{Plan: planOf(ctx, t, s, &planned), State: stateOf(ctx, t, s, &prior)}, &resp)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("update accepted a read-back without a lease")
+	}
+	var kept instanceLeaseModel
+	resp.State.Get(ctx, &kept)
+	if kept.Expiry.ValueString() != first {
+		t.Fatalf("state expiry = %s; want the prior %s kept", kept.Expiry, first)
+	}
+}
+
+// Every request is refused for a malformed project_id or instance_id, and
+// none reaches Nova or mors (the fake fails the test on any). Delete has
+// nothing it could delete.
+func TestInstanceLeaseRefusesMalformedIDs(t *testing.T) {
+	ctx := context.Background()
+	s := instanceLeaseSchema(t)
+	type ids struct{ project, instance string }
+	var cases []ids
+	for _, bad := range badIDs {
+		cases = append(cases, ids{bad, "vm-1"}, ids{"proj-1", bad})
+	}
+	for _, tc := range cases {
+		t.Run(tc.project+"|"+tc.instance, func(t *testing.T) {
+			f := newFakeMors(t, map[string][]fakeReply{})
+			r := &instanceLeaseResource{config: f.config()}
+			row := instanceLeaseModel{ID: types.StringValue(tc.project + "/" + tc.instance), InstanceID: types.StringValue(tc.instance),
+				ProjectID: types.StringValue(tc.project), Expiry: types.StringValue(expiryIn(time.Hour)), Action: types.StringValue("power off")}
+
+			planned := row
+			planned.ID = types.StringUnknown()
+			createResp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: nullValue(ctx, s)}}
+			r.Create(ctx, resource.CreateRequest{Plan: planOf(ctx, t, s, &planned)}, &createResp)
+			if !createResp.Diagnostics.HasError() || !createResp.State.Raw.IsNull() {
+				t.Errorf("create: diags %v, state null %v; want an error and no state", createResp.Diagnostics, createResp.State.Raw.IsNull())
+			}
+			readResp := resource.ReadResponse{State: stateOf(ctx, t, s, &row)}
+			r.Read(ctx, resource.ReadRequest{State: stateOf(ctx, t, s, &row)}, &readResp)
+			if !readResp.Diagnostics.HasError() {
+				t.Error("read: no error")
+			}
+			updateResp := resource.UpdateResponse{State: stateOf(ctx, t, s, &row)}
+			r.Update(ctx, resource.UpdateRequest{Plan: planOf(ctx, t, s, &row), State: stateOf(ctx, t, s, &row)}, &updateResp)
+			if !updateResp.Diagnostics.HasError() {
+				t.Error("update: no error")
+			}
+			deleteResp := resource.DeleteResponse{State: stateOf(ctx, t, s, &row)}
+			r.Delete(ctx, resource.DeleteRequest{State: stateOf(ctx, t, s, &row)}, &deleteResp)
+			if deleteResp.Diagnostics.HasError() {
+				t.Errorf("delete: %v", deleteResp.Diagnostics)
+			}
+			if got := f.keys(); len(got) != 0 {
+				t.Errorf("requests = %v; project_id %q, instance_id %q must not reach Nova or mors", got, tc.project, tc.instance)
+			}
+		})
+	}
+	for _, attr := range []string{"project_id", "instance_id"} {
+		a := s.Attributes[attr].(schema.StringAttribute)
+		for _, bad := range badIDs {
+			if !stringValidatorErrors(ctx, a, types.StringValue(bad)) {
+				t.Errorf("%s %q passed the schema's validators", attr, bad)
+			}
+		}
+		if stringValidatorErrors(ctx, a, types.StringValue("0123abcdef_-XYZ")) {
+			t.Errorf("a well-formed %s failed the schema's validators", attr)
+		}
+	}
+}
+
+func TestInstanceLeaseImportRefusesMalformedIDs(t *testing.T) {
+	ctx := context.Background()
+	s := instanceLeaseSchema(t)
+	for _, id := range []string{"proj/a/b", "proj-1/vm?x", "p#1/vm-1", "proj-1/vm 1", "proj-1/vm-1/"} {
+		resp := resource.ImportStateResponse{State: tfsdk.State{Schema: s, Raw: nullValue(ctx, s)}}
+		(&instanceLeaseResource{}).ImportState(ctx, resource.ImportStateRequest{ID: id}, &resp)
+		if !resp.Diagnostics.HasError() || !resp.State.Raw.IsNull() {
+			t.Errorf("import id %q: diags %v, state null %v; want an error and no state", id, resp.Diagnostics, resp.State.Raw.IsNull())
+		}
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
+	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
 	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/tokens"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
@@ -35,11 +36,44 @@ func testAccProviderProjectID(t *testing.T) string {
 	return project.ID
 }
 
+// testAccSharedPolicyMargin is how much younger than the test's one-year
+// policy every server in the provider's project must be: 365 days minus a
+// 30-day margin.
+const testAccSharedPolicyMargin = 335 * 24 * time.Hour
+
+// testAccSkipUnlessServersAreYoung skips the test unless every server in the
+// provider's project was created less than testAccSharedPolicyMargin ago, so
+// the test's one-year power-off policy acts on none of them. Nova lists the
+// servers of the token's project.
+func testAccSkipUnlessServersAreYoung(t *testing.T) {
+	t.Helper()
+	compute, err := acctest.LabConfig(t).ComputeV2Client()
+	if err != nil {
+		t.Fatalf("compute client: %v", err)
+	}
+	pages, err := servers.List(compute, servers.ListOpts{}).AllPages(context.Background())
+	if err != nil {
+		t.Fatalf("listing the provider project's servers: %v", err)
+	}
+	all, err := servers.ExtractServers(pages)
+	if err != nil {
+		t.Fatalf("reading the provider project's servers: %v", err)
+	}
+	cutoff := time.Now().Add(-testAccSharedPolicyMargin)
+	for _, s := range all {
+		if s.Created.Before(cutoff) {
+			t.Skipf("server %s (%s) in the provider's project was created %s, 335 days ago or more; skipping: "+
+				"this test's one-year power-off policy could power it off", s.ID, s.Name, s.Created.UTC().Format(time.RFC3339))
+		}
+	}
+}
+
 // TestAccComputeInstanceLease_basic needs a VM, and pcd_compute_instance boots
 // into the provider's own project, so the test puts a lease policy on that
 // shared project: one year, power off, so no VM younger than a year is
-// touched. Any VM in the project older than a year would be powered off. It
-// runs only with PCD_ACC_MORS_SHARED_PROJECT=1 as well as PCD_ACC_MORS, and
+// touched. Any VM in the project older than a year would be powered off, so
+// the test skips unless every server in the project is younger than 335 days.
+// It runs only with PCD_ACC_MORS_SHARED_PROJECT=1 as well as PCD_ACC_MORS, and
 // skips when the project already has a policy, which it would otherwise
 // replace and then delete. The VM boots on m1.small, so PCD_ACC_IMAGE_NAME
 // must name an image whose virtual size fits a 20 GB disk.
@@ -67,6 +101,7 @@ func TestAccComputeInstanceLease_basic(t *testing.T) {
 			if !gophercloud.ResponseCodeIs(err, http.StatusNotFound) {
 				t.Fatalf("checking for an existing lease policy: %v", err)
 			}
+			testAccSkipUnlessServersAreYoung(t)
 		},
 		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
 		CheckDestroy:             resource.ComposeAggregateTestCheckFunc(testAccCheckInstanceLeaseDestroy(t), testAccCheckLeasePolicyDestroy(t)),

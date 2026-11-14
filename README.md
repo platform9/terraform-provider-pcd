@@ -12,9 +12,9 @@ cluster blueprints and host configuration/roles via the Platform9 `resmgr` API**
 ## PCD-native resources
 
 These are the value-add over [`terraform-provider-openstack`](https://github.com/terraform-provider-openstack/terraform-provider-openstack):
-they manage Platform9's own control plane (the `resmgr` service), so you can declare a
-PCD region's cluster topology and host onboarding as code — something no OpenStack provider
-can do.
+they manage Platform9's own control plane (the `resmgr` service) and mors, PCD's VM lease
+service, so you can declare a PCD region's cluster topology, host onboarding and VM leases as
+code — something no OpenStack provider can do.
 
 | Resource | What it manages |
 |---|---|
