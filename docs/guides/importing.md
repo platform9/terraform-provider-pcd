@@ -185,6 +185,7 @@ ID alone.
 | `pcd_identity_inherit_role_assignment` | `<domain_id>/<project_id>/<group_id>/<user_id>/<role_id>` | `pcdctl role assignment list --names --inherited`, then resolve each name as for `pcd_identity_role_assignment` |
 | `pcd_identity_user_mfa` | `<user_id>` | `pcdctl user list` |
 | `pcd_identity_application_credential` | `<id>` | `pcdctl application credential list` |
+| `pcd_identity_federation_mapping` | `<name>` | `pcdctl mapping list` |
 
 ### Load balancer
 

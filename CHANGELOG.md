@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`pcd_identity_federation_mapping`**, a Keystone federation mapping: the rules that turn the attributes a
+  SAML identity provider asserts into a user name, an email address and a group. `rules` is the rule list as
+  JSON, sent exactly as written so every part of Keystone's mapping language survives, and compared by content,
+  so a hand-formatted value does not show a change on every plan. The resource owns the whole rule list:
+  editing SAML groups in the PCD UI rewrites the same mapping, and the next apply reverts it. Keystone's
+  `schema_version` for the mapping is left at Keystone's default. Import with the mapping name.
+
 ## [0.1.21] - 2026-11-13
 
 ### Added
