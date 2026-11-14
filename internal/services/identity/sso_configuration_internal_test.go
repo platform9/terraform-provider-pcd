@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -43,14 +44,21 @@ func fastSSOWait(t *testing.T) {
 // releases answer, a 500 "no sso entry for domain" (absent404 makes it the
 // older 404), and DELETE answers hagrid's 500. keystoneDown makes the next N
 // Keystone checks answer 503, as during the restart a write triggers.
+// refusePost makes POST answer hagrid's 500 for a metadata URL it cannot
+// download, answerOverride replaces keys of the GET answer with hagrid's own
+// rendering of them, and goneOnDelete clears the configuration just before a DELETE,
+// as when someone deletes it in the PCD UI between the read and the delete.
 type hagridFake struct {
-	t            *testing.T
-	srv          *httptest.Server
-	mu           sync.Mutex
-	stored       map[string]any
-	absent404    bool
-	keystoneDown int
-	calls        []string
+	t              *testing.T
+	srv            *httptest.Server
+	mu             sync.Mutex
+	stored         map[string]any
+	absent404      bool
+	keystoneDown   int
+	refusePost     bool
+	answerOverride map[string]any
+	goneOnDelete   bool
+	calls          []string
 }
 
 func newHagridFake(t *testing.T) *hagridFake {
@@ -76,6 +84,11 @@ func (f *hagridFake) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Fprint(w, `{"version": {"id": "v3.14", "status": "stable"}}`)
 	case "POST /hagrid/ssoconfig":
+		if f.refusePost {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"error": "failed to setup SSO", "msg": "Incorrect metadata url"}`)
+			return
+		}
 		raw, _ := io.ReadAll(r.Body)
 		if err := json.Unmarshal(raw, &f.stored); err != nil {
 			f.t.Errorf("POST body is not JSON: %s", raw)
@@ -96,9 +109,15 @@ func (f *hagridFake) serve(w http.ResponseWriter, r *http.Request) {
 		for k, v := range f.stored {
 			out[k] = v
 		}
+		for k, v := range f.answerOverride {
+			out[k] = v
+		}
 		b, _ := json.Marshal(out)
 		fmt.Fprint(w, string(b))
 	case "DELETE /hagrid/ssoconfig/tf-acc-sso":
+		if f.goneOnDelete {
+			f.stored = nil
+		}
 		if f.stored == nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprint(w, `{"error": "failed to delete SSO config", "msg": "Error, ssoenabled not found"`)
@@ -353,6 +372,47 @@ func TestWaitForSSOServicesGivesUp(t *testing.T) {
 	err := waitForSSOServices(context.Background(), identity, hagrid, "tf-acc-sso")
 	if err == nil || !strings.Contains(err.Error(), "did not come back") {
 		t.Fatalf("err = %v, want the deadline reported", err)
+	}
+	// The error names the identity provider and what the last check found.
+	for _, want := range []string{"for tf-acc-sso.", "Last check: keystone: ", "503"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want it to contain %q", err, want)
+		}
+	}
+}
+
+// The provider's HTTP client has no timeout, so a Keystone that accepts a
+// check and never answers must not hold the wait past its deadline: each
+// check is bounded on its own.
+func TestWaitForSSOServicesBoundsEachCheck(t *testing.T) {
+	fastSSOWait(t)
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-done:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(done) }) // runs first, so Close does not wait on a hung handler
+	provider := &gophercloud.ProviderClient{HTTPClient: http.Client{Transport: &http.Transport{}}}
+	identity := &gophercloud.ServiceClient{ProviderClient: provider, Endpoint: srv.URL + "/v3/"}
+	hagrid := &gophercloud.ServiceClient{ProviderClient: provider, Endpoint: srv.URL + "/hagrid/"}
+
+	bound := ssoRestartInitialDelay + ssoRestartTimeout + ssoRestartCheckTimeout + time.Second
+	result := make(chan error, 1)
+	start := time.Now()
+	go func() { result <- waitForSSOServices(context.Background(), identity, hagrid, "tf-acc-sso") }()
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "did not come back") || !strings.Contains(err.Error(), "context deadline exceeded") {
+			t.Fatalf("err = %v, want the deadline reported with the timed-out check", err)
+		}
+		if elapsed := time.Since(start); elapsed > bound {
+			t.Fatalf("the wait took %s, more than its deadline plus one check's bound (%s)", elapsed, bound)
+		}
+	case <-time.After(bound):
+		t.Fatalf("the wait was still running after %s: a check that never answers holds it past its deadline", bound)
 	}
 }
 
@@ -661,5 +721,186 @@ func TestSSOConfigurationImportRefusesAnEmptyID(t *testing.T) {
 		if n := len(f.calls); n != 0 {
 			t.Fatalf("ID %q: %d request(s) sent: %v", id, n, f.calls)
 		}
+	}
+}
+
+// ssoExpectState compares every attribute of an SSO configuration's state
+// with what hagrid holds on the fake (the PCD UI's values in these tests).
+func ssoExpectState(t *testing.T, f *hagridFake, got ssoConfigurationModel, metadataURL, attributeMap string) {
+	t.Helper()
+	federationExpectAttrs(t, map[string][2]attr.Value{
+		"id":                {got.ID, types.StringValue("tf-acc-sso")},
+		"identity_provider": {got.IdentityProvider, types.StringValue("tf-acc-sso")},
+		"sso_provider":      {got.SSOProvider, types.StringValue("oneLogin")},
+		"entity_id":         {got.EntityID, types.StringValue("https://other.example.com/entity")},
+		"metadata_url":      {got.MetadataURL, types.StringValue(metadataURL)},
+		"attribute_map_xml": {got.AttributeMapXML, types.StringValue(attributeMap)},
+		"login_url":         {got.LoginURL, types.StringValue("/sso/tf-acc-sso/Shibboleth.sso/Login")},
+		"acs_url":           {got.ACSURL, types.StringValue(f.srv.URL + "/sso/tf-acc-sso/Shibboleth.sso/SAML2/POST")},
+		"sp_entity_id":      {got.SPEntityID, types.StringValue(f.srv.URL + "/keystone")},
+	})
+}
+
+// Read copies hagrid's configuration into state: a metadata URL or attribute
+// map changed in the PCD UI shows in the next plan, and an import, whose state
+// holds only the name, gets every attribute (otherwise the next apply would
+// post the configuration again and restart Keystone for nothing).
+func TestSSOConfigurationReadTakesHagridsValues(t *testing.T) {
+	const metadataURL, attributeMap = "https://other.example.com/metadata", `<Attributes><Attribute name="uid" id="uid"/></Attributes>`
+	drift := ssoModel("<Attributes/>")
+	drift.ID = types.StringValue("tf-acc-sso")
+	drift.LoginURL, drift.ACSURL, drift.SPEntityID = types.StringValue("l"), types.StringValue("a"), types.StringValue("e")
+	imported := ssoConfigurationModel{
+		ID: types.StringValue("tf-acc-sso"), IdentityProvider: types.StringValue("tf-acc-sso"),
+		SSOProvider: types.StringNull(), EntityID: types.StringNull(), MetadataURL: types.StringNull(),
+		AttributeMapXML: types.StringNull(), LoginURL: types.StringNull(), ACSURL: types.StringNull(), SPEntityID: types.StringNull(),
+	}
+	for name, prior := range map[string]ssoConfigurationModel{"drift": drift, "import": imported} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newHagridFake(t)
+			f.stored = map[string]any{"domain_name": "tf-acc-sso", "provider": "oneLogin", "entity_id": "https://other.example.com/entity",
+				"metadata_url": metadataURL, "attr_map_xml": attributeMap}
+			r := &ssoConfigurationResource{config: f.config()}
+			s := federationSchemaOf(t, r)
+			resp := resource.ReadResponse{State: federationState(ctx, t, s, &prior)}
+			r.Read(ctx, resource.ReadRequest{State: federationState(ctx, t, s, &prior)}, &resp)
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("read: %v", resp.Diagnostics)
+			}
+			var got ssoConfigurationModel
+			resp.State.Get(ctx, &got)
+			ssoExpectState(t, f, got, metadataURL, attributeMap)
+		})
+	}
+}
+
+// After its wait, Update stores what hagrid reports, not just the plan: the
+// computed values come from hagrid's answer, and so does a configured value
+// that hagrid stores in its own form (here a reformatted attribute map).
+func TestSSOConfigurationUpdateStoresHagridsAnswer(t *testing.T) {
+	fastSSOWait(t)
+	ctx := context.Background()
+	const metadataURL, attributeMap = "https://other.example.com/metadata", `<Attributes><Attribute name="mail" id="mail"/></Attributes>`
+	f := newHagridFake(t)
+	f.stored = map[string]any{"domain_name": "tf-acc-sso", "provider": "oneLogin", "entity_id": "https://other.example.com/entity",
+		"metadata_url": metadataURL, "attr_map_xml": "<Attributes/>"}
+	r := &ssoConfigurationResource{config: f.config()}
+	s := federationSchemaOf(t, r)
+	prior := ssoModel("<Attributes/>")
+	prior.ID, prior.SSOProvider = types.StringValue("tf-acc-sso"), types.StringValue("oneLogin")
+	prior.EntityID, prior.MetadataURL = types.StringValue("https://other.example.com/entity"), types.StringValue(metadataURL)
+	prior.LoginURL, prior.ACSURL, prior.SPEntityID = types.StringValue("l"), types.StringValue("a"), types.StringValue("e")
+	planned := prior
+	planned.AttributeMapXML = types.StringValue(attributeMap)
+	const hagridsAttributeMap = "<Attributes>\n  <Attribute name=\"mail\" id=\"mail\"/>\n</Attributes>\n"
+	f.answerOverride = map[string]any{"attr_map_xml": hagridsAttributeMap}
+	resp := resource.UpdateResponse{State: federationState(ctx, t, s, &prior)}
+	r.Update(ctx, resource.UpdateRequest{Plan: federationPlan(ctx, t, s, &planned), State: federationState(ctx, t, s, &prior)}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("update: %v", resp.Diagnostics)
+	}
+	var got ssoConfigurationModel
+	resp.State.Get(ctx, &got)
+	ssoExpectState(t, f, got, metadataURL, hagridsAttributeMap)
+}
+
+// A read that fails after a wait that passed leaves the configuration saved,
+// recorded and tainted, exactly as a wait that times out does, so the error
+// gives the same untaint hint.
+func TestSSOConfigurationCreateNamesTheUntaintWhenTheReadBackFails(t *testing.T) {
+	fastSSOWait(t)
+	ctx := context.Background()
+	f := newFederationFake(t, map[string][]federationReply{
+		"GET /v3":                {{http.StatusOK, `{"version": {"id": "v3.14", "status": "stable"}}`}},
+		"POST /hagrid/ssoconfig": {{http.StatusOK, `{}`}},
+		"GET /hagrid/ssoconfig/tf-acc-sso": {
+			{http.StatusInternalServerError, `{"error": "failed to read SSO config", "msg": "no sso entry for domain "tf-acc-sso""}`},
+			{http.StatusOK, `{"domain_name": "tf-acc-sso", "entity_id": "e"}`},
+			{http.StatusOK, `{"domain_name": "tf-acc-sso", "entity_id": "e"}`},
+			{http.StatusInternalServerError, `{"error": "failed to read SSO config", "msg": "Unexpected response code: 500"}`},
+		},
+	})
+	r := &ssoConfigurationResource{config: f.config()}
+	s := federationSchemaOf(t, r)
+	planned := ssoModel("<Attributes/>")
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: federationNull(ctx, s)}}
+	r.Create(ctx, resource.CreateRequest{Plan: federationPlan(ctx, t, s, &planned)}, &resp)
+	if !resp.Diagnostics.HasError() || resp.Diagnostics.Errors()[0].Summary() != "hagrid: reading SSO configuration" ||
+		!strings.HasSuffix(resp.Diagnostics.Errors()[0].Detail(), ssoCreateTaintedHint) {
+		t.Fatalf("diagnostics = %v, want the failed read reported with the untaint hint", resp.Diagnostics)
+	}
+	var got ssoConfigurationModel
+	resp.State.Get(ctx, &got)
+	if resp.State.Raw.IsNull() || got.ID.ValueString() != "tf-acc-sso" {
+		t.Fatalf("state after the failed read: %v; want the configuration recorded", resp.State.Raw)
+	}
+}
+
+// hagrid refuses a configuration whose metadata it cannot download, and then
+// nothing was written and nothing restarts: Create records nothing and Update
+// keeps the prior values, and neither waits.
+func TestSSOConfigurationRefusedWriteRecordsNothingAndDoesNotWait(t *testing.T) {
+	fastSSOWait(t)
+	t.Run("create", func(t *testing.T) {
+		ctx := context.Background()
+		f := newHagridFake(t)
+		f.refusePost = true
+		r := &ssoConfigurationResource{config: f.config()}
+		s := federationSchemaOf(t, r)
+		planned := ssoModel("<Attributes/>")
+		resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: federationNull(ctx, s)}}
+		r.Create(ctx, resource.CreateRequest{Plan: federationPlan(ctx, t, s, &planned)}, &resp)
+		if !resp.Diagnostics.HasError() || !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), "Incorrect metadata url") {
+			t.Fatalf("diagnostics = %v, want hagrid's refusal", resp.Diagnostics)
+		}
+		if !resp.State.Raw.IsNull() || f.count("GET /v3") != 0 {
+			t.Fatalf("state null %v, keystone checks %d; want no state and no wait", resp.State.Raw.IsNull(), f.count("GET /v3"))
+		}
+	})
+	t.Run("update", func(t *testing.T) {
+		ctx := context.Background()
+		f := newHagridFake(t)
+		f.stored = map[string]any{"domain_name": "tf-acc-sso", "provider": "okta", "entity_id": "https://idp.example.com/entity",
+			"metadata_url": "https://idp.example.com/metadata", "attr_map_xml": "<Attributes/>"}
+		f.refusePost = true
+		r := &ssoConfigurationResource{config: f.config()}
+		s := federationSchemaOf(t, r)
+		prior := ssoModel("<Attributes/>")
+		prior.ID = types.StringValue("tf-acc-sso")
+		prior.LoginURL, prior.ACSURL, prior.SPEntityID = types.StringValue("l"), types.StringValue("a"), types.StringValue("e")
+		planned := prior
+		planned.MetadataURL = types.StringValue("https://unreachable.example.com/metadata")
+		resp := resource.UpdateResponse{State: federationState(ctx, t, s, &prior)}
+		r.Update(ctx, resource.UpdateRequest{Plan: federationPlan(ctx, t, s, &planned), State: federationState(ctx, t, s, &prior)}, &resp)
+		if !resp.Diagnostics.HasError() || !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), "Incorrect metadata url") {
+			t.Fatalf("diagnostics = %v, want hagrid's refusal", resp.Diagnostics)
+		}
+		var got ssoConfigurationModel
+		resp.State.Get(ctx, &got)
+		if got != prior || f.count("GET /v3") != 0 {
+			t.Fatalf("state = %+v, keystone checks %d; want the prior state %+v and no wait", got, f.count("GET /v3"), prior)
+		}
+	})
+}
+
+// The configuration was there when Delete looked, but hagrid reports it gone
+// when the DELETE arrives (deleted in the PCD UI in between): the destroy
+// succeeds.
+func TestSSOConfigurationDeleteOfAConfigurationGoneInBetween(t *testing.T) {
+	fastSSOWait(t)
+	ctx := context.Background()
+	f := newHagridFake(t)
+	f.stored = map[string]any{"domain_name": "tf-acc-sso", "entity_id": "e"}
+	f.goneOnDelete = true
+	r := &ssoConfigurationResource{config: f.config()}
+	s := federationSchemaOf(t, r)
+	prior := ssoModel("<Attributes/>")
+	prior.ID = types.StringValue("tf-acc-sso")
+	prior.LoginURL, prior.ACSURL, prior.SPEntityID = types.StringValue("l"), types.StringValue("a"), types.StringValue("e")
+	resp := resource.DeleteResponse{State: federationState(ctx, t, s, &prior)}
+	r.Delete(ctx, resource.DeleteRequest{State: federationState(ctx, t, s, &prior)}, &resp)
+	if resp.Diagnostics.HasError() || f.count("DELETE /hagrid/ssoconfig/tf-acc-sso") != 1 {
+		t.Fatalf("diagnostics = %v, DELETE %d; want one DELETE and no error", resp.Diagnostics, f.count("DELETE /hagrid/ssoconfig/tf-acc-sso"))
 	}
 }

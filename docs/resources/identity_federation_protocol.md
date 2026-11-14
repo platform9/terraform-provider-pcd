@@ -4,19 +4,24 @@ page_title: "pcd_identity_federation_protocol Resource - PCD"
 subcategory: "Identity"
 description: |-
   Manages a Keystone federation protocol: the link between an identity provider and the mapping that turns its assertions into local users and groups. PCD single sign-on signs users in through a protocol named saml2, and no other: without it, sign-in fails even when the identity provider and the SSO configuration are right. The PCD UI creates it when the first SAML group is saved.
+  Keystone deletes an identity provider's protocols when the identity provider is destroyed or replaced. Set identity_provider from the identity provider resource's id, not its name: the id is unknown while the identity provider is being replaced, so Terraform replaces the protocol with it. Destroying or replacing the protocol removes the link to every user who signed in through it as well.
 ---
 
 # pcd_identity_federation_protocol (Resource)
 
 Manages a Keystone federation protocol: the link between an identity provider and the mapping that turns its assertions into local users and groups. PCD single sign-on signs users in through a protocol named `saml2`, and no other: without it, sign-in fails even when the identity provider and the SSO configuration are right. The PCD UI creates it when the first SAML group is saved.
 
+Keystone deletes an identity provider's protocols when the identity provider is destroyed or replaced. Set `identity_provider` from the identity provider resource's `id`, not its `name`: the `id` is unknown while the identity provider is being replaced, so Terraform replaces the protocol with it. Destroying or replacing the protocol removes the link to every user who signed in through it as well.
+
 ## Example Usage
 
 ```terraform
 # PCD signs users in through the identity provider's saml2 protocol, which
-# applies the mapping. In a configuration that also manages them, reference
-# the pcd_identity_federation_identity_provider and
-# pcd_identity_federation_mapping names instead, so they are created first.
+# applies the mapping. In a configuration that also manages them, set
+# identity_provider from the pcd_identity_federation_identity_provider's id
+# (not its name, so that replacing the identity provider, which deletes its
+# protocols, replaces the protocol too) and mapping_id from the
+# pcd_identity_federation_mapping's name, so they are created first.
 resource "pcd_identity_federation_protocol" "saml2" {
   identity_provider = "IDP1"
   name              = "saml2"

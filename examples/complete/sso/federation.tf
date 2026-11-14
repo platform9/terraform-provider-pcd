@@ -24,9 +24,12 @@ resource "pcd_identity_federation_identity_provider" "this" {
   remote_ids = [pcd_identity_sso_configuration.this.entity_id]
 }
 
-# PCD signs users in through the saml2 protocol and no other.
+# PCD signs users in through the saml2 protocol and no other. Keystone deletes
+# an identity provider's protocols with it, so identity_provider takes the
+# identity provider's id, not its name: the id is unknown while the identity
+# provider is replaced, and Terraform then replaces the protocol with it.
 resource "pcd_identity_federation_protocol" "saml2" {
-  identity_provider = pcd_identity_federation_identity_provider.this.name
+  identity_provider = pcd_identity_federation_identity_provider.this.id
   name              = "saml2"
   mapping_id        = pcd_identity_federation_mapping.this.name
 }

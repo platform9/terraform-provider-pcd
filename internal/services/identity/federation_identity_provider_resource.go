@@ -65,13 +65,19 @@ type federationIdentityProviderAnswer struct {
 	IdentityProvider federationIdentityProviderAPI `json:"identity_provider"`
 }
 
-// object returns the identity provider the answer holds. A success answer
-// without it (no object, or one without an ID) is clients.ErrNoObject: read as
-// it is, it would hold domain_id "", which plans a replacement, and destroying
-// an identity provider also deletes its protocols.
-func (a *federationIdentityProviderAnswer) object() (*federationIdentityProviderAPI, error) {
+// object returns the identity provider named name that the answer holds. A
+// success answer without it (no object, or one without an ID) is
+// clients.ErrNoObject: read as it is, it would hold domain_id "", which plans a
+// replacement, and destroying an identity provider also deletes its protocols.
+// An answer for another identity provider is an error too: stored under name,
+// it would bind this resource to that object.
+func (a *federationIdentityProviderAnswer) object(name string) (*federationIdentityProviderAPI, error) {
 	if a.IdentityProvider.ID == "" {
 		return nil, clients.ErrNoObject
+	}
+	if a.IdentityProvider.ID != name {
+		return nil, fmt.Errorf("asked for identity provider %q, Keystone answered with identity provider %q",
+			name, a.IdentityProvider.ID)
 	}
 	return &a.IdentityProvider, nil
 }
@@ -153,8 +159,10 @@ func (r *federationIdentityProviderResource) Schema(_ context.Context, _ resourc
 			"identity provider that has an SSO configuration of the same name), and `remote_ids` must hold its " +
 			"`entity_id`. Referencing the SSO configuration's attributes, as the SSO guide does, keeps the " +
 			"three in step.\n\n" +
-			"Destroying an identity provider also deletes its protocols. Users who signed in through it keep " +
-			"their Keystone shadow users; the provider does not delete them.",
+			"Destroying or replacing an identity provider also deletes its protocols and the link between the " +
+			"identity provider and every user who signed in through it. Those users stay in Keystone without a " +
+			"name, and Keystone refuses their next sign-in through an identity provider created later in the " +
+			"same domain with a conflict until they are deleted. The provider does not delete them.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -231,13 +239,13 @@ func (r *federationIdentityProviderResource) Create(ctx context.Context, req res
 					"one of these remote_ids. If `pcdctl identity provider list` shows %s, import it to manage it "+
 					"here: terraform import <resource address> %s. Otherwise the identity provider that lists the "+
 					"entity ID has another name: remove the entity ID from the other identity provider, or import "+
-					"that one under its own name.", name, name, name))
+					"that one into a resource whose `name` is its name.", name, name, name))
 			return
 		}
 		resp.Diagnostics.AddError("identity: creating federation identity provider", err.Error())
 		return
 	}
-	idp, err := out.object()
+	idp, err := out.object(name)
 	if err != nil {
 		resp.Diagnostics.AddError("identity: creating federation identity provider", err.Error())
 		return
@@ -269,7 +277,7 @@ func (r *federationIdentityProviderResource) Read(ctx context.Context, req resou
 		resp.Diagnostics.AddError("identity: reading federation identity provider", err.Error())
 		return
 	}
-	idp, err := out.object()
+	idp, err := out.object(state.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: reading federation identity provider", err.Error())
 		return
@@ -307,7 +315,7 @@ func (r *federationIdentityProviderResource) Update(ctx context.Context, req res
 		resp.Diagnostics.AddError("identity: updating federation identity provider", err.Error())
 		return
 	}
-	idp, err := out.object()
+	idp, err := out.object(plan.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("identity: updating federation identity provider", err.Error())
 		return
@@ -339,12 +347,14 @@ func (r *federationIdentityProviderResource) Delete(ctx context.Context, req res
 	}
 }
 
-// ImportState takes the identity provider name. An empty ID names no
-// identity provider, so it is refused before anything is read.
+// ImportState takes the identity provider name. An empty ID, or one that is
+// no identity provider name, names no identity provider, so it is refused
+// before anything is read.
 func (r *federationIdentityProviderResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	if req.ID == "" {
-		resp.Diagnostics.AddError("Import needs a federation identity provider ID",
-			"Pass the name of the identity provider to import, which `pcdctl identity provider list` shows.")
+	if !federationNamePattern.MatchString(req.ID) {
+		resp.Diagnostics.AddError("Import needs a federation identity provider ID", fmt.Sprintf(
+			"Pass the name of the identity provider to import, %s, which `pcdctl identity provider list` "+
+				"shows; got %q.", federationNameRule, req.ID))
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)

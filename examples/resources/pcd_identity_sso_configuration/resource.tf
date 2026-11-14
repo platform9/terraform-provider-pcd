@@ -1,5 +1,5 @@
 # PCD's SAML configuration for the default domain's identity provider, IDP1.
-# Saving it restarts Keystone for a minute or two; the resource waits.
+# Saving it restarts Keystone for about half a minute, sometimes longer; the resource waits.
 resource "pcd_identity_sso_configuration" "idp1" {
   identity_provider = "IDP1"
   sso_provider      = "okta"

@@ -39,13 +39,15 @@ All notable changes to this project are documented here. The format is based on
   `schema_version` for the mapping is left at Keystone's default. Import with the mapping name.
 - **`pcd_identity_federation_identity_provider`**, a Keystone identity provider: its domain, its remote IDs
   (the SAML entity IDs it is trusted for), `enabled` (default `true`; Keystone's own default is `false`) and a
-  description. Destroying it also deletes its protocols. Import with the identity provider name.
+  description. Destroying or replacing it also removes its protocols and
+  the link to every user who signed in through it; those users must be deleted before they can sign in through a
+  new identity provider in the same domain. Import with the identity provider name.
 - **`pcd_identity_federation_protocol`**, the protocol that ties an identity provider to a mapping. PCD single
   sign-on uses `saml2`. Import with `<identity_provider>/<name>`.
 - **`pcd_identity_sso_configuration`**, PCD's SAML single sign-on configuration, as the PCD UI's SAML Config
   saves it: the identity provider's entity ID, its metadata URL and the Shibboleth attribute map. Creating,
-  changing or destroying the configuration restarts Keystone's web server and the Shibboleth daemon for a
-  minute or two, which the PCD UI also waits out. The resource waits after every write until Keystone and the
+  changing or destroying the configuration restarts Keystone's web server and the Shibboleth daemon for about
+  half a minute, sometimes longer, which the PCD UI also waits out. The resource waits after every write until Keystone and the
   SSO service answer again, so the resources that depend on it run after the restart. Destroying it does not
   delete users who signed in through it. It refuses to overwrite a configuration that already exists, which
   can be imported instead, and reports PCD's assertion consumer service URL and entity ID for the identity

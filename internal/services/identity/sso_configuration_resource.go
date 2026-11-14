@@ -37,7 +37,7 @@ var (
 // After a hagrid write, PCD rewrites the Shibboleth configuration and restarts
 // Keystone's Apache and shibd. The restart starts within seconds of the write
 // (up to ten seconds on releases that poll for the change), and the outage
-// typically lasts one to two minutes; the PCD UI polls for up to five. These
+// has been measured at about half a minute; the PCD UI polls for up to five. These
 // are vars so unit tests can shorten them.
 var (
 	// ssoRestartInitialDelay lets the restart begin, so the wait never takes
@@ -313,9 +313,9 @@ func (r *ssoConfigurationResource) Schema(_ context.Context, _ resource.SchemaRe
 			"not in Keystone. Single sign-on also needs a `pcd_identity_federation_identity_provider` with the " +
 			"same name, a `pcd_identity_federation_mapping`, and a `saml2` `pcd_identity_federation_protocol`; " +
 			"the SSO guide wires all four.\n\n" +
-			"~> Creating, changing or destroying the configuration restarts Keystone's web server and the " +
-			"Shibboleth daemon: the PCD API, the UI and every Terraform operation against PCD fail for one to two " +
-			"minutes, sometimes up to five. The resource waits after every write until Keystone and hagrid answer " +
+			"~> Creating, changing or destroying the configuration restarts Keystone and the Shibboleth daemon, " +
+			"which makes the PCD API unavailable for about half a minute, sometimes longer (the PCD UI waits up " +
+			"to five minutes). The resource waits after every write until Keystone and hagrid answer " +
 			"again, so resources that depend on it run afterwards; resources that do not depend on it may run " +
 			"during a restart and fail.\n\n" +
 			"hagrid is not in the service catalog. The provider reaches it on the host of the catalog's identity " +
@@ -357,8 +357,9 @@ func (r *ssoConfigurationResource) Schema(_ context.Context, _ resource.SchemaRe
 				Required: true,
 				MarkdownDescription: "The URL of the identity provider's SAML metadata. PCD downloads it when the " +
 					"configuration is saved, from its own network and without verifying the certificate, so it must " +
-					"be reachable from PCD; an unreachable URL fails the apply. Updated in place, which restarts " +
-					"Keystone's web server and the Shibboleth daemon.",
+					"be reachable from PCD; an unreachable URL fails the apply. Anyone who can intercept that " +
+					"download can therefore hand PCD another identity provider's metadata, so use a URL on a network " +
+					"you trust. Updated in place, which restarts Keystone's web server and the Shibboleth daemon.",
 				Validators: required,
 			},
 			"attribute_map_xml": schema.StringAttribute{
@@ -427,21 +428,26 @@ func (r *ssoConfigurationResource) Create(ctx context.Context, req resource.Crea
 	}
 
 	if err := waitForSSOServices(ctx, identity, hagrid, idp); err != nil {
-		resp.Diagnostics.AddError("hagrid: waiting for Keystone to restart", err.Error()+"\n\n"+
-			"The SSO configuration was saved in hagrid, and Terraform records it as tainted. Once PCD answers "+
-			"again, run `terraform untaint <resource address>` and then `terraform apply` to create what "+
-			"depends on it. Without the untaint, the next apply replaces the configuration, which restarts "+
-			"Keystone twice more.")
+		resp.Diagnostics.AddError("hagrid: waiting for Keystone to restart", err.Error()+ssoCreateTaintedHint)
 		return
 	}
 	sso, err := getSSOConfiguration(ctx, hagrid, idp)
 	if err != nil {
-		resp.Diagnostics.AddError("hagrid: reading SSO configuration", ssoRequestError(err))
+		resp.Diagnostics.AddError("hagrid: reading SSO configuration", ssoRequestError(err)+ssoCreateTaintedHint)
 		return
 	}
 	plan.setFromAPI(hagrid, sso)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
+
+// ssoCreateTaintedHint ends every Create error after the configuration was
+// saved and recorded: Terraform taints the row, and replacing it would restart
+// Keystone twice more.
+const ssoCreateTaintedHint = "\n\n" +
+	"The SSO configuration was saved in hagrid, and Terraform records it as tainted. Once PCD answers " +
+	"again, run `terraform untaint <resource address>` and then `terraform apply` to create what " +
+	"depends on it. Without the untaint, the next apply replaces the configuration, which restarts " +
+	"Keystone twice more."
 
 func (r *ssoConfigurationResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state ssoConfigurationModel

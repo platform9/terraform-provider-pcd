@@ -1,5 +1,6 @@
 # PCD's SAML configuration. Saving it restarts Keystone and the Shibboleth
-# daemon for a minute or two; the resource waits until both answer again.
+# daemon for about half a minute, sometimes longer; the resource waits until
+# both answer again.
 resource "pcd_identity_sso_configuration" "this" {
   identity_provider = var.identity_provider
   sso_provider      = var.sso_provider

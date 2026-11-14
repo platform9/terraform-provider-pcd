@@ -56,12 +56,16 @@ type federationProtocolAnswer struct {
 	Protocol federationProtocolAPI `json:"protocol"`
 }
 
-// object returns the protocol the answer holds. A success answer without it
-// (no object, or one without an ID or a mapping) is clients.ErrNoObject: read
-// as it is, it would hold mapping_id "", which plans an update nobody asked for.
-func (a *federationProtocolAnswer) object() (*federationProtocolAPI, error) {
+// object returns the protocol named name that the answer holds. A success
+// answer without it (no object, or one without an ID or a mapping) is
+// clients.ErrNoObject: read as it is, it would hold mapping_id "", which plans
+// an update nobody asked for. An answer for another protocol is an error too.
+func (a *federationProtocolAnswer) object(name string) (*federationProtocolAPI, error) {
 	if a.Protocol.ID == "" || a.Protocol.MappingID == "" {
 		return nil, clients.ErrNoObject
+	}
+	if a.Protocol.ID != name {
+		return nil, fmt.Errorf("asked for protocol %q, Keystone answered with protocol %q", name, a.Protocol.ID)
 	}
 	return &a.Protocol, nil
 }
@@ -89,7 +93,12 @@ func (r *federationProtocolResource) Schema(_ context.Context, _ resource.Schema
 			"the mapping that turns its assertions into local users and groups. PCD single sign-on signs users " +
 			"in through a protocol named `saml2`, and no other: without it, sign-in fails even when the identity " +
 			"provider and the SSO configuration are right. The PCD UI creates it when the first SAML group is " +
-			"saved.",
+			"saved.\n\n" +
+			"Keystone deletes an identity provider's protocols when the identity provider is destroyed or " +
+			"replaced. Set `identity_provider` from the identity provider resource's `id`, not its `name`: the " +
+			"`id` is unknown while the identity provider is being replaced, so Terraform replaces the protocol " +
+			"with it. Destroying or replacing the protocol removes the link to every user who signed in through " +
+			"it as well.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -178,7 +187,7 @@ func (r *federationProtocolResource) Read(ctx context.Context, req resource.Read
 		resp.Diagnostics.AddError("identity: reading federation protocol", err.Error())
 		return
 	}
-	protocol, err := out.object()
+	protocol, err := out.object(name)
 	if err != nil {
 		resp.Diagnostics.AddError("identity: reading federation protocol", err.Error())
 		return

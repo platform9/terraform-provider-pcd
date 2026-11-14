@@ -11,7 +11,9 @@ PCD signs users in through a SAML identity provider such as Okta, OneLogin,
 Google Workspace or Microsoft Entra ID. In the PCD UI this is the Single
 Sign-On page: **SAML Config** on one tab, **SAML Groups** on the other. Behind
 them are five kinds of object, and this guide builds all of them with the files
-under `examples/complete/sso/`:
+in the provider repository under
+[`examples/complete/sso/`](https://github.com/platform9/terraform-provider-pcd/tree/main/examples/complete/sso),
+whose `variables.tf` lists what to set, with the defaults:
 
 - **The SSO configuration** (`pcd_identity_sso_configuration`): the identity
   provider's entity ID, its metadata URL, and the attribute map. PCD keeps it
@@ -56,6 +58,10 @@ cannot sign in.
 The example takes the identity provider's name and remote IDs from the SSO
 configuration's attributes, so the first two cannot drift apart. It names the
 mapping `<identity provider, in lowercase>_mapping`, as the PCD UI does.
+The protocol takes the identity provider resource's `id`, not its `name`:
+Keystone deletes an identity provider's protocols when the identity provider is
+destroyed or replaced, and the `id` is unknown while it is being replaced, so
+Terraform replaces the protocol with it.
 
 ## Register PCD with the identity provider
 
@@ -112,9 +118,10 @@ configured rules back.
 ## The restart
 
 Creating, changing or deleting the SSO configuration restarts Keystone's web
-server and the Shibboleth daemon. The restart starts within seconds and usually
-lasts one to two minutes, sometimes up to five. In that time the PCD API and UI
-do not answer, and every Terraform operation against PCD fails.
+server and the Shibboleth daemon. The restart begins a few seconds after the
+write and usually lasts about half a minute; allow for longer on a busy
+deployment (the PCD UI waits up to five minutes). In that time the PCD API and
+UI do not answer, and every Terraform operation against PCD fails.
 
 `pcd_identity_sso_configuration` waits it out: after every write it waits 30
 seconds, then checks every 10 seconds until Keystone and the SSO service answer
@@ -125,7 +132,8 @@ Keystone itself does not need the identity provider, the mapping or the
 protocol to wait for the SSO configuration; the example orders them after it
 only to keep them out of the restart. Do not run other Terraform applies, or
 anything else, against PCD while one that changes the SSO configuration is
-running.
+running. Manage one SSO configuration per configuration, or chain several with
+`depends_on`, so that their writes and restarts run one after another.
 
 Each change to `sso_provider`, `entity_id`, `metadata_url` or
 `attribute_map_xml` is one in-place update and one restart, however many of the
@@ -174,8 +182,9 @@ IP address does not work.
 An SSO setup made in the PCD UI already has all five kinds of object. Write the
 configuration, then import each object instead of creating it. Creating the SSO
 configuration, the identity provider, the mapping or the protocol when PCD
-already has one by that name fails with a `terraform import` hint rather than
-overwriting it.
+already has one by that name or, for the identity provider, when another
+identity provider already lists the same entity ID fails with a
+`terraform import` hint rather than overwriting it.
 
 ```shell
 terraform import pcd_identity_sso_configuration.this IDP1
@@ -198,13 +207,21 @@ rules are the usual one.
 
 ## Remove single sign-on
 
-`terraform destroy` removes the objects in the reverse of the order they were
-created: the protocol and the role assignment first, then the identity provider
-and the mapping, then the group, and the SSO configuration last, which restarts
-Keystone once more. Users who signed in through the identity provider stay in
-Keystone as federated users; the PCD UI's Disable SSO deletes them, Terraform
-does not. Find them with `pcdctl user list --domain default` and delete those
-you no longer want with `pcdctl user delete`.
+`terraform destroy` removes the objects in an order that follows their
+references: the protocol before the identity provider and the mapping, the
+mapping and the role assignment before the group, and the SSO configuration
+last, which restarts Keystone once more.
+
+Destroying the identity provider or its protocol, or replacing either, deletes
+the link between the identity provider and every user who signed in through
+it. The users themselves stay in Keystone, without a name. If single sign-on is
+set up again in the same domain, Keystone answers such a user's next sign-in
+with a conflict until the leftover user is deleted. So before you destroy or
+replace the identity provider or the protocol, list the users of the identity
+provider's domain and note the IDs of the ones who signed in through single
+sign-on (`pcdctl user list --domain <domain>`), and delete those users
+afterward (`pcdctl user delete <id>`). The PCD UI's Disable SSO deletes them
+for you; Terraform does not.
 
 Keystone does not check whether a protocol still uses a mapping before it
 deletes the mapping. Destroying a mapping that another protocol names breaks

@@ -30,7 +30,9 @@ func testAccSSOGate(t *testing.T) {
 }
 
 // TestAccIdentityFederation_basic creates a mapping, an identity provider and
-// its saml2 protocol, changes all three in place, and imports them. The names
+// its saml2 protocol, changes all three in place, replaces the identity
+// provider (which deletes its protocols in Keystone) and checks that the
+// protocol is created again with it, and imports them. The names
 // are its own (never IDP1 or idp1_mapping), so a real SSO setup is untouched,
 // and nothing here talks to hagrid or restarts Keystone.
 func TestAccIdentityFederation_basic(t *testing.T) {
@@ -69,6 +71,14 @@ func TestAccIdentityFederation_basic(t *testing.T) {
 					resource.TestCheckTypeSetElemAttr(idp, "remote_ids.*", "https://tf-acc.example.com/idp-2"),
 					resource.TestCheckResourceAttr(protocol, "mapping_id", "tf-acc-map-2"),
 				),
+			},
+			{
+				// Keystone deletes the protocol with the identity provider; the
+				// protocol takes the identity provider's id, which is unknown
+				// during the replacement, so it is replaced too.
+				Config: testAccFederationConfig(true, "https://tf-acc.example.com/idp-2", false, "second", "second"),
+				Taint:  []string{idp},
+				Check:  testAccCheckProtocolExists(t, "tf-acc-idp", "saml2", "tf-acc-map-2"),
 			},
 			{ResourceName: mapping, ImportState: true, ImportStateVerify: true},
 			{ResourceName: idp, ImportState: true, ImportStateVerify: true},
@@ -115,7 +125,7 @@ resource "pcd_identity_federation_identity_provider" "test" {
 }
 
 resource "pcd_identity_federation_protocol" "test" {
-  identity_provider = pcd_identity_federation_identity_provider.test.name
+  identity_provider = pcd_identity_federation_identity_provider.test.id
   name              = "saml2"
   mapping_id        = pcd_identity_federation_mapping.%s.name
 }
@@ -130,6 +140,30 @@ func testAccCheckMappingExists(t *testing.T, name string) resource.TestCheckFunc
 		}
 		if err := federation.GetMapping(context.Background(), client, name).Err; err != nil {
 			return fmt.Errorf("mapping %s not found via API: %w", name, err)
+		}
+		return nil
+	}
+}
+
+// testAccCheckProtocolExists checks out of band that Keystone has the
+// protocol idp/name and that it applies mapping.
+func testAccCheckProtocolExists(t *testing.T, idp, name, mapping string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		client, err := acctest.LabConfig(t).IdentityV3Client()
+		if err != nil {
+			return err
+		}
+		var out struct {
+			Protocol struct {
+				MappingID string `json:"mapping_id"`
+			} `json:"protocol"`
+		}
+		url := client.ServiceURL("OS-FEDERATION", "identity_providers", idp, "protocols", name)
+		if _, err := client.Get(context.Background(), url, &out, nil); err != nil {
+			return fmt.Errorf("protocol %s/%s not found via API: %w", idp, name, err)
+		}
+		if out.Protocol.MappingID != mapping {
+			return fmt.Errorf("protocol %s/%s applies mapping %q, want %q", idp, name, out.Protocol.MappingID, mapping)
 		}
 		return nil
 	}

@@ -80,3 +80,22 @@ func TestHagridClientEndpoint(t *testing.T) {
 		t.Fatalf("with an override: %v, %v; want the override with a trailing slash", client, err)
 	}
 }
+
+// endpoint_overrides.hagrid replaces the catalog lookup even when the catalog
+// has the identity endpoints: those may name a host Terraform cannot reach.
+func TestHagridClientOverrideWinsOverTheCatalog(t *testing.T) {
+	cfg := &Config{
+		Region:            "region-one",
+		EndpointOverrides: map[string]string{"hagrid": "https://sso.example.com/hagrid"},
+		Provider: &gophercloud.ProviderClient{
+			EndpointLocator: func(o gophercloud.EndpointOpts) (string, error) {
+				t.Errorf("the catalog was consulted (%+v) although endpoint_overrides.hagrid is set", o)
+				return "https://" + o.Region + ".example.com/keystone/v3/", nil
+			},
+		},
+	}
+	client, err := cfg.HagridClient()
+	if err != nil || client.Endpoint != "https://sso.example.com/hagrid/" {
+		t.Fatalf("got %v, %v; want the override with a trailing slash", client, err)
+	}
+}

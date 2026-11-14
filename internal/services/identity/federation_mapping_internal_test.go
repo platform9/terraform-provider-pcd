@@ -6,6 +6,7 @@ package identity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/gophercloud/gophercloud/v2"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -173,6 +175,17 @@ func federationStringInvalid(ctx context.Context, attr schema.StringAttribute, v
 	return false
 }
 
+// federationExpectAttrs compares state attributes one by one, so a failure
+// names every attribute that is wrong.
+func federationExpectAttrs(t *testing.T, attrs map[string][2]attr.Value) {
+	t.Helper()
+	for name, gotWant := range attrs {
+		if !gotWant[0].Equal(gotWant[1]) {
+			t.Errorf("%s = %v, want %v", name, gotWant[0], gotWant[1])
+		}
+	}
+}
+
 func federationSchemaOf(t *testing.T, r resource.Resource) schema.Schema {
 	t.Helper()
 	var sch resource.SchemaResponse
@@ -291,8 +304,22 @@ func TestFederationMappingLifecycle(t *testing.T) {
 	if updateResp.Diagnostics.HasError() {
 		t.Fatalf("update: %v", updateResp.Diagnostics)
 	}
+	// The PATCH carries the plan's rules, and state stores them.
+	patched, err := json.Marshal(f.bodyOf("PATCH /v3/OS-FEDERATION/mappings/tf-map")["mapping"].(map[string]any)["rules"])
+	if err != nil || federationCanonicalJSON(patched) != federationCanonicalJSON([]byte(updatedRules)) {
+		t.Fatalf("PATCH rules = %s (%v), want the planned %s", patched, err, updatedRules)
+	}
+	var afterUpdate federationMappingModel
+	updateResp.State.Get(ctx, &afterUpdate)
+	if afterUpdate.Rules.ValueString() != updatedRules || afterUpdate.ID.ValueString() != "tf-map" {
+		t.Fatalf("state after update: id %s, rules %s; want the planned rules", afterUpdate.ID, afterUpdate.Rules)
+	}
 
-	r.Delete(ctx, resource.DeleteRequest{State: updateResp.State}, &resource.DeleteResponse{State: updateResp.State})
+	deleteResp := resource.DeleteResponse{State: updateResp.State}
+	r.Delete(ctx, resource.DeleteRequest{State: updateResp.State}, &deleteResp)
+	if deleteResp.Diagnostics.HasError() {
+		t.Fatalf("delete: %v", deleteResp.Diagnostics)
+	}
 
 	want := []string{
 		"PUT /v3/OS-FEDERATION/mappings/tf-map", "GET /v3/OS-FEDERATION/mappings/tf-map",
@@ -341,8 +368,9 @@ func TestFederationMappingReadAndDeleteOfAMappingThatIsGone(t *testing.T) {
 
 func TestFederationMappingReadOfAnAnswerWithoutTheMapping(t *testing.T) {
 	for name, body := range map[string]string{
-		"no mapping": `{}`,
-		"null rules": `{"mapping": {"id": "tf-map", "rules": null}}`,
+		"no mapping":          `{}`,
+		"null rules":          `{"mapping": {"id": "tf-map", "rules": null}}`,
+		"rules without an id": `{"mapping": {"rules": ` + keystoneRules + `}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
@@ -359,6 +387,13 @@ func TestFederationMappingReadOfAnAnswerWithoutTheMapping(t *testing.T) {
 			if !readResp.Diagnostics.HasError() || got != prior {
 				t.Fatalf("read: diags %v, state %+v; want an error and the prior state unchanged", readResp.Diagnostics, got)
 			}
+			hc, err := f.config().IdentityV3Client()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := federationMappingRules(ctx, hc, "tf-map"); !errors.Is(err, clients.ErrNoObject) {
+				t.Fatalf("federationMappingRules: err = %v, want clients.ErrNoObject", err)
+			}
 		})
 	}
 }
@@ -370,6 +405,9 @@ func TestFederationMappingImportState(t *testing.T) {
 		name, id, wantError string
 	}{
 		{name: "empty", id: "", wantError: "Import needs a federation mapping ID"},
+		{name: "slash", id: "a/b", wantError: "Import needs a federation mapping ID"},
+		{name: "space", id: "a b", wantError: "Import needs a federation mapping ID"},
+		{name: "relative path", id: "../x", wantError: "Import needs a federation mapping ID"},
 		{name: "mapping name", id: "idp1_mapping"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -391,5 +429,67 @@ func TestFederationMappingImportState(t *testing.T) {
 				t.Fatalf("import: errors %v, id %s, name %s", summaries, got.ID, got.Name)
 			}
 		})
+	}
+}
+
+// Read copies Keystone's rules into state: rules edited in the PCD UI show in
+// the next plan, and an import, whose state holds only the name, gets them.
+func TestFederationMappingReadTakesKeystonesRules(t *testing.T) {
+	const otherRules = `[{"local":[{"group":{"id":"g9"}}],"remote":[{"type":"groups","any_one_of":["ui-edit"]}]}]`
+	for name, tc := range map[string]struct {
+		prior     types.String
+		answer    string
+		wantRules string
+	}{
+		"drift":  {types.StringValue(configuredRules), otherRules, federationCanonicalJSON([]byte(otherRules))},
+		"import": {types.StringNull(), keystoneRules, configuredRules},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newFederationFake(t, map[string][]federationReply{
+				"GET /v3/OS-FEDERATION/mappings/tf-map": {{http.StatusOK, mappingBody(tc.answer)}},
+			})
+			r := &federationMappingResource{config: f.config()}
+			s := federationSchemaOf(t, r)
+			prior := federationMappingModel{ID: types.StringValue("tf-map"), Name: types.StringValue("tf-map"), Rules: tc.prior}
+			resp := resource.ReadResponse{State: federationState(ctx, t, s, &prior)}
+			r.Read(ctx, resource.ReadRequest{State: federationState(ctx, t, s, &prior)}, &resp)
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("read: %v", resp.Diagnostics)
+			}
+			var got federationMappingModel
+			resp.State.Get(ctx, &got)
+			federationExpectAttrs(t, map[string][2]attr.Value{
+				"id":    {got.ID, types.StringValue("tf-map")},
+				"name":  {got.Name, types.StringValue("tf-map")},
+				"rules": {got.Rules, types.StringValue(tc.wantRules)},
+			})
+		})
+	}
+}
+
+// An answer for another mapping is refused, naming both, and state is kept.
+func TestFederationMappingReadRefusesAnAnswerForAnotherMapping(t *testing.T) {
+	ctx := context.Background()
+	f := newFederationFake(t, map[string][]federationReply{
+		"GET /v3/OS-FEDERATION/mappings/tf-map": {{http.StatusOK, `{"mapping": {"id": "idp1_mapping", "rules": ` + keystoneRules + `}}`}},
+	})
+	r := &federationMappingResource{config: f.config()}
+	s := federationSchemaOf(t, r)
+	prior := federationMappingModel{ID: types.StringValue("tf-map"), Name: types.StringValue("tf-map"), Rules: types.StringValue(configuredRules)}
+	resp := resource.ReadResponse{State: federationState(ctx, t, s, &prior)}
+	r.Read(ctx, resource.ReadRequest{State: federationState(ctx, t, s, &prior)}, &resp)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("no error for an answer about another mapping")
+	}
+	for _, want := range []string{`"tf-map"`, `"idp1_mapping"`} {
+		if !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), want) {
+			t.Errorf("detail %q does not name %s", resp.Diagnostics.Errors()[0].Detail(), want)
+		}
+	}
+	var got federationMappingModel
+	resp.State.Get(ctx, &got)
+	if got != prior {
+		t.Fatalf("state = %+v\nwant the prior state %+v", got, prior)
 	}
 }

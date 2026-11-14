@@ -19,7 +19,7 @@ on the Terraform Registry; the files here are the ones it renders.
 - The application's metadata URL, reachable from PCD, and its entity ID.
 - An existing project for the group's role.
 - Nothing else working against PCD while you apply: saving the SSO
-  configuration restarts Keystone for a minute or two.
+  configuration restarts Keystone for about half a minute, sometimes longer.
 
 ## Run it
 
@@ -31,7 +31,7 @@ terraform init
 terraform apply
 ```
 
-The apply pauses for a minute or more after the SSO configuration while
+The apply pauses for about a minute after the SSO configuration while
 Keystone restarts, then creates the rest.
 
 ## Confirm it worked
@@ -46,5 +46,9 @@ Keystone restarts, then creates the rest.
 ## Take it down
 
 `terraform destroy` removes everything, the SSO configuration last, which
-restarts Keystone once more. Users who signed in stay in Keystone as federated
-users; delete them with `pcdctl user delete` if you no longer want them.
+restarts Keystone once more. It also deletes the link between the identity
+provider and every user who signed in, and leaves those users in Keystone
+without a name: before the destroy, note their IDs from
+`pcdctl user list --domain default`, and delete them afterward with
+`pcdctl user delete <id>`, or their next sign-in through a new identity
+provider in the same domain fails with a conflict.

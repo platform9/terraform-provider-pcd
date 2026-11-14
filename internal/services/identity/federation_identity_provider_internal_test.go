@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -312,6 +313,9 @@ func TestFederationIdentityProviderImportState(t *testing.T) {
 		name, id, wantError string
 	}{
 		{name: "empty", id: "", wantError: "Import needs a federation identity provider ID"},
+		{name: "slash", id: "a/b", wantError: "Import needs a federation identity provider ID"},
+		{name: "space", id: "a b", wantError: "Import needs a federation identity provider ID"},
+		{name: "relative path", id: "../x", wantError: "Import needs a federation identity provider ID"},
 		{name: "identity provider name", id: "IDP1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -334,4 +338,95 @@ func TestFederationIdentityProviderImportState(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Read copies Keystone's answer into state: drift made outside Terraform shows
+// in the next plan, and an import, whose state holds only the name, gets every
+// attribute filled (a null domain_id would plan a replacement, which deletes
+// the identity provider's protocols).
+func TestFederationIdentityProviderReadTakesKeystonesValues(t *testing.T) {
+	const answer = `{"identity_provider": {"id": "tf-idp", "domain_id": "other-domain", "description": "edited in the UI",
+		"enabled": false, "remote_ids": ["https://other.example.com/entity"], "links": {"self": "x"}}}`
+	imported := federationIdentityProviderModel{
+		ID: types.StringValue("tf-idp"), Name: types.StringValue("tf-idp"), DomainID: types.StringNull(),
+		RemoteIDs: types.SetNull(types.StringType), Enabled: types.BoolNull(), Description: types.StringNull(),
+	}
+	for name, prior := range map[string]federationIdentityProviderModel{
+		"drift":  idpModel(t, types.StringValue(""), true, "https://idp.example.com/entity"),
+		"import": imported,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newFederationFake(t, map[string][]federationReply{
+				"GET /v3/OS-FEDERATION/identity_providers/tf-idp": {{http.StatusOK, answer}},
+			})
+			r := &federationIdentityProviderResource{config: f.config()}
+			s := federationSchemaOf(t, r)
+			resp := resource.ReadResponse{State: federationState(ctx, t, s, &prior)}
+			r.Read(ctx, resource.ReadRequest{State: federationState(ctx, t, s, &prior)}, &resp)
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("read: %v", resp.Diagnostics)
+			}
+			var got federationIdentityProviderModel
+			resp.State.Get(ctx, &got)
+			federationExpectAttrs(t, map[string][2]attr.Value{
+				"id":          {got.ID, types.StringValue("tf-idp")},
+				"name":        {got.Name, types.StringValue("tf-idp")},
+				"domain_id":   {got.DomainID, types.StringValue("other-domain")},
+				"remote_ids":  {got.RemoteIDs, remoteIDSet(t, "https://other.example.com/entity")},
+				"enabled":     {got.Enabled, types.BoolValue(false)},
+				"description": {got.Description, types.StringValue("edited in the UI")},
+			})
+		})
+	}
+}
+
+// An answer for another identity provider is refused, naming both, whether it
+// comes back from a create or a read; state is not written from it.
+func TestFederationIdentityProviderRefusesAnAnswerForAnotherIdentityProvider(t *testing.T) {
+	const other = `{"identity_provider": {"id": "IDP1", "domain_id": "default", "enabled": true, "remote_ids": []}}`
+	expect := func(t *testing.T, diags diag.Diagnostics) {
+		t.Helper()
+		if !diags.HasError() {
+			t.Fatal("no error for an answer about another identity provider")
+		}
+		for _, want := range []string{`"tf-idp"`, `"IDP1"`} {
+			if !strings.Contains(diags.Errors()[0].Detail(), want) {
+				t.Errorf("detail %q does not name %s", diags.Errors()[0].Detail(), want)
+			}
+		}
+	}
+	t.Run("create", func(t *testing.T) {
+		ctx := context.Background()
+		f := newFederationFake(t, map[string][]federationReply{
+			"PUT /v3/OS-FEDERATION/identity_providers/tf-idp": {{http.StatusCreated, other}},
+		})
+		r := &federationIdentityProviderResource{config: f.config()}
+		s := federationSchemaOf(t, r)
+		planned := idpModel(t, types.StringUnknown(), true, "https://idp.example.com/entity")
+		planned.ID = types.StringUnknown()
+		resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: federationNull(ctx, s)}}
+		r.Create(ctx, resource.CreateRequest{Plan: federationPlan(ctx, t, s, &planned)}, &resp)
+		expect(t, resp.Diagnostics)
+		if !resp.State.Raw.IsNull() {
+			t.Fatal("state was written from an answer about another identity provider")
+		}
+	})
+	t.Run("read", func(t *testing.T) {
+		ctx := context.Background()
+		f := newFederationFake(t, map[string][]federationReply{
+			"GET /v3/OS-FEDERATION/identity_providers/tf-idp": {{http.StatusOK, other}},
+		})
+		r := &federationIdentityProviderResource{config: f.config()}
+		s := federationSchemaOf(t, r)
+		prior := idpModel(t, types.StringValue(""), true, "https://idp.example.com/entity")
+		resp := resource.ReadResponse{State: federationState(ctx, t, s, &prior)}
+		r.Read(ctx, resource.ReadRequest{State: federationState(ctx, t, s, &prior)}, &resp)
+		expect(t, resp.Diagnostics)
+		var got federationIdentityProviderModel
+		resp.State.Get(ctx, &got)
+		if !reflect.DeepEqual(got, prior) {
+			t.Fatalf("state = %+v\nwant the prior state %+v", got, prior)
+		}
+	})
 }

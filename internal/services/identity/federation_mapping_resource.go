@@ -198,18 +198,23 @@ func (r *federationMappingResource) Create(ctx context.Context, req resource.Cre
 }
 
 // federationMappingRules reads a mapping's rules as raw JSON. A success answer
-// without the mapping, or with null rules, is clients.ErrNoObject.
+// without the mapping (no ID, or null rules) is clients.ErrNoObject, and an
+// answer for another mapping is an error.
 func federationMappingRules(ctx context.Context, client *gophercloud.ServiceClient, name string) (json.RawMessage, error) {
 	var out struct {
 		Mapping struct {
+			ID    string          `json:"id"`
 			Rules json.RawMessage `json:"rules"`
 		} `json:"mapping"`
 	}
 	if err := federation.GetMapping(ctx, client, name).ExtractInto(&out); err != nil {
 		return nil, err
 	}
-	if len(out.Mapping.Rules) == 0 || string(out.Mapping.Rules) == "null" {
+	if out.Mapping.ID == "" || len(out.Mapping.Rules) == 0 || string(out.Mapping.Rules) == "null" {
 		return nil, clients.ErrNoObject
+	}
+	if out.Mapping.ID != name {
+		return nil, fmt.Errorf("asked for mapping %q, Keystone answered with mapping %q", name, out.Mapping.ID)
 	}
 	return out.Mapping.Rules, nil
 }
@@ -286,12 +291,13 @@ func (r *federationMappingResource) Delete(ctx context.Context, req resource.Del
 	}
 }
 
-// ImportState takes the mapping name. An empty ID names no mapping, so it is
-// refused before anything is read.
+// ImportState takes the mapping name. An empty ID, or one that is no mapping
+// name, names no mapping, so it is refused before anything is read.
 func (r *federationMappingResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	if req.ID == "" {
-		resp.Diagnostics.AddError("Import needs a federation mapping ID",
-			"Pass the name of the mapping to import, which `pcdctl mapping list` shows.")
+	if !federationNamePattern.MatchString(req.ID) {
+		resp.Diagnostics.AddError("Import needs a federation mapping ID", fmt.Sprintf(
+			"Pass the name of the mapping to import, %s, which `pcdctl mapping list` shows; got %q.",
+			federationNameRule, req.ID))
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)

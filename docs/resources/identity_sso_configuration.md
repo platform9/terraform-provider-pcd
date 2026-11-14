@@ -4,7 +4,7 @@ page_title: "pcd_identity_sso_configuration Resource - PCD"
 subcategory: "Identity"
 description: |-
   Manages PCD's SAML single sign-on configuration for one identity provider: the PCD UI's SAML Config under Single Sign-On. It lives in hagrid, PCD's SSO configuration service, not in Keystone. Single sign-on also needs a pcd_identity_federation_identity_provider with the same name, a pcd_identity_federation_mapping, and a saml2 pcd_identity_federation_protocol; the SSO guide wires all four.
-  ~> Creating, changing or destroying the configuration restarts Keystone's web server and the Shibboleth daemon: the PCD API, the UI and every Terraform operation against PCD fail for one to two minutes, sometimes up to five. The resource waits after every write until Keystone and hagrid answer again, so resources that depend on it run afterwards; resources that do not depend on it may run during a restart and fail.
+  ~> Creating, changing or destroying the configuration restarts Keystone and the Shibboleth daemon, which makes the PCD API unavailable for about half a minute, sometimes longer (the PCD UI waits up to five minutes). The resource waits after every write until Keystone and hagrid answer again, so resources that depend on it run afterwards; resources that do not depend on it may run during a restart and fail.
   hagrid is not in the service catalog. The provider reaches it on the host of the catalog's identity endpoint for the Infra region (or the provider's region, if the catalog has none for Infra), at /hagrid/. If that host is not reachable from where Terraform runs, set hagrid in the provider's endpoint_overrides to hagrid's URL, for example https://pcd.example.com/hagrid/. Destroying the configuration does not delete the users who signed in through it.
 ---
 
@@ -12,7 +12,7 @@ description: |-
 
 Manages PCD's SAML single sign-on configuration for one identity provider: the PCD UI's **SAML Config** under Single Sign-On. It lives in hagrid, PCD's SSO configuration service, not in Keystone. Single sign-on also needs a `pcd_identity_federation_identity_provider` with the same name, a `pcd_identity_federation_mapping`, and a `saml2` `pcd_identity_federation_protocol`; the SSO guide wires all four.
 
-~> Creating, changing or destroying the configuration restarts Keystone's web server and the Shibboleth daemon: the PCD API, the UI and every Terraform operation against PCD fail for one to two minutes, sometimes up to five. The resource waits after every write until Keystone and hagrid answer again, so resources that depend on it run afterwards; resources that do not depend on it may run during a restart and fail.
+~> Creating, changing or destroying the configuration restarts Keystone and the Shibboleth daemon, which makes the PCD API unavailable for about half a minute, sometimes longer (the PCD UI waits up to five minutes). The resource waits after every write until Keystone and hagrid answer again, so resources that depend on it run afterwards; resources that do not depend on it may run during a restart and fail.
 
 hagrid is not in the service catalog. The provider reaches it on the host of the catalog's identity endpoint for the `Infra` region (or the provider's region, if the catalog has none for `Infra`), at `/hagrid/`. If that host is not reachable from where Terraform runs, set `hagrid` in the provider's `endpoint_overrides` to hagrid's URL, for example `https://pcd.example.com/hagrid/`. Destroying the configuration does not delete the users who signed in through it.
 
@@ -20,7 +20,7 @@ hagrid is not in the service catalog. The provider reaches it on the host of the
 
 ```terraform
 # PCD's SAML configuration for the default domain's identity provider, IDP1.
-# Saving it restarts Keystone for a minute or two; the resource waits.
+# Saving it restarts Keystone for about half a minute, sometimes longer; the resource waits.
 resource "pcd_identity_sso_configuration" "idp1" {
   identity_provider = "IDP1"
   sso_provider      = "okta"
@@ -47,7 +47,7 @@ output "sso_sp_entity_id" {
 - `attribute_map_xml` (String) The Shibboleth attribute map (an `<Attributes>` XML document) that names the SAML attributes the mapping rules match. Read it from a file with `file()`. Updated in place, which restarts Keystone's web server and the Shibboleth daemon.
 - `entity_id` (String) The identity provider's SAML entity ID. Put it in the identity provider resource's `remote_ids`. Updated in place, which restarts Keystone's web server and the Shibboleth daemon (the PCD UI does not allow changing it once saved).
 - `identity_provider` (String) The identity provider's name, 1 to 64 letters, digits, underscores or hyphens. The PCD UI uses `IDP1` for the default domain and, for another domain, the domain name with every character other than a letter, digit, `-` or `_` replaced by `_`. The `pcd_identity_federation_identity_provider` must have this name. Changing this forces a new resource.
-- `metadata_url` (String) The URL of the identity provider's SAML metadata. PCD downloads it when the configuration is saved, from its own network and without verifying the certificate, so it must be reachable from PCD; an unreachable URL fails the apply. Updated in place, which restarts Keystone's web server and the Shibboleth daemon.
+- `metadata_url` (String) The URL of the identity provider's SAML metadata. PCD downloads it when the configuration is saved, from its own network and without verifying the certificate, so it must be reachable from PCD; an unreachable URL fails the apply. Anyone who can intercept that download can therefore hand PCD another identity provider's metadata, so use a URL on a network you trust. Updated in place, which restarts Keystone's web server and the Shibboleth daemon.
 - `sso_provider` (String) Which identity provider product this is, which the PCD UI uses to show the right setup help: `okta`, `oneLogin`, `google`, or any other name. Updated in place, which restarts Keystone's web server and the Shibboleth daemon like any other change.
 
 ### Read-Only

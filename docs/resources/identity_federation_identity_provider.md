@@ -4,14 +4,14 @@ page_title: "pcd_identity_federation_identity_provider Resource - PCD"
 subcategory: "Identity"
 description: |-
   Manages a Keystone identity provider: the trusted SAML identity provider that federated users sign in through. For PCD single sign-on, name must equal the identity_provider of the pcd_identity_sso_configuration (PCD only routes SAML sign-in for an identity provider that has an SSO configuration of the same name), and remote_ids must hold its entity_id. Referencing the SSO configuration's attributes, as the SSO guide does, keeps the three in step.
-  Destroying an identity provider also deletes its protocols. Users who signed in through it keep their Keystone shadow users; the provider does not delete them.
+  Destroying or replacing an identity provider also deletes its protocols and the link between the identity provider and every user who signed in through it. Those users stay in Keystone without a name, and Keystone refuses their next sign-in through an identity provider created later in the same domain with a conflict until they are deleted. The provider does not delete them.
 ---
 
 # pcd_identity_federation_identity_provider (Resource)
 
 Manages a Keystone identity provider: the trusted SAML identity provider that federated users sign in through. For PCD single sign-on, `name` must equal the `identity_provider` of the `pcd_identity_sso_configuration` (PCD only routes SAML sign-in for an identity provider that has an SSO configuration of the same name), and `remote_ids` must hold its `entity_id`. Referencing the SSO configuration's attributes, as the SSO guide does, keeps the three in step.
 
-Destroying an identity provider also deletes its protocols. Users who signed in through it keep their Keystone shadow users; the provider does not delete them.
+Destroying or replacing an identity provider also deletes its protocols and the link between the identity provider and every user who signed in through it. Those users stay in Keystone without a name, and Keystone refuses their next sign-in through an identity provider created later in the same domain with a conflict until they are deleted. The provider does not delete them.
 
 ## Example Usage
 
