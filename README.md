@@ -12,9 +12,9 @@ cluster blueprints and host configuration/roles via the Platform9 `resmgr` API**
 ## PCD-native resources
 
 These are the value-add over [`terraform-provider-openstack`](https://github.com/terraform-provider-openstack/terraform-provider-openstack):
-they manage Platform9's own control plane (the `resmgr` service), so you can declare a
-PCD region's cluster topology and host onboarding as code — something no OpenStack provider
-can do.
+they manage Platform9's own services (the `resmgr` control plane, mors for VM leases and hagrid for
+single sign-on), so you can declare a PCD region's cluster topology, host onboarding, VM leases and
+single sign-on as code — something no OpenStack provider can do.
 
 | Resource | What it manages |
 |---|---|
@@ -25,8 +25,9 @@ can do.
 | `pcd_host` (data source) | Resolves a host's resource-manager UUID from the hostname it reports, so `host_id` never has to be copied from the UI. |
 | `pcd_host_cluster_role` | Onboards a host by assigning it a **cluster role** (`hypervisor`, `image-library`, `persistent-storage`, `dns`); PCD computes the granular role settings from the blueprint and host configuration. |
 | `pcd_host_role` | Assigns one granular **PCD role** (e.g. `pf9-ostackhost-neutron`) directly; the low-level API under `pcd_host_cluster_role`. |
+| `pcd_identity_sso_configuration` | PCD's **SAML single sign-on** configuration. With `pcd_identity_federation_identity_provider`, `pcd_identity_federation_mapping` and `pcd_identity_federation_protocol` it lets users sign in through an external identity provider. |
 
-Four guides on the registry tie these together: the
+Five guides on the registry tie these together: the
 [Community Edition guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/community-edition)
 builds a region from an empty host to a running VM (the source is
 [`examples/complete/community-edition/`](examples/complete/community-edition/)), the
@@ -34,10 +35,12 @@ builds a region from an empty host to a running VM (the source is
 says where every import ID comes from, the
 [DNS guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/dns)
 assigns the `dns` role, configures the Designate pool, and binds a network to a zone so
-instances get records when they boot, and the
+instances get records when they boot, the
 [Failure domains guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/failure-domains)
 splits a cluster's hypervisors into the two failure domains the PCD UI calls a stretched
-cluster.
+cluster, and the
+[single sign-on guide](https://registry.terraform.io/providers/platform9/pcd/latest/docs/guides/sso)
+connects PCD to a SAML identity provider.
 
 Everything else mirrors `terraform-provider-openstack` closely (attribute names, import IDs,
 `OS_*` env), so migrating an existing OpenStack configuration is largely mechanical.

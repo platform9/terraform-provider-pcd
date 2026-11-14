@@ -96,6 +96,10 @@ service. There is nothing to migrate *from*; these are net-new capability:
 - **`pcd_host_config`** — a host's traffic-type-to-interface mapping and network labels.
 - **`pcd_host_role`** — assign a PCD role (e.g. `pf9-ostackhost-neutron`) to a host.
 - **`pcd_host_config_assignment`** — attach a host configuration to a host.
+- **`pcd_identity_sso_configuration`** — PCD's SAML single sign-on configuration, with
+  `pcd_identity_federation_identity_provider`, `pcd_identity_federation_mapping` and
+  `pcd_identity_federation_protocol` for its Keystone side (the OpenStack provider has none
+  of the four). The single sign-on guide puts them together.
 
 ## Behavioral notes
 

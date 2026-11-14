@@ -30,6 +30,12 @@ All notable changes to this project are documented here. The format is based on
   identity endpoint, and `endpoint_overrides` takes a `hagrid` entry for when that host is not reachable.
   Import with the identity provider name, `IDP1` for the default domain.
 
+### Documentation
+
+- A [single sign-on guide](docs/guides/sso.md) and a runnable example under `examples/complete/sso/`: the SSO
+  configuration, the identity provider, a group with a role on a project, the mapping that puts users who sign
+  in into it, and the `saml2` protocol, with the names that must match and how the Keystone restart is handled.
+
 ## [0.1.21] - 2026-11-13
 
 ### Added
