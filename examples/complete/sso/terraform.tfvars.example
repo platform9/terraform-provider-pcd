@@ -1,0 +1,8 @@
+identity_provider = "IDP1"
+sso_provider      = "okta"
+entity_id         = "http://www.okta.com/exk1a2b3c4d5e6f7g8h9"
+metadata_url      = "https://example.okta.com/app/exk1a2b3c4d5e6f7g8h9/sso/saml/metadata"
+idp_group         = "pcd-users"
+# Name an existing project: users who sign in get role_name on it.
+project_name = "sso-project"
+role_name    = "member"

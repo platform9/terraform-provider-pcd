@@ -31,6 +31,35 @@ All notable changes to this project are documented here. The format is based on
   the policy in a later apply. Destroying the lease returns the VM to the project's policy, counted from the
   VM's creation, so a VM older than the policy is then powered off or deleted within about a minute. Import
   with `<project_id>/<instance_id>`.
+- **`pcd_identity_federation_mapping`**, a Keystone federation mapping: the rules that turn the attributes a
+  SAML identity provider asserts into a user name, an email address and a group. `rules` is the rule list as
+  JSON, sent exactly as written so every part of Keystone's mapping language survives, and compared by content,
+  so a hand-formatted value does not show a change on every plan. The resource owns the whole rule list:
+  editing SAML groups in the PCD UI rewrites the same mapping, and the next apply reverts it. Keystone's
+  `schema_version` for the mapping is left at Keystone's default. Import with the mapping name.
+- **`pcd_identity_federation_identity_provider`**, a Keystone identity provider: its domain, its remote IDs
+  (the SAML entity IDs it is trusted for), `enabled` (default `true`; Keystone's own default is `false`) and a
+  description. Destroying or replacing it also removes its protocols and
+  the link to every user who signed in through it; those users must be deleted before they can sign in through a
+  new identity provider in the same domain. Import with the identity provider name.
+- **`pcd_identity_federation_protocol`**, the protocol that ties an identity provider to a mapping. PCD single
+  sign-on uses `saml2`. Import with `<identity_provider>/<name>`.
+- **`pcd_identity_sso_configuration`**, PCD's SAML single sign-on configuration, as the PCD UI's SAML Config
+  saves it: the identity provider's entity ID, its metadata URL and the Shibboleth attribute map. Creating,
+  changing or destroying the configuration restarts Keystone's web server and the Shibboleth daemon for about
+  half a minute, sometimes longer, which the PCD UI also waits out. The resource waits after every write until Keystone and the
+  SSO service answer again, so the resources that depend on it run after the restart. Destroying it does not
+  delete users who signed in through it. It refuses to overwrite a configuration that already exists, which
+  can be imported instead, and reports PCD's assertion consumer service URL and entity ID for the identity
+  provider's side. The SSO service is not in the service catalog: the provider finds it on the host of the
+  identity endpoint, and `endpoint_overrides` takes a `hagrid` entry for when that host is not reachable.
+  Import with the identity provider name, `IDP1` for the default domain.
+
+### Documentation
+
+- A [single sign-on guide](docs/guides/sso.md) and a runnable example under `examples/complete/sso/`: the SSO
+  configuration, the identity provider, a group with a role on a project, the mapping that puts users who sign
+  in into it, and the `saml2` protocol, with the names that must match and how the Keystone restart is handled.
 
 ## [0.1.21] - 2026-11-13
 
